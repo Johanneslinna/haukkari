@@ -1,8 +1,5 @@
 export { evaluateGoalConflicts } from './ConflictEngine'
-export {
-  CapabilityEstimator,
-  estimateExerciseCapability,
-} from './CapabilityEstimator'
+export { CapabilityEstimator, estimateExerciseCapability } from './CapabilityEstimator'
 export type { ExerciseCapabilityEstimate } from './CapabilityEstimator'
 export {
   exerciseAllowedForExperience,
@@ -16,7 +13,11 @@ export type {
   ExerciseTemplate,
   TechniqueReviewStatus,
 } from './ExerciseLibrary'
-export { PlannerEventModel, plannerEventToSession, plannerEventWeekday } from './PlannerEvent'
+export {
+  PlannerEventModel,
+  plannerEventToSession,
+  plannerEventWeekday,
+} from './PlannerEvent'
 export type { PlannerEvent, PlannerEventKind } from './PlannerEvent'
 export { applyHockeyMicrocycle, iceHockeyAdapter } from './sports/iceHockeyAdapter'
 export type { HockeySeasonPhase } from './sports/iceHockeyAdapter'

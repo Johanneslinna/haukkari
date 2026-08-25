@@ -66,9 +66,7 @@ function savedPrescription(record: LocalRecord | null) {
   const legacy = value as unknown as PrescribedSession
   return normalizePrescriptionV2({
     ...legacy,
-    exercises: Array.isArray(value.exercises)
-      ? legacy.exercises
-      : (legacy.blocks ?? []),
+    exercises: Array.isArray(value.exercises) ? legacy.exercises : (legacy.blocks ?? []),
   })
 }
 
@@ -897,49 +895,52 @@ export function WorkoutPage() {
                       />
                     </label>
                   )}
-                  {usesStrengthLog(activeExercise) && activeExercise.loadType !== 'NONE' && (
-                    <label className="compact-field">
-                      <span>{activeExercise.loadLabelFi}</span>
-                      {activeExercise.loadType === 'BAND' ? (
-                        <select
-                          value={item.loadInput}
-                          onChange={(event) => {
-                            const nextSet = { ...item, loadInput: event.target.value }
-                            updateSet(activeExercise.id, item.setNumber, nextSet)
-                            persistSet(nextSet)
-                          }}
-                        >
-                          <option value="">Valitse vastus</option>
-                          {activeExercise.loadOptions?.map((option) => (
-                            <option value={option} key={option}>
-                              {option}
-                            </option>
-                          ))}
-                        </select>
-                      ) : (
-                        <input
-                          type="text"
-                          inputMode={
-                            activeExercise.loadType === 'BODYWEIGHT' ? 'text' : 'decimal'
-                          }
-                          placeholder={
-                            activeExercise.loadType === 'BODYWEIGHT'
-                              ? 'Esim. oma paino tai +5 kg'
-                              : undefined
-                          }
-                          value={item.loadInput}
-                          onChange={(event) =>
-                            updateSet(activeExercise.id, item.setNumber, {
-                              loadInput: event.target.value,
-                            })
-                          }
-                          onBlur={(event) =>
-                            persistSet({ ...item, loadInput: event.target.value })
-                          }
-                        />
-                      )}
-                    </label>
-                  )}
+                  {usesStrengthLog(activeExercise) &&
+                    activeExercise.loadType !== 'NONE' && (
+                      <label className="compact-field">
+                        <span>{activeExercise.loadLabelFi}</span>
+                        {activeExercise.loadType === 'BAND' ? (
+                          <select
+                            value={item.loadInput}
+                            onChange={(event) => {
+                              const nextSet = { ...item, loadInput: event.target.value }
+                              updateSet(activeExercise.id, item.setNumber, nextSet)
+                              persistSet(nextSet)
+                            }}
+                          >
+                            <option value="">Valitse vastus</option>
+                            {activeExercise.loadOptions?.map((option) => (
+                              <option value={option} key={option}>
+                                {option}
+                              </option>
+                            ))}
+                          </select>
+                        ) : (
+                          <input
+                            type="text"
+                            inputMode={
+                              activeExercise.loadType === 'BODYWEIGHT'
+                                ? 'text'
+                                : 'decimal'
+                            }
+                            placeholder={
+                              activeExercise.loadType === 'BODYWEIGHT'
+                                ? 'Esim. oma paino tai +5 kg'
+                                : undefined
+                            }
+                            value={item.loadInput}
+                            onChange={(event) =>
+                              updateSet(activeExercise.id, item.setNumber, {
+                                loadInput: event.target.value,
+                              })
+                            }
+                            onBlur={(event) =>
+                              persistSet({ ...item, loadInput: event.target.value })
+                            }
+                          />
+                        )}
+                      </label>
+                    )}
                   {usesStrengthLog(activeExercise) && activeExercise.keyExercise && (
                     <label className="compact-field">
                       <span>RIR (toistoa varastossa)</span>

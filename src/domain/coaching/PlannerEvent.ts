@@ -1,12 +1,7 @@
 import type { PlannedSession, SessionIntensity } from './types'
 
 export type PlannerEventKind =
-  | 'ICE_PRACTICE'
-  | 'MATCH'
-  | 'TOURNAMENT'
-  | 'OTHER_ACTIVITY'
-  | 'PHYSICAL_LOAD'
-  | 'ABSENCE'
+  'ICE_PRACTICE' | 'MATCH' | 'TOURNAMENT' | 'OTHER_ACTIVITY' | 'PHYSICAL_LOAD' | 'ABSENCE'
 
 export type PlannerEvent = {
   id: string
@@ -31,8 +26,7 @@ export function plannerEventWeekday(event: PlannerEvent) {
 
 export function plannerEventToSession(event: PlannerEvent): PlannedSession | null {
   if (event.kind === 'ABSENCE') return null
-  const kind =
-    event.kind === 'MATCH' || event.kind === 'TOURNAMENT' ? 'MATCH' : 'SPORT'
+  const kind = event.kind === 'MATCH' || event.kind === 'TOURNAMENT' ? 'MATCH' : 'SPORT'
   return {
     id: `planner-${event.id}`,
     day: plannerEventWeekday(event),
@@ -43,9 +37,7 @@ export function plannerEventToSession(event: PlannerEvent): PlannedSession | nul
     loadRegion: event.kind === 'PHYSICAL_LOAD' ? 'FULL_BODY' : 'FULL_BODY',
     fixed: event.fixed,
     source:
-      event.kind === 'MATCH' || event.kind === 'TOURNAMENT'
-        ? 'COMPETITION'
-        : 'SPORT',
+      event.kind === 'MATCH' || event.kind === 'TOURNAMENT' ? 'COMPETITION' : 'SPORT',
     notes: [
       `PlannerEvent: ${event.kind}`,
       ...(event.rpe === undefined ? [] : [`Arvioitu RPE ${event.rpe}`]),

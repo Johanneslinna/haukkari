@@ -1,11 +1,7 @@
 import { optimizeSchedule } from './ScheduleOptimizer'
 import { getSportAdapter } from './SportAdapterRegistry'
 import { getGoalStrategy } from './strategies'
-import {
-  AthleteStateBuilder,
-  ConstraintEngine,
-  type AthleteState,
-} from './engine'
+import { AthleteStateBuilder, ConstraintEngine, type AthleteState } from './engine'
 import {
   prescribeSession,
   TRAINING_RULE_VERSION,
@@ -283,8 +279,7 @@ export function generatePlan(
   if (input.goal.primary === 'ENDURANCE') {
     const fixedEnduranceMinutes = input.fixedSessions
       .filter(
-        (session) =>
-          session.kind === 'EASY_ENDURANCE' || session.kind === 'INTERVAL',
+        (session) => session.kind === 'EASY_ENDURANCE' || session.kind === 'INTERVAL',
       )
       .reduce((total, session) => total + session.durationMinutes, 0)
     unallocatedEnduranceMinutes = distributeCurrentEnduranceVolume(

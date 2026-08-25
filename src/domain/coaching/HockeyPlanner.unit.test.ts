@@ -45,8 +45,7 @@ describe('PlannerEvent ja jääkiekon suljettu beta', () => {
       'GENERAL_SUPPORT',
     )
     expect(
-      getSportAdapter('ice-hockey-adult-amateur-skater', { hockeyBeta: true })
-        .adapter.id,
+      getSportAdapter('ice-hockey-adult-amateur-skater', { hockeyBeta: true }).adapter.id,
     ).toBe('ICE_HOCKEY_ADULT_AMATEUR_SKATER_BETA')
   })
 
@@ -71,9 +70,7 @@ describe('PlannerEvent ja jääkiekon suljettu beta', () => {
     expect(result.sessions.find((item) => item.id === 'day-before')?.kind).toBe(
       'RECOVERY',
     )
-    expect(result.sessions.find((item) => item.id === 'day-after')?.kind).toBe(
-      'RECOVERY',
-    )
+    expect(result.sessions.find((item) => item.id === 'day-after')?.kind).toBe('RECOVERY')
     expect(result.sessions.find((item) => item.id === 'team-practice')?.kind).toBe(
       'SPORT',
     )

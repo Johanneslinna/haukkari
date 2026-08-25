@@ -133,9 +133,8 @@ function chooseExercise(
   const safeCandidates = equipmentCandidates.filter(
     (candidate) => !exerciseConflictsWithLimitations(candidate, limitations),
   )
-  const candidates = safeCandidates.filter(
-    (candidate) =>
-      exerciseAllowedForExperience(candidate, experience),
+  const candidates = safeCandidates.filter((candidate) =>
+    exerciseAllowedForExperience(candidate, experience),
   )
   const preferred = ExerciseRanker.rank(candidates, {
     equipment: available,
@@ -262,16 +261,20 @@ function fitStrengthToBudget(
   const budgetSeconds = Math.max(60, budgetMinutes * 60)
   const fixedSeconds = (warmupMinutes + cooldownMinutes) * 60
   const next = exercises.map((exercise) => ({ ...exercise }))
-  const total = () => fixedSeconds + next.reduce((sum, item) => sum + strengthSeconds(item), 0)
+  const total = () =>
+    fixedSeconds + next.reduce((sum, item) => sum + strengthSeconds(item), 0)
 
   while (total() > budgetSeconds) {
     const reducible = [...next]
       .reverse()
-      .find((exercise) => legacyDose(exercise).kind === 'STRENGTH_SETS' && exercise.sets > 1)
+      .find(
+        (exercise) => legacyDose(exercise).kind === 'STRENGTH_SETS' && exercise.sets > 1,
+      )
     if (reducible) {
       reducible.sets -= 1
       const dose = legacyDose(reducible)
-      if (dose.kind === 'STRENGTH_SETS') reducible.dose = { ...dose, sets: reducible.sets }
+      if (dose.kind === 'STRENGTH_SETS')
+        reducible.dose = { ...dose, sets: reducible.sets }
       continue
     }
     let removableIndex = next.findLastIndex((exercise) => !exercise.keyExercise)
@@ -461,7 +464,10 @@ function prescribeAerobic(
   const recoverySeconds = total <= 20 ? 60 : 120
   const repetitions = Math.max(
     1,
-    Math.min(6, Math.floor((mainSeconds + recoverySeconds) / (workSeconds + recoverySeconds))),
+    Math.min(
+      6,
+      Math.floor((mainSeconds + recoverySeconds) / (workSeconds + recoverySeconds)),
+    ),
   )
   const useIntervals = interval && repetitions >= 2
   const dose: PrescriptionDose = useIntervals
@@ -471,7 +477,8 @@ function prescribeAerobic(
         workSeconds,
         recoverySeconds,
         targetRpe: 7,
-        intensityCue: 'Reipas mutta tasalaatuinen; viimeisen vedon pitää pysyä hallittuna.',
+        intensityCue:
+          'Reipas mutta tasalaatuinen; viimeisen vedon pitää pysyä hallittuna.',
       }
     : {
         kind: 'CONTINUOUS_TIME',
@@ -660,13 +667,15 @@ function prescribeSpeedPower(
       nameFi: 'Lyhyt kiihdytys',
       category: 'Sprintti',
       equipment: ['Kehonpaino'],
-      instructionsFi: 'Kiihdytä rennosti 15 metriä. Jokaisen suorituksen pitää olla terävä ja hallittu.',
+      instructionsFi:
+        'Kiihdytä rennosti 15 metriä. Jokaisen suorituksen pitää olla terävä ja hallittu.',
       sets: sprintRepetitions,
       repetitions: '15 m',
       restSeconds: 75,
       targetRpe: 7,
       loadGuidance: 'Palauta niin pitkään, että seuraava suoritus on yhtä laadukas.',
-      stopCondition: 'Lopeta, jos nopeus laskee selvästi, tekniikka hajoaa tai tunnet kipua.',
+      stopCondition:
+        'Lopeta, jos nopeus laskee selvästi, tekniikka hajoaa tai tunnet kipua.',
       substitutions: ['Porraskiihdytys', 'Kuntopyörän lyhyt kiihdytys'],
       loadType: 'NONE',
       loadLabelFi: 'Ei ulkoista kuormaa',
@@ -686,7 +695,8 @@ function prescribeSpeedPower(
       nameFi: 'Hallittu ponnistushyppy',
       category: 'Hypyt',
       equipment: ['Kehonpaino'],
-      instructionsFi: 'Tee yksittäiset hypyt hyvällä alastulolla. Nollaa asento jokaisen hypyn välissä.',
+      instructionsFi:
+        'Tee yksittäiset hypyt hyvällä alastulolla. Nollaa asento jokaisen hypyn välissä.',
       sets: jumpSets,
       repetitions: '3',
       restSeconds: 75,
@@ -722,15 +732,22 @@ function prescribeSpeedPower(
       avoid: ['Uupumukseen harjoittelu'],
     },
     warmupMinutes,
-    warmup: [`${warmupMinutes} min asteittain tehostuvaa lämmittelyä ja 2 kevyttä kiihdytystä`],
+    warmup: [
+      `${warmupMinutes} min asteittain tehostuvaa lämmittelyä ja 2 kevyttä kiihdytystä`,
+    ],
     exercises,
     cooldownMinutes,
     cooldown: [`${cooldownMinutes} min erittäin kevyttä liikettä`],
-    progression: 'Lisää ensin suorituksen laatua. Lisää yksi toisto vasta, kun kaikki toistot pysyvät yhtä terävinä.',
+    progression:
+      'Lisää ensin suorituksen laatua. Lisää yksi toisto vasta, kun kaikki toistot pysyvät yhtä terävinä.',
     decisionTrace: decisionTrace(profile, [
       {
         ruleId: 'SPEED-QUALITY-001',
-        outcome: profile.healthBlocked ? 'REFER' : profile.limitations?.trim() ? 'MODIFY' : 'PROCEED',
+        outcome: profile.healthBlocked
+          ? 'REFER'
+          : profile.limitations?.trim()
+            ? 'MODIFY'
+            : 'PROCEED',
         message: 'Nopeus- ja hyppyannos päättyy ennen selvää laadun heikkenemistä.',
         evidenceIds: ['APP-QUALITY-STOP-RULE'],
       },
@@ -805,19 +822,14 @@ function fitDoseToSeconds(
   switch (dose.kind) {
     case 'STRENGTH_SETS': {
       let sets = light ? Math.max(1, Math.ceil(dose.sets * 0.65)) : dose.sets
-      while (
-        sets > 1 &&
-        doseDurationSeconds({ ...dose, sets, targetRpe }) > maxSeconds
-      ) {
+      while (sets > 1 && doseDurationSeconds({ ...dose, sets, targetRpe }) > maxSeconds) {
         sets -= 1
       }
       return withExerciseDose(exercise, {
         ...dose,
         sets,
         targetRpe,
-        targetRir: light
-          ? Math.min(5, (dose.targetRir ?? 2) + 1)
-          : dose.targetRir,
+        targetRir: light ? Math.min(5, (dose.targetRir ?? 2) + 1) : dose.targetRir,
       })
     }
     case 'CONTINUOUS_TIME':
@@ -968,24 +980,19 @@ export function adaptPrescription(
       : normalized.title,
     durationMinutes: variant.durationMinutes,
     timeBudgetMinutes: variant.durationMinutes,
-    warmupMinutes: compact
-      ? compactWarmupMinutes
-      : normalized.warmupMinutes,
+    warmupMinutes: compact ? compactWarmupMinutes : normalized.warmupMinutes,
     warmup: compact
       ? [`${compactWarmupMinutes} min erittäin kevyesti ja hallitusti`]
       : normalized.warmup,
     exercises: selected,
     blocks: selected,
-    cooldownMinutes: compact
-      ? compactCooldownMinutes
-      : normalized.cooldownMinutes,
+    cooldownMinutes: compact ? compactCooldownMinutes : normalized.cooldownMinutes,
     cooldown: compact
       ? [`${compactCooldownMinutes} min rauhallisesti ja hengityksen tasaus`]
       : normalized.cooldown,
     decisionTrace: {
       ...normalized.decisionTrace,
-      safetyOutcome:
-        light || compact ? 'MODIFY' : normalized.decisionTrace.safetyOutcome,
+      safetyOutcome: light || compact ? 'MODIFY' : normalized.decisionTrace.safetyOutcome,
       rules: [...normalized.decisionTrace.rules, adaptationRule],
     },
   }

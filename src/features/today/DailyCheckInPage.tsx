@@ -109,13 +109,15 @@ export function DailyCheckInPage() {
         motivation: detailed ? motivation : 'NORMAL',
         soreness: detailed ? soreness : 'NORMAL',
         illnessSymptoms: detailed ? illnessSymptoms : false,
-        newPain: detailed && painLocation
-          ? { location: painLocation, severity: painSeverity, altersGait }
-          : undefined,
+        newPain:
+          detailed && painLocation
+            ? { location: painLocation, severity: painSeverity, altersGait }
+            : undefined,
         availableMinutes: parsedAvailableMinutes,
-        menstrualCycle: detailed && menstrualTrackingEnabled
-          ? { phase: menstrualPhase, symptomsImpact: menstrualImpact }
-          : undefined,
+        menstrualCycle:
+          detailed && menstrualTrackingEnabled
+            ? { phase: menstrualPhase, symptomsImpact: menstrualImpact }
+            : undefined,
       })
       setDecision(result.decision)
       setReasons(result.reasons.map((reason) => reason.message))
@@ -186,8 +188,8 @@ export function DailyCheckInPage() {
             <p className="eyebrow">Päivän kuntotarkistus</p>
             <h1>Onko jokin tänään poikkeavaa?</h1>
             <p>
-              Kerro tarkemmin vain, jos sinulla on turvallisuusoire, uusi kipu tai
-              vamma, sairausoire tai selvästi tavallisesta poikkeava olo.
+              Kerro tarkemmin vain, jos sinulla on turvallisuusoire, uusi kipu tai vamma,
+              sairausoire tai selvästi tavallisesta poikkeava olo.
             </p>
           </div>
         </header>
@@ -245,11 +247,7 @@ export function DailyCheckInPage() {
           </p>
         </div>
       </header>
-      <button
-        className="back-link"
-        type="button"
-        onClick={() => setExpanded(false)}
-      >
+      <button className="back-link" type="button" onClick={() => setExpanded(false)}>
         Takaisin pikakysymykseen
       </button>
       <fieldset className="surface-card form">

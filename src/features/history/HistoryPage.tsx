@@ -54,13 +54,14 @@ function prescriptionFrom(workout: LocalRecord | null) {
   const legacy = value as unknown as PrescribedSession
   return normalizePrescriptionV2({
     ...legacy,
-    exercises: Array.isArray(value.exercises)
-      ? legacy.exercises
-      : (legacy.blocks ?? []),
+    exercises: Array.isArray(value.exercises) ? legacy.exercises : (legacy.blocks ?? []),
   })
 }
 
-function historyUnitLabel(exercise: PrescribedSession['exercises'][number], index: number) {
+function historyUnitLabel(
+  exercise: PrescribedSession['exercises'][number],
+  index: number,
+) {
   const dose = legacyDose(exercise)
   if (dose.kind === 'INTERVAL_BLOCKS' || dose.kind === 'SPRINT_REPS') {
     return `${index + 1}. veto`

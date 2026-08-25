@@ -44,9 +44,19 @@ describe('TrainingEngineV2-kerrokset', () => {
 
   it('suodattaa ensin välineillä ja järjestää vasta sen jälkeen mieltymyksillä', () => {
     const candidates = [
-      { code: 'A', nameFi: 'Kehonpainokyykky', category: 'Kyykky', equipment: ['Kehonpaino'] },
+      {
+        code: 'A',
+        nameFi: 'Kehonpainokyykky',
+        category: 'Kyykky',
+        equipment: ['Kehonpaino'],
+      },
       { code: 'B', nameFi: 'Maljakyykky', category: 'Kyykky', equipment: ['Käsipainot'] },
-      { code: 'C', nameFi: 'Jalkaprässi', category: 'Kyykky', equipment: ['Kuntosalilaitteet'] },
+      {
+        code: 'C',
+        nameFi: 'Jalkaprässi',
+        category: 'Kyykky',
+        equipment: ['Kuntosalilaitteet'],
+      },
     ]
     const selected = CandidateSelector.select(candidates, {
       category: 'Kyykky',

@@ -64,10 +64,11 @@ export const AthleteStateBuilder = {
         experience: input.experience,
         currentEnduranceMinutes: Math.max(0, input.currentEnduranceMinutes),
         equipment: input.equipment?.length ? [...input.equipment] : ['Kehonpaino'],
-        limitations: input.limitations
-          ?.split(/[,.·;]/u)
-          .map((item) => item.trim())
-          .filter(Boolean) ?? [],
+        limitations:
+          input.limitations
+            ?.split(/[,.·;]/u)
+            .map((item) => item.trim())
+            .filter(Boolean) ?? [],
       },
       acute: {
         physicalLoad: input.physicalLoad ?? 'MODERATE',
@@ -100,15 +101,15 @@ export const ConstraintEngine = {
   capSessionMinutes(state: AthleteState, day: number, requestedMinutes: number) {
     return Math.max(1, Math.min(requestedMinutes, this.maximumMinutes(state, day)))
   },
-  exerciseIsAvailable(
-    equipment: string[],
-    availableEquipment: string[],
-  ) {
+  exerciseIsAvailable(equipment: string[], availableEquipment: string[]) {
     return equipment.some(
       (item) => item === 'Kehonpaino' || availableEquipment.includes(item),
     )
   },
-  hardViolations(state: AthleteState, session: Pick<PlannedSession, 'day' | 'durationMinutes'>) {
+  hardViolations(
+    state: AthleteState,
+    session: Pick<PlannedSession, 'day' | 'durationMinutes'>,
+  ) {
     const violations: string[] = []
     if (!state.schedule.availableDays.includes(session.day)) {
       violations.push('Päivä ei ole käyttäjän käytettävissä.')
@@ -152,7 +153,9 @@ export const ExerciseRanker = {
     const dislikes = input.dislikes?.toLocaleLowerCase('fi-FI') ?? ''
     return [...candidates].sort((left, right) => {
       const score = (candidate: T) => {
-        const searchable = `${candidate.nameFi} ${candidate.category}`.toLocaleLowerCase('fi-FI')
+        const searchable = `${candidate.nameFi} ${candidate.category}`.toLocaleLowerCase(
+          'fi-FI',
+        )
         const preferredEquipment = candidate.equipment.some(
           (item) => item !== 'Kehonpaino' && input.equipment.includes(item),
         )

@@ -1,8 +1,4 @@
-import type {
-  ExercisePrescription,
-  PrescribedSession,
-  PrescriptionDose,
-} from './types'
+import type { ExercisePrescription, PrescribedSession, PrescriptionDose } from './types'
 
 export const PRESCRIPTION_SCHEMA_VERSION = 2 as const
 export const PRESCRIPTION_ENGINE_VERSION = 'training-engine-v2.0.0'
@@ -43,7 +39,9 @@ export function doseDurationSeconds(dose: PrescriptionDose) {
         Math.max(0, dose.repetitions - 1) * dose.recoverySeconds
       )
     case 'SPRINT_REPS':
-      return dose.repetitions * 10 + Math.max(0, dose.repetitions - 1) * dose.recoverySeconds
+      return (
+        dose.repetitions * 10 + Math.max(0, dose.repetitions - 1) * dose.recoverySeconds
+      )
     case 'JUMP_REPS':
       return dose.sets * 30 + Math.max(0, dose.sets - 1) * dose.recoverySeconds
     case 'SKILL_DRILL':
@@ -204,7 +202,9 @@ export function withV2Blocks(
   }
 }
 
-export function normalizePrescriptionV2(prescription: PrescribedSession): PrescribedSession {
+export function normalizePrescriptionV2(
+  prescription: PrescribedSession,
+): PrescribedSession {
   if (
     prescription.schemaVersion === PRESCRIPTION_SCHEMA_VERSION &&
     prescription.blocks?.length

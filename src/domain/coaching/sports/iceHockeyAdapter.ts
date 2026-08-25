@@ -1,11 +1,7 @@
 import type { PlannedSession, SportAdapter } from '../types'
 
 export type HockeySeasonPhase =
-  | 'OFF_SEASON'
-  | 'PRE_SEASON'
-  | 'IN_SEASON'
-  | 'CONGESTED'
-  | 'TRANSITION'
+  'OFF_SEASON' | 'PRE_SEASON' | 'IN_SEASON' | 'CONGESTED' | 'TRANSITION'
 
 export const iceHockeyAdapter: SportAdapter = {
   id: 'ICE_HOCKEY_ADULT_AMATEUR_SKATER_BETA',
@@ -35,9 +31,10 @@ export const iceHockeyAdapter: SportAdapter = {
     'Suljettu beta on rajattu 18 vuotta täyttäneille amatöörikenttäpelaajille. Maalivahti- ja juniorilogiikka eivät sisälly tähän versioon.',
 }
 
-export function applyHockeyMicrocycle(
-  sessions: PlannedSession[],
-): { sessions: PlannedSession[]; messages: string[] } {
+export function applyHockeyMicrocycle(sessions: PlannedSession[]): {
+  sessions: PlannedSession[]
+  messages: string[]
+} {
   const matchDays = sessions
     .filter((session) => session.kind === 'MATCH')
     .map((session) => session.day)
@@ -53,15 +50,17 @@ export function applyHockeyMicrocycle(
     }
     if (distance === 1 && session.intensity !== 'EASY') {
       messages.push('Ottelua edeltävä tai seuraava harjoitus muutettiin palauttavaksi.')
-      return [{
-        ...session,
-        kind: 'RECOVERY' as const,
-        title: 'Ottelun ympäristön palauttava harjoitus',
-        durationMinutes: Math.min(20, session.durationMinutes),
-        intensity: 'EASY' as const,
-        loadRegion: 'NONE' as const,
-        notes: [...(session.notes ?? []), 'Jääkiekon beta: MD−1/MD+1 palauttava.'],
-      }]
+      return [
+        {
+          ...session,
+          kind: 'RECOVERY' as const,
+          title: 'Ottelun ympäristön palauttava harjoitus',
+          durationMinutes: Math.min(20, session.durationMinutes),
+          intensity: 'EASY' as const,
+          loadRegion: 'NONE' as const,
+          notes: [...(session.notes ?? []), 'Jääkiekon beta: MD−1/MD+1 palauttava.'],
+        },
+      ]
     }
     return [session]
   })

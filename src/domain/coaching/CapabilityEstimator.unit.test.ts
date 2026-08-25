@@ -2,7 +2,10 @@ import { describe, expect, it } from 'vitest'
 import { estimateExerciseCapability } from './CapabilityEstimator'
 import type { WorkoutExerciseResult } from './types'
 
-function result(loads: Array<string | null>, repetitions: Array<number | null>): WorkoutExerciseResult {
+function result(
+  loads: Array<string | null>,
+  repetitions: Array<number | null>,
+): WorkoutExerciseResult {
   return {
     exerciseCode: 'GOBLET_SQUAT',
     exerciseName: 'Maljakyykky',
