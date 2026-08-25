@@ -22,10 +22,12 @@ Supabasen paikalliskehitys vaatii Dockerin ja Supabase CLI:n. Ohje on
 
 ```sh
 npm run lint
+npm run content:validate
 npm run format-check
 npm run typecheck
 npm run unit
 npm run integration
+npm run test:skip-audit
 npm run build
 npm run pwa:test
 npm run e2e
@@ -38,6 +40,14 @@ tarkistusketjun. Tietokannan RLS-testit ajetaan erikseen komennoilla
 `npm run db:test-sync-e2e`, koska ne vaativat paikallisen Supabase-pinon.
 `npm run e2e:app` rakentaa PWA:n ja testaa onboardingin, responsiivisen
 navigaation, näppäimistöpolun sekä aktiivisen harjoituksen offline-reloadin.
+Sallitut selainmatriisin ohitukset on eritelty
+[E2E-skip-auditissa](docs/e2e-skip-audit.md), ja allowlist tarkistetaan osana
+`npm run check` -komentoa.
+
+Versionoitu harjoitussisältö ylläpidetään `training-content/v1`-paketissa.
+`npm run content:validate` validoi skeemat, ristiviitteet ja julkaisutunnisteen
+sekä generoi runtime-katalogin ja Supabase-seedin samasta lähteestä.
+`npm run content:seed` generoi artefaktit erikseen.
 
 ## Dokumentaatio
 
@@ -51,6 +61,10 @@ navigaation, näppäimistöpolun sekä aktiivisen harjoituksen offline-reloadin.
 - [Supabase-käyttöönotto](docs/supabase.md)
 - [Offline-first-synkronointi](docs/offline-sync.md)
 - [Toteutuksen nykytila](docs/status.md)
+- [Evidence engine -arkkitehtuuri](docs/evidence-engine-architecture.md)
+- [Versionoitu harjoitussisältö](docs/training-content-model.md)
+- [Aikuisten voimaharjoittelun prescription](docs/adult-resistance-prescription.md)
+- [E2E-skip-auditointi](docs/e2e-skip-audit.md)
 - [Julkaisuohje](docs/release.md)
 - [Varmuuskopiointi ja palautus](docs/backup-and-restore.md)
 - [Asennusohje](docs/installation.md)

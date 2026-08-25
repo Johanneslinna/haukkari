@@ -266,3 +266,25 @@ joille kyseistä polkua ei ole määritetty.
 Paikallinen tekninen hyväksyntä ei ole julkaisulupa. Suljettu beta edellyttää
 vielä valmennuksellista sisältöarviota ja hosted-ympäristön varmennusta. Julkinen
 julkaisu edellyttää lisäksi turvallisuus-, tietosuoja- ja tietoturva-arvioita.
+
+## Evidence engine – aikuisten voimaharjoittelun pystyleikkaus
+
+`adult-resistance-v1.0.0` on ensimmäinen yhdestä lähteestä generoitu,
+muuttumaton sisäisen betan harjoitussisältöjulkaisu. Se sisältää 27 laadukkaasti
+määriteltyä koti- ja saliharjoitetta, 18 evidence sourcea, kuusi teknisesti
+validoitua mutta ihmisen tieteellistä arviota odottavaa aikuisten claimia, kaksi
+draft-lajiclaimia ja kuusi sisäisessä betassa käytettävää prescription-sääntöä.
+
+Aikuisten voimareitti käyttää sisältöjulkaisua päästä päähän: kelpoisuussuodatus,
+deterministinen pisteytys, RIR:ää hyödyntävä capability, kalibrointi, annostelu,
+sarjamukautus, progressio ja laaja decision trace. Supabase-seed generoidaan
+samasta paketista. Julkaisukohtaiset harjoitemäärittelyt säilyvät muuttumattomina
+erillisessä taulussa, vaikka nykyversion projektio päivittyy. Onboardingin alaraja
+on 18 vuotta; alaikäinen, kliinisesti epäselvä tai korkean riskin terveysrajoite,
+`SPORT`, `MATCH` ja tarkistamaton `SPEED_POWER` eivät saa väärää fallbackia.
+
+Jääkiekkoarkkitehtuuri ja feature flag säilyvät, mutta Haukkaria ei kuvata tässä
+vaiheessa julkaistuksi juniori-, nopeus-, laji- tai kilpailukauden
+valmennusmoottoriksi. Tavallinen kipu- tai liikerajoite käsitellään harjoitteen
+suodatuksessa eikä se yksin estä koko ohjelmaa. Tavallinen kuntoilu, juoksu,
+kestävyys, liikkuvuus ja ravitsemus säilyvät nykyisinä erillisinä polkuina.
