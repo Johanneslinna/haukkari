@@ -21,6 +21,7 @@ import type {
   NutritionDecision,
   ReadinessInput,
   PrescribedSession,
+  PlannedSession,
   WorkoutFeedback,
 } from '../../domain/coaching/types'
 import type { LocalRecord } from '../../domain/sync/types'
@@ -43,6 +44,13 @@ export type OnboardingInput = {
   minutesPerSession: number
   minutesByDay: Record<string, number>
   currentEnduranceMinutes: number
+  weeklyActivities: Array<{
+    id: string
+    kind: 'RUNNING' | 'STRENGTH' | 'SPORT' | 'OTHER'
+    day: number
+    durationMinutes: number
+    intensity: 'EASY' | 'MODERATE' | 'HARD'
+  }>
   currentWeeklyTraining: string
   enduranceSportBackground: string
   physicalLoad: 'LOW' | 'MODERATE' | 'HIGH'
@@ -154,6 +162,54 @@ function planFromPreferences(
         (value): value is number => typeof value === 'number',
       )
     : [1, 3, 5]
+  const weeklyActivities =
+    'weeklyActivities' in preferences && Array.isArray(preferences.weeklyActivities)
+      ? preferences.weeklyActivities
+      : []
+  const fixedSessions: PlannedSession[] = weeklyActivities.flatMap((value, index) => {
+    if (!value || typeof value !== 'object') return []
+    const activity = value as Record<string, unknown>
+    if (
+      typeof activity.day !== 'number' ||
+      typeof activity.durationMinutes !== 'number' ||
+      (activity.intensity !== 'EASY' &&
+        activity.intensity !== 'MODERATE' &&
+        activity.intensity !== 'HARD')
+    ) {
+      return []
+    }
+    const activityKind = typeof activity.kind === 'string' ? activity.kind : 'OTHER'
+    const kind =
+      activityKind === 'RUNNING'
+        ? ('EASY_ENDURANCE' as const)
+        : activityKind === 'STRENGTH'
+          ? ('STRENGTH' as const)
+          : ('SPORT' as const)
+    return [{
+      id: `onboarding-fixed-${String(activity.id ?? index)}`,
+      day: activity.day,
+      kind,
+      title:
+        activityKind === 'RUNNING'
+          ? 'Säännöllinen juoksuharjoitus'
+          : activityKind === 'STRENGTH'
+            ? 'Säännöllinen voimaharjoitus'
+            : activityKind === 'SPORT'
+              ? 'Säännöllinen lajiharjoitus'
+              : 'Muu säännöllinen liikunta',
+      durationMinutes: activity.durationMinutes,
+      intensity: activity.intensity,
+      loadRegion:
+        activityKind === 'RUNNING'
+          ? ('CARDIO' as const)
+          : activityKind === 'STRENGTH'
+            ? ('FULL_BODY' as const)
+            : ('FULL_BODY' as const),
+      fixed: true,
+      source: activityKind === 'STRENGTH' ? ('COACH' as const) : ('SPORT' as const),
+      notes: ['Käyttäjän aloituskartoituksessa ilmoittama kiinteä viikkotapahtuma.'],
+    }]
+  })
   const generated = generatePlan({
     goal,
     experience:
@@ -165,7 +221,7 @@ function planFromPreferences(
       typeof preferences.currentEnduranceMinutes === 'number'
         ? preferences.currentEnduranceMinutes
         : 0,
-    fixedSessions: [],
+    fixedSessions,
     competitions: [],
     sportDiscipline,
     equipment: Array.isArray(preferences.equipment)
@@ -202,6 +258,10 @@ function planFromPreferences(
       .filter(Boolean)
       .join(' · '),
     healthBlocked,
+    enduranceBackgroundKnown:
+      typeof preferences.enduranceSportBackground === 'string' &&
+      preferences.enduranceSportBackground.trim().length > 0,
+    medicationAffectsHeartRate: preferences.medicationAffectsHeartRate === true,
   })
   if (healthBlocked) {
     generated.decision.sessions = generated.decision.sessions
@@ -278,6 +338,7 @@ export async function completeOnboarding(
       minutesPerSession: input.minutesPerSession,
       minutesByDay: input.minutesByDay,
       currentEnduranceMinutes: input.currentEnduranceMinutes,
+      weeklyActivities: input.weeklyActivities,
       experience: input.experience,
       currentWeeklyTraining: input.currentWeeklyTraining,
       enduranceSportBackground: input.enduranceSportBackground,
@@ -671,7 +732,7 @@ export async function saveWorkoutSet(
     ordinal,
     repetitions: set.repetitions,
     load_kg: set.loadKg,
-    rir: null,
+    rir: set.rir ?? null,
     data: {
       exercise_id: set.exerciseId,
       set_number: set.setNumber,

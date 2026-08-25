@@ -39,6 +39,8 @@ export type PrescriptionProfile = {
   dislikes?: string
   limitations?: string
   healthBlocked?: boolean
+  enduranceBackgroundKnown?: boolean
+  medicationAffectsHeartRate?: boolean
   generatedAt?: string
 }
 
@@ -615,18 +617,35 @@ function prescribeAerobic(
       dose,
     },
   ]
-  const decision = decisionTrace(profile, [
-    {
-      ruleId: useIntervals ? 'END-INTERVAL-002' : 'END-EASY-002',
-      outcome: useIntervals ? 'PROCEED' : kind === 'INTERVAL' ? 'MODIFY' : 'PROCEED',
-      message: useIntervals
-        ? 'Intervallit ovat erillisiä vetoja, joiden välissä on aktiivinen palautus.'
-        : kind === 'INTERVAL'
-          ? 'Aikaraja, rajoite tai terveysesto muuttaa intervallin helpoksi peruskestävyydeksi.'
-          : 'Peruskestävyys ohjataan puhetestillä ja koetulla kuormittavuudella.',
-      evidenceIds: ['WHO-PA-2020', 'IOC-ARI-2022'],
-    },
-  ])
+  const decision = decisionTrace(
+    profile,
+    [
+      {
+        ruleId: useIntervals ? 'END-INTERVAL-002' : 'END-EASY-002',
+        outcome: useIntervals ? 'PROCEED' : kind === 'INTERVAL' ? 'MODIFY' : 'PROCEED',
+        message: useIntervals
+          ? 'Intervallit ovat erillisiä vetoja, joiden välissä on aktiivinen palautus.'
+          : kind === 'INTERVAL'
+            ? 'Aikaraja, rajoite tai terveysesto muuttaa intervallin helpoksi peruskestävyydeksi.'
+            : 'Peruskestävyys ohjataan puhetestillä ja koetulla kuormittavuudella.',
+        evidenceIds: ['WHO-PA-2020', 'IOC-ARI-2022'],
+      },
+      ...(profile.medicationAffectsHeartRate
+        ? [
+            {
+              ruleId: 'END-HR-MEDICATION-001',
+              outcome: 'MODIFY' as const,
+              message:
+                'Sykkeeseen vaikuttavan lääkityksen vuoksi teho ohjataan RPE:llä ja puhetestillä, ei laskennallisella sykealueella.',
+              evidenceIds: ['APP-HR-CONFIDENCE-RULE'],
+            },
+          ]
+        : []),
+    ],
+    profile.enduranceBackgroundKnown === false
+      ? ['Kestävyys- ja lajitaustan vertailukelpoinen lähtötieto']
+      : [],
+  )
   return withV2Blocks({
     id: sessionId,
     title: useIntervals ? title : 'Helppo peruskestävyys',

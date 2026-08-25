@@ -71,6 +71,7 @@ export function DailyCheckInPage() {
   const [menstrualImpact, setMenstrualImpact] = useState<
     'NONE' | 'MILD' | 'MODERATE' | 'HIGH'
   >('NONE')
+  const [expanded, setExpanded] = useState(false)
   const [decision, setDecision] = useState<ReadinessDecision | null>(null)
   const [reasons, setReasons] = useState<string[]>([])
   const [pending, setPending] = useState(false)
@@ -84,8 +85,7 @@ export function DailyCheckInPage() {
     )
   }
 
-  const submit = async (event: FormEvent) => {
-    event.preventDefault()
+  const evaluate = async (detailed: boolean) => {
     const parsedAvailableMinutes = Number(availableMinutes)
     if (
       availableMinutes.trim() === '' ||
@@ -102,18 +102,18 @@ export function DailyCheckInPage() {
       const result = await saveDailyCheckIn(data, {
         goal,
         plannedSession: wantedSession,
-        safetySymptoms,
-        sleep,
-        energy,
-        stress,
-        motivation,
-        soreness,
-        illnessSymptoms,
-        newPain: painLocation
+        safetySymptoms: detailed ? safetySymptoms : [],
+        sleep: detailed ? sleep : 'NORMAL',
+        energy: detailed ? energy : 'NORMAL',
+        stress: detailed ? stress : 'NORMAL',
+        motivation: detailed ? motivation : 'NORMAL',
+        soreness: detailed ? soreness : 'NORMAL',
+        illnessSymptoms: detailed ? illnessSymptoms : false,
+        newPain: detailed && painLocation
           ? { location: painLocation, severity: painSeverity, altersGait }
           : undefined,
         availableMinutes: parsedAvailableMinutes,
-        menstrualCycle: menstrualTrackingEnabled
+        menstrualCycle: detailed && menstrualTrackingEnabled
           ? { phase: menstrualPhase, symptomsImpact: menstrualImpact }
           : undefined,
       })
@@ -126,6 +126,11 @@ export function DailyCheckInPage() {
     } finally {
       setPending(false)
     }
+  }
+
+  const submit = (event: FormEvent) => {
+    event.preventDefault()
+    void evaluate(true)
   }
 
   if (decision) {
@@ -173,6 +178,62 @@ export function DailyCheckInPage() {
     )
   }
 
+  if (!expanded) {
+    return (
+      <div className="page-stack narrow-page">
+        <header className="section-heading">
+          <div>
+            <p className="eyebrow">Päivän kuntotarkistus</p>
+            <h1>Onko jokin tänään poikkeavaa?</h1>
+            <p>
+              Kerro tarkemmin vain, jos sinulla on turvallisuusoire, uusi kipu tai
+              vamma, sairausoire tai selvästi tavallisesta poikkeava olo.
+            </p>
+          </div>
+        </header>
+        <section className="surface-card form page-stack compact-stack">
+          <label className="field">
+            <span>Käytettävissä oleva aika tänään (min)</span>
+            <input
+              type="number"
+              min="0"
+              max="240"
+              value={availableMinutes}
+              inputMode="numeric"
+              onChange={(event) => setAvailableMinutes(event.target.value)}
+            />
+          </label>
+          <p className="muted-copy">
+            Jos mikään ei poikkea, käytämme tavallista oloasi vastaavia oletuksia.
+            Ajanpuute lyhentää harjoitusta, mutta ei muuta terveydellistä valmiutta.
+          </p>
+          {error && (
+            <p className="form-error" role="alert">
+              {error}
+            </p>
+          )}
+          <div className="button-row">
+            <button
+              className="button button-primary"
+              type="button"
+              disabled={pending}
+              onClick={() => void evaluate(false)}
+            >
+              {pending ? 'Arvioidaan…' : 'Ei mitään poikkeavaa'}
+            </button>
+            <button
+              className="button button-secondary"
+              type="button"
+              onClick={() => setExpanded(true)}
+            >
+              Haluan kertoa tarkemmin
+            </button>
+          </div>
+        </section>
+      </div>
+    )
+  }
+
   return (
     <form className="page-stack narrow-page" onSubmit={submit}>
       <header className="section-heading">
@@ -184,6 +245,13 @@ export function DailyCheckInPage() {
           </p>
         </div>
       </header>
+      <button
+        className="back-link"
+        type="button"
+        onClick={() => setExpanded(false)}
+      >
+        Takaisin pikakysymykseen
+      </button>
       <fieldset className="surface-card form">
         <legend>Turvallisuusoireet</legend>
         <p className="muted-copy">Valitse kaikki, jotka koskevat tätä hetkeä.</p>

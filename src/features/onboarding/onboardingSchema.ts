@@ -25,6 +25,18 @@ export const onboardingSchema = z
     minutesPerSession: z.number().int().min(10).max(240),
     minutesByDay: z.record(z.string(), z.number().int().min(10).max(240)),
     currentEnduranceMinutes: z.number().int().min(0).max(2_000),
+    weeklyActivities: z
+      .array(
+        z.object({
+          id: z.string().min(1),
+          kind: z.enum(['RUNNING', 'STRENGTH', 'SPORT', 'OTHER']),
+          day: z.number().int().min(1).max(7),
+          durationMinutes: z.number().int().min(10).max(300),
+          intensity: z.enum(['EASY', 'MODERATE', 'HARD']),
+        }),
+      )
+      .max(14)
+      .default([]),
     currentWeeklyTraining: z.string(),
     enduranceSportBackground: z.string(),
     physicalLoad: z.enum(['LOW', 'MODERATE', 'HIGH']),
@@ -101,7 +113,7 @@ export function hasSensitiveHealthData(
 }
 
 export type OnboardingForm = Omit<
-  z.input<typeof onboardingSchema>,
+  z.output<typeof onboardingSchema>,
   'sensitiveConsent'
 > & {
   sensitiveConsent: boolean

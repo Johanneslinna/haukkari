@@ -1,4 +1,9 @@
 export { evaluateGoalConflicts } from './ConflictEngine'
+export {
+  CapabilityEstimator,
+  estimateExerciseCapability,
+} from './CapabilityEstimator'
+export type { ExerciseCapabilityEstimate } from './CapabilityEstimator'
 export * from './engine'
 export {
   GoalEngine,

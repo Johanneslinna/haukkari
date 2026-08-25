@@ -40,6 +40,8 @@ export type PlanGenerationInput = {
   dislikes?: string
   limitations?: string
   healthBlocked?: boolean
+  enduranceBackgroundKnown?: boolean
+  medicationAffectsHeartRate?: boolean
 }
 
 const sessionDefaults: Record<
@@ -277,9 +279,15 @@ export function generatePlan(
   const appSessions = createAppSessions(input, athleteState)
   let unallocatedEnduranceMinutes = 0
   if (input.goal.primary === 'ENDURANCE') {
+    const fixedEnduranceMinutes = input.fixedSessions
+      .filter(
+        (session) =>
+          session.kind === 'EASY_ENDURANCE' || session.kind === 'INTERVAL',
+      )
+      .reduce((total, session) => total + session.durationMinutes, 0)
     unallocatedEnduranceMinutes = distributeCurrentEnduranceVolume(
       appSessions,
-      input.currentEnduranceMinutes,
+      Math.max(0, input.currentEnduranceMinutes - fixedEnduranceMinutes),
       athleteState.schedule.defaultMaximumMinutes,
       athleteState.schedule.maximumMinutesByDay,
     )
@@ -311,6 +319,8 @@ export function generatePlan(
     dislikes: input.dislikes,
     limitations: input.limitations,
     healthBlocked: athleteState.acute.healthBlocked,
+    enduranceBackgroundKnown: input.enduranceBackgroundKnown,
+    medicationAffectsHeartRate: input.medicationAffectsHeartRate,
   }
   const prescribedSessions = optimization.decision.map((session) =>
     session.source === 'APP'

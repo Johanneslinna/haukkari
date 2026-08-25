@@ -163,6 +163,36 @@ describe('TrainingPrescriptionEngine – kultaiset käyttäjäprofiilit', () => 
     expect(result.decisionTrace.safetyOutcome).toBe('REFER')
   })
 
+  it('käyttää sykkeen sijasta RPE:tä ja puhetestiä lääkityksen vaikuttaessa sykkeeseen', () => {
+    const result = prescribeSession({
+      sessionId: 'heart-rate-medication',
+      title: 'Helppo kestävyys',
+      kind: 'EASY_ENDURANCE',
+      durationMinutes: 40,
+      profile: profile({ medicationAffectsHeartRate: true }),
+    })
+
+    expect(result.decisionTrace.rules.map((rule) => rule.ruleId)).toContain(
+      'END-HR-MEDICATION-001',
+    )
+    expect(result.exercises[0]?.loadGuidance).toContain('puhetestillä')
+  })
+
+  it('merkitsee puuttuvan kestävyystaustan kalibrointia vaativaksi', () => {
+    const result = prescribeSession({
+      sessionId: 'endurance-calibration',
+      title: 'Helppo kestävyys',
+      kind: 'EASY_ENDURANCE',
+      durationMinutes: 40,
+      profile: profile({ enduranceBackgroundKnown: false }),
+    })
+
+    expect(result.confidence).toBe('MODERATE')
+    expect(result.decisionTrace.missingData).toContain(
+      'Kestävyys- ja lajitaustan vertailukelpoinen lähtötieto',
+    )
+  })
+
   it('sama syöte tuottaa saman reseptin ja päätöspolun', () => {
     const input = {
       sessionId: 'deterministic',

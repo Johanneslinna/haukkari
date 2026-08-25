@@ -343,6 +343,7 @@ export type WorkoutExerciseResult = {
   plannedSets: number
   repetitions: Array<number | null>
   loads: Array<string | null>
+  rirs?: Array<number | null>
   targetRepetitions?: string
   targetRpe: number
 }
@@ -362,6 +363,7 @@ export type CompletedSet = {
   repetitions: number | null
   loadKg: number | null
   loadText?: string | null
+  rir?: number | null
   completed: boolean
 }
 

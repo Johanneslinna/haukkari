@@ -80,6 +80,36 @@ describe('PlanGenerator, ScheduleOptimizer ja lajisovittimet', () => {
     )
   })
 
+  it('laskee rakenteisen nykyisen juoksuharjoituksen viikkovolyymiin vain kerran', () => {
+    const fixedRun: PlannedSession = {
+      id: 'fixed-run',
+      day: 2,
+      kind: 'EASY_ENDURANCE',
+      title: 'Säännöllinen juoksu',
+      durationMinutes: 60,
+      intensity: 'EASY',
+      loadRegion: 'CARDIO',
+      fixed: true,
+      source: 'SPORT',
+    }
+    const result = generatePlan({
+      goal: { primary: 'ENDURANCE', secondary: [], inputs: {} },
+      experience: 'INTERMEDIATE',
+      availableDays: [1, 3, 5, 7],
+      currentEnduranceMinutes: 180,
+      fixedSessions: [fixedRun],
+      competitions: [],
+      minutesPerSession: 90,
+    })
+    const enduranceMinutes = result.decision.sessions
+      .filter(
+        (session) => session.kind === 'EASY_ENDURANCE' || session.kind === 'INTERVAL',
+      )
+      .reduce((total, session) => total + session.durationMinutes, 0)
+
+    expect(enduranceMinutes).toBe(180)
+  })
+
   it('22: aloittelijan voimatavoite ei sisällä yhden toiston maksimitestiä', () => {
     const result = generatePlan({
       goal: { primary: 'MAX_STRENGTH', secondary: [], inputs: {} },

@@ -5,6 +5,7 @@ import {
   applyWorkoutProgression,
   doseLabelFi,
   doseUnitCount,
+  estimateExerciseCapability,
   exerciseSubstitutions,
   evaluateWorkoutFeedback,
   legacyDose,
@@ -50,6 +51,7 @@ const variantLabels: Record<WorkoutVariant['kind'], string> = {
 type EditableSet = CompletedSet & {
   repetitionsInput: string
   loadInput: string
+  rirInput: string
 }
 
 function savedPrescription(record: LocalRecord | null) {
@@ -127,16 +129,22 @@ function createSetRows(
         repetitions !== null
           ? repetitions + 1
           : repetitions
+      const rir =
+        typeof persisted?.data.rir === 'number'
+          ? persisted.data.rir
+          : (previous?.rirs?.[index] ?? null)
       return {
         exerciseId: exercise.id,
         setNumber,
         repetitions: suggestedRepetitions,
         loadKg,
         loadText: suggestedLoad,
+        rir,
         completed: persisted ? details.completed === true : false,
         repetitionsInput:
           suggestedRepetitions === null ? '' : String(suggestedRepetitions),
         loadInput: suggestedLoad ?? '',
+        rirInput: rir === null ? '' : String(rir),
       }
     }),
   )
@@ -153,7 +161,8 @@ function progressedLoad(exercise: ExercisePrescription, value: string) {
   const numeric = Number(value.replace(',', '.'))
   if (!Number.isFinite(numeric)) return value
   const increment = exercise.loadType === 'DUMBBELL_KG_EACH' ? 1 : 2.5
-  return String(Math.round((numeric + increment) * 10) / 10).replace('.', ',')
+  const cappedIncrement = Math.min(increment, numeric * 0.05)
+  return String(Math.round((numeric + cappedIncrement) * 10) / 10).replace('.', ',')
 }
 
 function numericLoad(exercise: ExercisePrescription, value: string) {
@@ -568,6 +577,7 @@ export function WorkoutPage() {
       repetitions: parseOptionalNumber(set.repetitionsInput),
       loadKg: numericLoad(exercise, set.loadInput),
       loadText: set.loadInput.trim() || null,
+      rir: parseOptionalNumber(set.rirInput),
       completed: set.completed,
     }).catch((reason: unknown) => {
       setError(reason instanceof Error ? reason.message : 'Sarjaa ei voitu tallentaa.')
@@ -610,6 +620,7 @@ export function WorkoutPage() {
             parseOptionalNumber(item.repetitionsInput),
           ),
           loads: exerciseSets.map((item) => item.loadInput.trim() || null),
+          rirs: exerciseSets.map((item) => parseOptionalNumber(item.rirInput)),
           targetRepetitions: exercise.repetitions,
           targetRpe: exercise.targetRpe,
         }
@@ -630,6 +641,7 @@ export function WorkoutPage() {
             repetitions: parseOptionalNumber(item.repetitionsInput),
             loadKg: numericLoad(exercise, item.loadInput),
             loadText: item.loadInput.trim() || null,
+            rir: parseOptionalNumber(item.rirInput),
             completed: item.completed,
           }
         }),
@@ -654,6 +666,12 @@ export function WorkoutPage() {
   const alternatives = activeExercise
     ? exerciseSubstitutions(activeExercise, availableEquipment)
     : []
+  const capability = activeExercise
+    ? estimateExerciseCapability(
+        allFeedback.flatMap((item) => item.exerciseResults ?? []),
+        activeExercise.code,
+      )
+    : null
 
   const switchExercise = (replacement: ExercisePrescription) => {
     if (!runningPrescription || !activeExercise) return
@@ -842,6 +860,13 @@ export function WorkoutPage() {
             </div>
           </div>
           <p className="load-guidance">{activeExercise.loadGuidance}</p>
+          {usesStrengthLog(activeExercise) && capability && (
+            <p className="form-note">
+              {capability.calibrationRequired
+                ? 'Kuormahistoriaa on vielä vähän. Aloita kalibroivalla kuormalla, jolla tavoitetoistot jäävät hallitusti tavoite-RIR:n päähän uupumuksesta.'
+                : `Kuorma-arvion luottamus: ${capability.confidence === 'HIGH' ? 'hyvä' : 'kohtalainen'}. Edellinen vertailukelpoinen kuorma esitäytetään sarjoihin.`}
+            </p>
+          )}
           <div className="set-log-grid">
             {sets
               .filter((item) => item.exerciseId === activeExercise.id)
@@ -913,6 +938,26 @@ export function WorkoutPage() {
                           }
                         />
                       )}
+                    </label>
+                  )}
+                  {usesStrengthLog(activeExercise) && activeExercise.keyExercise && (
+                    <label className="compact-field">
+                      <span>RIR (toistoa varastossa)</span>
+                      <input
+                        type="number"
+                        min="0"
+                        max="5"
+                        inputMode="numeric"
+                        value={item.rirInput}
+                        onChange={(event) =>
+                          updateSet(activeExercise.id, item.setNumber, {
+                            rirInput: event.target.value,
+                          })
+                        }
+                        onBlur={(event) =>
+                          persistSet({ ...item, rirInput: event.target.value })
+                        }
+                      />
                     </label>
                   )}
                   <label className="set-complete">
