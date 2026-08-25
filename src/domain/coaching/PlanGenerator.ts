@@ -23,6 +23,7 @@ import type {
   TrainingPlan,
   WorkoutVariant,
 } from './types'
+import { applyHockeyMicrocycle } from './sports/iceHockeyAdapter'
 
 export type PlanGenerationInput = {
   goal: GoalProfile
@@ -42,6 +43,7 @@ export type PlanGenerationInput = {
   healthBlocked?: boolean
   enduranceBackgroundKnown?: boolean
   medicationAffectsHeartRate?: boolean
+  hockeyBeta?: boolean
 }
 
 const sessionDefaults: Record<
@@ -309,6 +311,10 @@ export function generatePlan(
     competitions: input.competitions,
     allowedDays: input.availableDays,
   })
+  const hockeyAdjustment =
+    input.hockeyBeta && input.sportDiscipline === 'ice-hockey-adult-amateur-skater'
+      ? applyHockeyMicrocycle(optimization.decision)
+      : { sessions: optimization.decision, messages: [] }
   const profile: PrescriptionProfile = {
     goal: input.goal.primary,
     experience: input.experience,
@@ -322,7 +328,7 @@ export function generatePlan(
     enduranceBackgroundKnown: input.enduranceBackgroundKnown,
     medicationAffectsHeartRate: input.medicationAffectsHeartRate,
   }
-  const prescribedSessions = optimization.decision.map((session) =>
+  const prescribedSessions = hockeyAdjustment.sessions.map((session) =>
     session.source === 'APP'
       ? {
           ...session,
@@ -354,6 +360,13 @@ export function generatePlan(
     ...optimization.reasons,
   ]
   const warnings = [...optimization.warnings]
+  for (const message of hockeyAdjustment.messages) {
+    reasons.push({
+      code: 'ICE_HOCKEY_MICROCYCLE_BETA',
+      message,
+      priority: 'COACH_FIXED',
+    })
+  }
 
   if (appSessions.length < desiredAppSessionCount(input)) {
     reasons.push({
@@ -394,7 +407,9 @@ export function generatePlan(
   }
 
   if (input.goal.primary === 'SPORT_PERFORMANCE' || input.sportDiscipline) {
-    const match = getSportAdapter(input.sportDiscipline ?? '')
+    const match = getSportAdapter(input.sportDiscipline ?? '', {
+      hockeyBeta: input.hockeyBeta,
+    })
     reasons.push({
       code:
         match.supportLevel === 'FULL' ? 'FULL_SPORT_ADAPTER' : 'GENERAL_SPORT_SUPPORT',

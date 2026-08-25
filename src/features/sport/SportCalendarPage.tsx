@@ -17,7 +17,10 @@ const sportLabels: Record<string, string> = {
   'powerlifting-bench-press': 'Voimanosto – penkkipunnerrus',
   'powerlifting-deadlift': 'Voimanosto – maastaveto',
   'powerlifting-competition': 'Voimanostokilpailu',
+  'ice-hockey-adult-amateur-skater': 'Jääkiekko – aikuinen amatöörikenttäpelaaja (beta)',
 }
+
+const hockeyBetaEnabled = import.meta.env.VITE_HOCKEY_BETA === 'true'
 
 export function SportCalendarPage() {
   const data = useAppData()
@@ -27,13 +30,22 @@ export function SportCalendarPage() {
   const [durationMinutes, setDurationMinutes] = useState(60)
   const [rpe, setRpe] = useState(6)
   const [coachDefined, setCoachDefined] = useState(false)
+  const [recurrence, setRecurrence] = useState<'NONE' | 'WEEKLY'>('NONE')
+  const [eventKind, setEventKind] = useState<
+    'ICE_PRACTICE' | 'OTHER_ACTIVITY' | 'PHYSICAL_LOAD'
+  >('OTHER_ACTIVITY')
+  const [seasonPhase, setSeasonPhase] = useState<
+    'OFF_SEASON' | 'PRE_SEASON' | 'IN_SEASON' | 'CONGESTED' | 'TRANSITION'
+  >('IN_SEASON')
+  const [hockeyEligibilityConfirmed, setHockeyEligibilityConfirmed] = useState(false)
   const [eventName, setEventName] = useState('')
   const [eventDate, setEventDate] = useState('')
   const [priority, setPriority] = useState<'A' | 'B' | 'TRAINING'>('A')
   const [pending, setPending] = useState(false)
   const [message, setMessage] = useState('')
   const selectedSport = sportCode === 'other' ? customSport.trim() : sportCode
-  const adapter = getSportAdapter(selectedSport)
+  const adapter = getSportAdapter(selectedSport, { hockeyBeta: hockeyBetaEnabled })
+  const hockeySelected = selectedSport === 'ice-hockey-adult-amateur-skater'
 
   const saveSession = async (event: FormEvent) => {
     event.preventDefault()
@@ -46,6 +58,9 @@ export function SportCalendarPage() {
         durationMinutes,
         rpe,
         coachDefined,
+        recurrence,
+        eventKind: hockeySelected ? 'ICE_PRACTICE' : eventKind,
+        seasonPhase: hockeySelected ? seasonPhase : undefined,
       })
       setMessage('Lajiharjoitus tallennettiin ja lasketaan kokonaiskuormaan.')
     } catch (reason) {
@@ -98,7 +113,7 @@ export function SportCalendarPage() {
               value={sportCode}
               onChange={(event) => setSportCode(event.target.value)}
             >
-              {listFullySupportedDisciplines().map((code) => (
+              {listFullySupportedDisciplines({ hockeyBeta: hockeyBetaEnabled }).map((code) => (
                 <option key={code} value={code}>
                   {sportLabels[code] ?? code}
                 </option>
@@ -115,6 +130,13 @@ export function SportCalendarPage() {
                 onChange={(event) => setCustomSport(event.target.value)}
               />
             </label>
+          )}
+          {hockeySelected && (
+            <div className="status-banner preview-notice">
+              <strong>Suljettu jääkiekkobeta.</strong> Tämä profiili on tarkoitettu vain
+              18 vuotta täyttäneelle amatöörikenttäpelaajalle. Juniori- ja
+              maalivahtilogiikka eivät ole käytössä.
+            </div>
           )}
           <label className="field">
             <span>Alkaa</span>
@@ -147,6 +169,63 @@ export function SportCalendarPage() {
               />
             </label>
           </div>
+          <div className="form-grid">
+            <label className="field">
+              <span>Tapahtuman tyyppi</span>
+              <select
+                value={hockeySelected ? 'ICE_PRACTICE' : eventKind}
+                disabled={hockeySelected}
+                onChange={(event) =>
+                  setEventKind(event.target.value as typeof eventKind)
+                }
+              >
+                {hockeySelected && <option value="ICE_PRACTICE">Jääharjoitus</option>}
+                <option value="OTHER_ACTIVITY">Lajiharjoitus tai muu liikunta</option>
+                <option value="PHYSICAL_LOAD">Fyysisesti kuormittava päivä</option>
+              </select>
+            </label>
+            <label className="field">
+              <span>Toistuvuus</span>
+              <select
+                value={recurrence}
+                onChange={(event) =>
+                  setRecurrence(event.target.value as typeof recurrence)
+                }
+              >
+                <option value="NONE">Kerran</option>
+                <option value="WEEKLY">Viikoittain</option>
+              </select>
+            </label>
+          </div>
+          {hockeySelected && (
+            <>
+              <label className="field">
+                <span>Kauden vaihe</span>
+                <select
+                  value={seasonPhase}
+                  onChange={(event) =>
+                    setSeasonPhase(event.target.value as typeof seasonPhase)
+                  }
+                >
+                  <option value="OFF_SEASON">Harjoituskausi</option>
+                  <option value="PRE_SEASON">Kauteen valmistava</option>
+                  <option value="IN_SEASON">Kilpailukausi</option>
+                  <option value="CONGESTED">Ruuhkainen ottelujakso</option>
+                  <option value="TRANSITION">Siirtymäkausi</option>
+                </select>
+              </label>
+              <label className="checkbox-field">
+                <input
+                  type="checkbox"
+                  checked={hockeyEligibilityConfirmed}
+                  onChange={(event) =>
+                    setHockeyEligibilityConfirmed(event.target.checked)
+                  }
+                />
+                <span>Vahvistan olevani 18+ amatöörikenttäpelaaja.</span>
+              </label>
+            </>
+          )}
           <label className="checkbox-field">
             <input
               type="checkbox"
@@ -155,7 +234,14 @@ export function SportCalendarPage() {
             />
             <span>Valmentajan määräämä – sovellus ei saa siirtää.</span>
           </label>
-          <button className="button button-primary" disabled={pending || !selectedSport}>
+          <button
+            className="button button-primary"
+            disabled={
+              pending ||
+              !selectedSport ||
+              (hockeySelected && !hockeyEligibilityConfirmed)
+            }
+          >
             Tallenna lajiharjoitus
           </button>
         </form>

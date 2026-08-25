@@ -152,6 +152,16 @@ function planFromPreferences(
   goal: GoalProfile,
   preferences: OnboardingInput | Record<string, unknown>,
   healthBlocked = false,
+  calendar: {
+    fixedSessions?: PlannedSession[]
+    competitions?: Array<{
+      id: string
+      day: number
+      name: string
+      priority: 'A' | 'B' | 'TRAINING'
+      daysUntil: number
+    }>
+  } = {},
 ) {
   const sportDiscipline =
     'sportDiscipline' in preferences && typeof preferences.sportDiscipline === 'string'
@@ -166,7 +176,7 @@ function planFromPreferences(
     'weeklyActivities' in preferences && Array.isArray(preferences.weeklyActivities)
       ? preferences.weeklyActivities
       : []
-  const fixedSessions: PlannedSession[] = weeklyActivities.flatMap((value, index) => {
+  const structuredFixedSessions: PlannedSession[] = weeklyActivities.flatMap((value, index) => {
     if (!value || typeof value !== 'object') return []
     const activity = value as Record<string, unknown>
     if (
@@ -221,8 +231,8 @@ function planFromPreferences(
       typeof preferences.currentEnduranceMinutes === 'number'
         ? preferences.currentEnduranceMinutes
         : 0,
-    fixedSessions,
-    competitions: [],
+    fixedSessions: [...structuredFixedSessions, ...(calendar.fixedSessions ?? [])],
+    competitions: calendar.competitions ?? [],
     sportDiscipline,
     equipment: Array.isArray(preferences.equipment)
       ? preferences.equipment.filter(
@@ -262,6 +272,8 @@ function planFromPreferences(
       typeof preferences.enduranceSportBackground === 'string' &&
       preferences.enduranceSportBackground.trim().length > 0,
     medicationAffectsHeartRate: preferences.medicationAffectsHeartRate === true,
+    hockeyBeta:
+      'hockeyBeta' in preferences && preferences.hockeyBeta === true,
   })
   if (healthBlocked) {
     generated.decision.sessions = generated.decision.sessions
@@ -838,6 +850,137 @@ export async function addBodyMetric(
   )
 }
 
+function calendarPlanningInputs(data: AppDataContextValue) {
+  const now = new Date()
+  const fixedSessions: PlannedSession[] = data.list('fixed_sport_sessions').map(
+    (record) => {
+      const sessionData = objectValue(record.data.session_data)
+      const startsAt = new Date(stringValue(record.data.starts_at))
+      const rpe = typeof record.data.rpe === 'number' ? record.data.rpe : 6
+      return {
+        id: `calendar-${record.id}`,
+        day: startsAt.getDay() || 7,
+        kind: 'SPORT',
+        title:
+          stringValue(sessionData.title) ||
+          (stringValue(sessionData.event_kind) === 'ICE_PRACTICE'
+            ? 'Jääharjoitus'
+            : 'Kiinteä lajiharjoitus'),
+        durationMinutes:
+          typeof record.data.duration_minutes === 'number'
+            ? record.data.duration_minutes
+            : 60,
+        intensity: rpe >= 8 ? 'HARD' : rpe >= 5 ? 'MODERATE' : 'EASY',
+        loadRegion: 'FULL_BODY',
+        fixed: true,
+        source: 'SPORT',
+        notes: [
+          'Kalenterin kiinteä lajiharjoitus – sovellus ei siirrä tapahtumaa.',
+          ...(objectValue(sessionData.recurrence).frequency === 'WEEKLY'
+            ? ['Toistuu viikoittain.']
+            : []),
+        ],
+      }
+    },
+  )
+  const competitions: Array<{
+    id: string
+    day: number
+    name: string
+    priority: 'A' | 'B' | 'TRAINING'
+    daysUntil: number
+  }> = data.list('competition_events').map((record) => {
+    const startsAt = new Date(stringValue(record.data.starts_at))
+    const priority = stringValue(record.data.priority)
+    return {
+      id: record.id,
+      day: startsAt.getDay() || 7,
+      name: stringValue(record.data.name, 'Ottelu tai kilpailu'),
+      priority:
+        priority === 'B' || priority === 'TRAINING'
+          ? priority
+          : ('A' as const),
+      daysUntil: Math.ceil((startsAt.getTime() - now.getTime()) / 86_400_000),
+    }
+  })
+  return { fixedSessions, competitions }
+}
+
+async function createCalendarPlanVersion(
+  data: AppDataContextValue,
+  changeReason: string,
+) {
+  const goalRecord = activeGoalRecord(data)
+  const goalPeriod = data
+    .list('goal_periods')
+    .find((record) => record.data.status === 'ACTIVE')
+  if (!goalRecord || !goalPeriod) return
+  const primary = stringValue(goalRecord.data.primary_goal) as GoalProfile['primary']
+  if (!primary) return
+  const secondary = Array.isArray(goalRecord.data.secondary_goals)
+    ? (goalRecord.data.secondary_goals.filter(
+        (value): value is GoalProfile['primary'] => typeof value === 'string',
+      ) as GoalProfile['secondary'])
+    : []
+  const basePreferences = objectValue(goalRecord.data.preferences)
+  const profileSettings = objectValue(data.latest('profiles')?.data.app_settings)
+  const latestSportProfile = data.latest('sport_profiles')
+  const sportCode = stringValue(latestSportProfile?.data.sport_code)
+  const hockeyBetaEnabled =
+    import.meta.env.VITE_HOCKEY_BETA === 'true' &&
+    sportCode === 'ice-hockey-adult-amateur-skater'
+  const preferences = {
+    ...profileSettings,
+    ...basePreferences,
+    sportDiscipline: sportCode || basePreferences.sportDiscipline,
+    hockeyBeta: hockeyBetaEnabled,
+  }
+  const screeningStatus = stringValue(data.latest('health_screenings')?.data.status)
+  const goal: GoalProfile = { primary, secondary, inputs: preferences }
+  const plan = planFromPreferences(
+    goal,
+    preferences,
+    screeningStatus === 'HIGH_INTENSITY_BLOCKED' || screeningStatus === 'NEEDS_REVIEW',
+    calendarPlanningInputs(data),
+  )
+  const previousVersion = data.latest('plan_versions')
+  const planVersionId = crypto.randomUUID()
+  await data.create(
+    'plan_versions',
+    toJsonObject({
+      goal_period_id: goalPeriod.id,
+      previous_plan_version_id: previousVersion?.id ?? null,
+      version_number:
+        data
+          .list('plan_versions')
+          .filter((record) => record.data.goal_period_id === goalPeriod.id).length + 1,
+      effective_from: todayIso(),
+      change_reason: changeReason,
+      snapshot: {
+        goal,
+        startsOn: todayIso(),
+        transitionWeek: false,
+        strategyId: primary,
+        plan: plan.decision,
+      },
+    }),
+    planVersionId,
+  )
+  const activePlan = [...data.list('training_plans')]
+    .reverse()
+    .find((record) => record.data.status === 'ACTIVE')
+  if (activePlan) await data.update(activePlan, toJsonObject({ status: 'ARCHIVED' }))
+  await data.create(
+    'training_plans',
+    toJsonObject({
+      plan_version_id: planVersionId,
+      week_count: 4,
+      status: 'ACTIVE',
+      plan: plan.decision,
+    }),
+  )
+}
+
 export async function addFixedSportSession(
   data: AppDataContextValue,
   input: {
@@ -846,6 +989,9 @@ export async function addFixedSportSession(
     durationMinutes: number
     rpe: number
     coachDefined: boolean
+    recurrence?: 'NONE' | 'WEEKLY'
+    eventKind?: 'ICE_PRACTICE' | 'OTHER_ACTIVITY' | 'PHYSICAL_LOAD'
+    seasonPhase?: 'OFF_SEASON' | 'PRE_SEASON' | 'IN_SEASON' | 'CONGESTED' | 'TRANSITION'
   },
 ) {
   let sportProfile = [...data.list('sport_profiles')]
@@ -864,7 +1010,7 @@ export async function addFixedSportSession(
       }),
     )
   }
-  return data.create(
+  const record = await data.create(
     'fixed_sport_sessions',
     toJsonObject({
       sport_profile_id: sportProfile.id,
@@ -872,25 +1018,37 @@ export async function addFixedSportSession(
       duration_minutes: input.durationMinutes,
       rpe: input.rpe,
       coach_defined: input.coachDefined,
-      session_data: { sport_code: input.sportCode },
+      session_data: {
+        sport_code: input.sportCode,
+        event_kind: input.eventKind ?? 'OTHER_ACTIVITY',
+        season_phase: input.seasonPhase,
+        recurrence:
+          input.recurrence === 'WEEKLY'
+            ? { frequency: 'WEEKLY', interval: 1 }
+            : {},
+      },
     }),
   )
+  await createCalendarPlanVersion(data, 'Kalenteriin lisätty kiinteä harjoitus')
+  return record
 }
 
 export async function addCompetition(
   data: AppDataContextValue,
   input: { name: string; startsAt: string; priority: 'A' | 'B' | 'TRAINING' },
 ) {
-  return data.create(
+  const record = await data.create(
     'competition_events',
     toJsonObject({
       sport_profile_id: data.latest('sport_profiles')?.id ?? null,
       name: input.name,
       starts_at: new Date(input.startsAt).toISOString(),
       priority: input.priority,
-      details: {},
+      details: { planner_event_kind: 'MATCH' },
     }),
   )
+  await createCalendarPlanVersion(data, 'Kalenteriin lisätty kilpailu tai ottelu')
+  return record
 }
 
 export function activeTrainingPlan(data: AppDataContextValue) {
