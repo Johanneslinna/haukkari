@@ -204,6 +204,41 @@ describe('TrainingPrescriptionEngine – kultaiset käyttäjäprofiilit', () => 
     expect(prescribeSession(input)).toEqual(prescribeSession(input))
   })
 
+  it('ei valitse liikettä, joka vaatii puuttuvan välineen', () => {
+    const available = ['Käsipainot']
+    const result = prescribeSession({
+      sessionId: 'equipment-hard-constraint',
+      title: 'Voima',
+      kind: 'STRENGTH',
+      durationMinutes: 45,
+      profile: profile({ equipment: available, experience: 'INTERMEDIATE' }),
+    })
+
+    expect(
+      result.exercises.every((exercise) =>
+        exercise.equipment.some(
+          (item) => item === 'Kehonpaino' || available.includes(item),
+        ),
+      ),
+    ).toBe(true)
+  })
+
+  it('käyttää vastuskuminauhalle vastustasoa kilogrammojen sijaan', () => {
+    const result = prescribeSession({
+      sessionId: 'band-load-unit',
+      title: 'Voima',
+      kind: 'STRENGTH',
+      durationMinutes: 45,
+      profile: profile({ equipment: ['Vastuskuminauhat'] }),
+    })
+    const bandExercise = result.exercises.find((exercise) =>
+      exercise.equipment.includes('Vastuskuminauhat'),
+    )
+
+    expect(bandExercise?.loadType).toBe('BAND')
+    expect(bandExercise?.loadLabelFi).toBe('Nauhan vastus')
+  })
+
   it('tuottaa v2-sopimuksen ja laskee kaikki osat aikabudjettiin', () => {
     const result = prescribeSession({
       sessionId: 'v2-contract',

@@ -1,6 +1,7 @@
 import { useState, type FormEvent } from 'react'
 import { getSportAdapter, listFullySupportedDisciplines } from '../../domain/coaching'
 import type { LocalRecord } from '../../domain/sync/types'
+import { featureFlags } from '../../config/featureFlags'
 import { useAppData } from '../app-data/appDataContextValue'
 import {
   addCompetition,
@@ -26,7 +27,7 @@ const sportLabels: Record<string, string> = {
   'ice-hockey-adult-amateur-skater': 'Jääkiekko – aikuinen amatöörikenttäpelaaja (beta)',
 }
 
-const hockeyBetaEnabled = import.meta.env.VITE_HOCKEY_BETA === 'true'
+const hockeyBetaEnabled = featureFlags.hockeyBeta
 
 export function SportCalendarPage() {
   const data = useAppData()

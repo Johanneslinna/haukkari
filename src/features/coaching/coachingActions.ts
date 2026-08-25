@@ -25,6 +25,7 @@ import type {
   WorkoutFeedback,
 } from '../../domain/coaching/types'
 import type { LocalRecord } from '../../domain/sync/types'
+import { featureFlags } from '../../config/featureFlags'
 import type {
   AppDataContextValue,
   GoalChangeDraft,
@@ -858,7 +859,7 @@ type CalendarPlanMutation = {
   remove?: LocalRecord
 }
 
-function calendarPlanningInputs(
+export function calendarPlanningInputs(
   data: AppDataContextValue,
   mutation?: CalendarPlanMutation,
 ) {
@@ -963,8 +964,7 @@ async function createCalendarPlanVersion(
     stringValue(objectValue(mutation?.upsert?.data.session_data).sport_code) ||
     stringValue(latestSportProfile?.data.sport_code)
   const hockeyBetaEnabled =
-    import.meta.env.VITE_HOCKEY_BETA === 'true' &&
-    sportCode === 'ice-hockey-adult-amateur-skater'
+    featureFlags.hockeyBeta && sportCode === 'ice-hockey-adult-amateur-skater'
   const preferences = {
     ...profileSettings,
     ...basePreferences,

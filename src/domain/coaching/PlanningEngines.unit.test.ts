@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { generatePlan } from './PlanGenerator'
 import { optimizeSchedule } from './ScheduleOptimizer'
 import { getSportAdapter, listFullySupportedDisciplines } from './SportAdapterRegistry'
@@ -255,5 +255,36 @@ describe('PlanGenerator, ScheduleOptimizer ja lajisovittimet', () => {
     )
     expect(getSportAdapter('running-marathon').supportLevel).toBe('FULL')
     expect(getSportAdapter('powerlifting-competition').supportLevel).toBe('FULL')
+  })
+
+  it('jääkiekkobetan lippu ei muuta tavallisen liikkujan tai juoksijan ohjelmaa', () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-08-25T12:00:00.000Z'))
+    const generalInput = {
+      goal: { primary: 'GENERAL_FITNESS' as const, secondary: [], inputs: {} },
+      experience: 'BEGINNER' as const,
+      availableDays: [1, 3, 5],
+      currentEnduranceMinutes: 60,
+      fixedSessions: [],
+      competitions: [],
+    }
+    const runningInput = {
+      ...generalInput,
+      goal: { primary: 'ENDURANCE' as const, secondary: [], inputs: {} },
+      experience: 'INTERMEDIATE' as const,
+      sportDiscipline: 'running-10k',
+      currentEnduranceMinutes: 120,
+    }
+
+    try {
+      expect(
+        generatePlan({ ...generalInput, hockeyBeta: true }).decision.sessions,
+      ).toEqual(generatePlan({ ...generalInput, hockeyBeta: false }).decision.sessions)
+      expect(
+        generatePlan({ ...runningInput, hockeyBeta: true }).decision.sessions,
+      ).toEqual(generatePlan({ ...runningInput, hockeyBeta: false }).decision.sessions)
+    } finally {
+      vi.useRealTimers()
+    }
   })
 })

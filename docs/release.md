@@ -90,11 +90,20 @@ VITE_SUPABASE_URL=https://<project-ref>.supabase.co
 VITE_SUPABASE_ANON_KEY=<publishable-or-anon-key>
 VITE_ENABLE_WEB_PUSH=false
 VITE_VAPID_PUBLIC_KEY=
+VITE_TRAINING_ENGINE_V2=false
+VITE_HOCKEY_BETA=false
 ```
 
 Web Push otetaan käyttöön vasta erillisen laitetestauksen jälkeen asettamalla
 feature flag ja julkinen VAPID-avain. Hosting-palvelun build-komento on `npm ci
 && npm run build`, julkaistava hakemisto `dist` ja Node-versio 24.
+
+Harjoittelumoottori v2:n uudet beta-moduulit avataan ensin sisäisessä betassa
+asettamalla `VITE_TRAINING_ENGINE_V2=true`. Jääkiekon aikuisten
+amatöörikenttäpelaajan profiili vaatii lisäksi `VITE_HOCKEY_BETA=true`.
+Turvallisuus- ja aikabudjettikorjaukset sekä vanhojen harjoitusten lukeminen ovat
+aina käytössä. Älä avaa lippuja tuotannossa ennen tavallisen kuntoilun, juoksun,
+voiman ja jääkiekon erillistä hyväksymistestausta.
 
 Hostingissa tarvitaan:
 
@@ -122,3 +131,8 @@ Frontend voidaan palauttaa julkaisemalla edellinen artifacti. Tietokantaan ei
 tehdä resettiä tai taaksepäin ajettavaa migraatiota: tee tarvittaessa uusi
 korjaava migraatio. Tietokannan tai Storage-objektien palautus tehdään
 [varmuuskopio-ohjeen](./backup-and-restore.md) mukaisesti huoltokatkon aikana.
+
+Harjoittelumoottori v2:n lähdekoodipalautuspiste on annotoitu Git-tagi
+`restore/pre-training-engine-v2-2026-08-25` (commit `2644e22`). Palautus tehdään
+luomalla tagista erillinen recovery-haara; työpuuta tai käyttäjädataa ei palauteta
+`reset --hard` -komennolla.

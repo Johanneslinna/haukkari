@@ -235,3 +235,34 @@ Ei testattu eikä muutettu pilvessä:
 Tuotantojulkaisun hyväksyntäportti pysyy avoimena, kunnes staging-ympäristö,
 hosting-palvelu, turvalliset tunnukset, rekisterinpitäjätiedot ja käyttäjän
 erillinen julkaisulupa ovat käytettävissä. Mitään ei ole julkaistu.
+
+## Harjoittelumoottori v2 – toteutushaara valmis paikalliseen beta-arvioon
+
+Haara `codex/training-engine-v2` rakentaa yhteisen Prescription v2 -sopimuksen,
+kerrostetun harjoittelumoottorin sekä sen päälle tavallisen kuntoilun, voiman,
+juoksun ja aikuisten amatöörijääkiekon ensimmäisen lajimoduulin. Jääkiekko ei
+korvaa yleisiä harjoittelupolkuja. Palautuspiste ennen uudistusta on tagi
+`restore/pre-training-engine-v2-2026-08-25` (commit `2644e22`).
+
+Toteutuksessa ovat mukana ehdoton päiväkohtainen aikabudjetti, todelliset
+annostyypit, legacy-adapteri, väline- ja kuormayksiköt, kuormituksen oppiminen,
+kaksivaiheinen kuntotarkistus, rakenteinen onboarding, suomenkielinen readiness,
+PlannerEvent-kalenteri, tulevaisuuteen versioituvat muutokset, harjoitekirjasto,
+historia- ja kehitysselitykset, mittausmuistutukset sekä turvallinen profiilin
+nollaus ja käyttäjän vaihto.
+
+Uudet beta-moduulit ovat oletuksena pois käytöstä. Ne avataan muuttujilla
+`VITE_TRAINING_ENGINE_V2=true` ja jääkiekolle lisäksi `VITE_HOCKEY_BETA=true`.
+Turvallisuus- ja aikabudjettikorjaukset pysyvät aina käytössä. Harjoitekirjaston
+tarkistamattomia videolinkkejä ei näytetä; jokainen linkki julkaistaan vasta
+sisältöarvion jälkeen.
+
+Paikallinen `npm run check` läpäisi lintin, muotoilun, TypeScriptin, 117
+yksikkötestiä, 7 integraatiotestiä, tietosuojaskannauksen, tuotantobuildin ja
+PWA-portin. `npm run e2e:app` läpäisi 8 ajettua selainpolkua Android-, iPhone- ja
+työpöytäprofiileilla; 10 testiä ohitettiin tarkoituksella niissä laiteprofiileissa,
+joille kyseistä polkua ei ole määritetty.
+
+Paikallinen tekninen hyväksyntä ei ole julkaisulupa. Suljettu beta edellyttää
+vielä valmennuksellista sisältöarviota ja hosted-ympäristön varmennusta. Julkinen
+julkaisu edellyttää lisäksi turvallisuus-, tietosuoja- ja tietoturva-arvioita.

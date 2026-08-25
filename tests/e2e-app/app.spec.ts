@@ -82,7 +82,10 @@ test('käynnissä oleva harjoitus säilyy offline-latauksessa', async ({
   ).toBeVisible()
   await page.getByRole('link', { name: 'Nyt', exact: true }).click()
   await page.getByRole('link', { name: 'Aloita treeni' }).click()
-  await page.getByRole('button', { name: 'Näytä päivän suositus' }).click()
+  await expect(
+    page.getByRole('heading', { name: 'Onko jokin tänään poikkeavaa?' }),
+  ).toBeVisible()
+  await page.getByRole('button', { name: 'Ei mitään poikkeavaa' }).click()
   await page.getByRole('link', { name: 'Avaa päivän harjoitus' }).click()
   await page.getByRole('button', { name: 'Aloita harjoitus' }).click()
   await expect(page.getByText('Harjoitus käynnissä')).toBeVisible()
@@ -110,6 +113,11 @@ test('kartoituksesta syntynyt harjoitus voidaan suorittaa ja avata palautteineen
   )
   await completeOnboarding(page)
   await page.getByRole('link', { name: 'Aloita treeni' }).click()
+  await expect(
+    page.getByRole('heading', { name: 'Onko jokin tänään poikkeavaa?' }),
+  ).toBeVisible()
+  await page.getByRole('button', { name: 'Haluan kertoa tarkemmin' }).click()
+  await expect(page.getByRole('heading', { name: 'Miltä tänään tuntuu?' })).toBeVisible()
   const minutes = page.getByLabel('Käytettävissä oleva aika (min)')
   await minutes.fill('')
   await expect(minutes).toHaveValue('')
@@ -121,10 +129,18 @@ test('kartoituksesta syntynyt harjoitus voidaan suorittaa ja avata palautteineen
   await page.getByRole('button', { name: 'Aloita harjoitus' }).click()
 
   for (;;) {
-    const visibleSetChecks = page.getByLabel('Valmis')
+    const visibleSetChecks = page.locator('.active-exercise-card').getByLabel('Valmis')
     for (let index = 0; index < (await visibleSetChecks.count()); index += 1) {
       await visibleSetChecks.nth(index).check()
+      await expect(visibleSetChecks.nth(index)).toBeChecked()
     }
+    await expect
+      .poll(() =>
+        visibleSetChecks.evaluateAll((items) =>
+          items.every((item) => (item as HTMLInputElement).checked),
+        ),
+      )
+      .toBe(true)
     const positionLabel = page.locator('.active-exercise-progress span').first()
     await expect(positionLabel).toBeVisible()
     const position = (await positionLabel.textContent())?.match(/(\d+)\/(\d+)/u)
@@ -146,7 +162,9 @@ test('kartoituksesta syntynyt harjoitus voidaan suorittaa ja avata palautteineen
   await page.getByRole('button', { name: 'Tallenna harjoitus ja palaute' }).click()
 
   await expect(page).toHaveURL(/\/historia\/[0-9a-f-]+$/u)
-  await expect(page.getByRole('heading', { name: 'Liikkeet ja sarjat' })).toBeVisible()
+  await expect(
+    page.getByRole('heading', { name: 'Liikkeet ja työosuudet' }),
+  ).toBeVisible()
   await expect(
     page.getByRole('heading', { name: 'Miltä harjoitus tuntui?' }),
   ).toBeVisible()
@@ -163,7 +181,7 @@ test('voimakas kipu keskeyttää harjoituksen ja estää progression', async ({
   )
   await completeOnboarding(page)
   await page.getByRole('link', { name: 'Aloita treeni' }).click()
-  await page.getByRole('button', { name: 'Näytä päivän suositus' }).click()
+  await page.getByRole('button', { name: 'Ei mitään poikkeavaa' }).click()
   await page.getByRole('link', { name: 'Avaa päivän harjoitus' }).click()
   await page.getByRole('button', { name: 'Aloita harjoitus' }).click()
   await page.getByRole('button', { name: 'Keskeytä harjoitus' }).click()

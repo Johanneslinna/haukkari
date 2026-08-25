@@ -76,7 +76,11 @@ test('Tänään-näkymän responsiiviset koot ja keskeiset tilat', async ({
 
   await page.setViewportSize({ width: 390, height: 844 })
   await page.goto('/?today-state=normal')
-  await page.getByRole('button', { name: 'Vaihda tummaan teemaan' }).click()
+  await page
+    .getByRole('button', {
+      name: 'Teema: vaalea. Vaihda seuraavaan tilaan.',
+    })
+    .click()
   await expect(page.locator('html')).toHaveAttribute('data-theme', 'dark')
   await expect(page.getByRole('link', { name: 'Aloita treeni' })).toBeVisible()
   await page.evaluate(() => localStorage.setItem('treenikompassi.theme', 'LIGHT'))
