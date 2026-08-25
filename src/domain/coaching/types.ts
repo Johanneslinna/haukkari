@@ -39,14 +39,39 @@ export type RuleDecision = {
   evidenceIds: string[]
 }
 
+export type DecisionTraceValue =
+  | string
+  | number
+  | boolean
+  | null
+  | DecisionTraceValue[]
+  | { [key: string]: DecisionTraceValue }
+
 export type DecisionTrace = {
   ruleVersion: string
+  engineVersion?: string
+  contentReleaseId?: string
   generatedAt: string
   safetyOutcome: SafetyOutcome
   confidence: 'HIGH' | 'MODERATE' | 'LOW'
   inputSummary: string[]
   missingData: string[]
   rules: RuleDecision[]
+  sessionObjective?: SessionObjective
+  evidenceClaimIds?: string[]
+  ruleIds?: string[]
+  selectedExercises?: {
+    code: string
+    version: string
+    scoreComponents: Record<string, number>
+  }[]
+  rejectedExercises?: { code: string; reasonCodes: string[] }[]
+  capabilityEstimates?: CapabilityEstimate[]
+  adaptations?: {
+    original: DecisionTraceValue
+    adjusted: DecisionTraceValue
+    reasonCodes: string[]
+  }[]
 }
 
 export type SessionKind =
@@ -188,6 +213,7 @@ export type PlannedSession = {
   notes?: string[]
   variants?: WorkoutVariant[]
   prescriptionDetail?: PrescribedSession
+  unsupportedPrescription?: UnsupportedPrescription
 }
 
 export type WorkoutVariant = {
@@ -271,7 +297,48 @@ export type SessionObjective = {
   secondary: string[]
   fatigueBudget: 'LOW' | 'MODERATE' | 'HIGH'
   avoid: string[]
+  primaryAdaptation?: string
+  secondaryAdaptations?: string[]
+  sessionKind?: SessionKind
+  durationMinutes?: number
+  intensityIntent?: string
+  fatigueLimits?: {
+    systemic: number
+    lowerBody: number
+    upperBody: number
+    eccentric: number
+  }
+  requiredMovementPatterns?: string[]
+  optionalMovementPatterns?: string[]
+  avoidTags?: string[]
+  evidenceClaimIds?: string[]
 }
+
+export type CapabilityEstimate = {
+  exerciseCode: string
+  estimated1RmKg?: number
+  workingLoadRangeKg?: [number, number]
+  confidence: 'LOW' | 'MODERATE' | 'HIGH'
+  supportingSetCount: number
+  latestValidSetAt?: string
+  calibrationRequired: boolean
+  reasons: string[]
+}
+
+export type UnsupportedPrescription = {
+  status: 'UNSUPPORTED'
+  sessionKind: SessionKind
+  reasonCode:
+    | 'YOUTH_ENGINE_NOT_AVAILABLE'
+    | 'HEALTH_ENGINE_NOT_AVAILABLE'
+    | 'SPEED_POWER_ENGINE_NOT_REVIEWED'
+    | 'SPORT_ENGINE_NOT_REVIEWED'
+    | 'MATCH_ENGINE_NOT_REVIEWED'
+  userMessage: string
+}
+
+export type PrescriptionResult =
+  { status: 'SUPPORTED'; prescription: PrescribedSession } | UnsupportedPrescription
 
 export type ExercisePrescription = {
   id: string

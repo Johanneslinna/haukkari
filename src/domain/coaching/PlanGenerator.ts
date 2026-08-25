@@ -3,7 +3,7 @@ import { getSportAdapter } from './SportAdapterRegistry'
 import { getGoalStrategy } from './strategies'
 import { AthleteStateBuilder, ConstraintEngine, type AthleteState } from './engine'
 import {
-  prescribeSession,
+  resolvePrescription,
   TRAINING_RULE_VERSION,
   type PrescriptionProfile,
 } from './TrainingPrescriptionEngine'
@@ -40,6 +40,8 @@ export type PlanGenerationInput = {
   enduranceBackgroundKnown?: boolean
   medicationAffectsHeartRate?: boolean
   hockeyBeta?: boolean
+  age?: number
+  generatedAt?: string
 }
 
 const sessionDefaults: Record<
@@ -322,25 +324,26 @@ export function generatePlan(
     healthBlocked: athleteState.acute.healthBlocked,
     enduranceBackgroundKnown: input.enduranceBackgroundKnown,
     medicationAffectsHeartRate: input.medicationAffectsHeartRate,
+    age: input.age,
+    generatedAt: input.generatedAt,
   }
-  const prescribedSessions = hockeyAdjustment.sessions.map((session) =>
-    session.source === 'APP'
-      ? {
-          ...session,
-          prescriptionDetail: prescribeSession({
-            sessionId: session.id,
-            title: session.title ?? sessionDefaults[session.kind].title,
-            kind: session.kind,
-            durationMinutes: session.durationMinutes,
-            profile: {
-              ...profile,
-              minutesPerSession:
-                input.minutesByDay?.[String(session.day)] ?? profile.minutesPerSession,
-            },
-          }),
-        }
-      : session,
-  )
+  const prescribedSessions = hockeyAdjustment.sessions.map((session) => {
+    if (session.source !== 'APP') return session
+    const resolved = resolvePrescription({
+      sessionId: session.id,
+      title: session.title ?? sessionDefaults[session.kind].title,
+      kind: session.kind,
+      durationMinutes: session.durationMinutes,
+      profile: {
+        ...profile,
+        minutesPerSession:
+          input.minutesByDay?.[String(session.day)] ?? profile.minutesPerSession,
+      },
+    })
+    return resolved.status === 'SUPPORTED'
+      ? { ...session, prescriptionDetail: resolved.prescription }
+      : { ...session, unsupportedPrescription: resolved }
+  })
 
   const assessments =
     input.goal.primary === 'MAX_STRENGTH' && input.experience === 'BEGINNER'

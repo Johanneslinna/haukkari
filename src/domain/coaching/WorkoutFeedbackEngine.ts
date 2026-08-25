@@ -11,12 +11,24 @@ import {
 } from './PrescriptionContract'
 
 function isSuccessful(feedback: WorkoutFeedback) {
+  const reportedRirs =
+    feedback.exerciseResults?.flatMap((result) =>
+      (result.rirs ?? []).flatMap((rir) =>
+        typeof rir === 'number'
+          ? [{ rir, target: Math.max(0, 10 - result.targetRpe) }]
+          : [],
+      ),
+    ) ?? []
+  const rirAcceptable =
+    reportedRirs.length === 0 ||
+    reportedRirs.every(({ rir, target }) => rir >= target && rir <= target + 1)
   return (
     feedback.completionStatus === 'COMPLETED' &&
     feedback.pain === 'NONE' &&
     feedback.felt !== 'WORSE' &&
     feedback.sessionRpe >= 4 &&
-    feedback.sessionRpe <= 8
+    feedback.sessionRpe <= 8 &&
+    rirAcceptable
   )
 }
 

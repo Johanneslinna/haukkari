@@ -2,6 +2,41 @@ export { evaluateGoalConflicts } from './ConflictEngine'
 export { CapabilityEstimator, estimateExerciseCapability } from './CapabilityEstimator'
 export type { ExerciseCapabilityEstimate } from './CapabilityEstimator'
 export {
+  AdultResistanceEngine,
+  ADULT_RESISTANCE_ENGINE_VERSION,
+  ADULT_RESISTANCE_RULE_VERSION,
+  adaptNextSet,
+  createResistanceSessionObjective,
+  decideInterSessionProgression,
+  estimateAdultResistanceCapability,
+  filterEligibleExercises,
+  prescribeAdultResistanceSession,
+  prescribeResistanceDose,
+  scoreExerciseCandidates,
+} from './AdultResistanceEngine'
+export type {
+  AdultResistanceAthleteContext,
+  AdultResistanceSetHistory,
+  EligibilityDecision,
+  ExerciseCandidateScore,
+  InterSessionProgressionDecision,
+  ResistanceDoseDecision,
+  SetAdaptationAction,
+  SetAdaptationDecision,
+} from './AdultResistanceEngine'
+export {
+  InMemoryExerciseCatalog,
+  TRAINING_CONTENT_RELEASE,
+  publishedExerciseCatalog,
+} from './content/TrainingContent'
+export type {
+  EvidenceClaim,
+  EvidenceSource,
+  ExerciseCatalog,
+  ExerciseDefinition,
+  PrescriptionRule,
+} from './content/TrainingContent'
+export {
   exerciseAllowedForExperience,
   exerciseConflictsWithLimitations,
   exerciseLibrary,
@@ -62,6 +97,7 @@ export {
   adaptPrescription,
   exerciseSubstitutions,
   prescribeSession,
+  resolvePrescription,
   TRAINING_RULE_VERSION,
 } from './TrainingPrescriptionEngine'
 export {

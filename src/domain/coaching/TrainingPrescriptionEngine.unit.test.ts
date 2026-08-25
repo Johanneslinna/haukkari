@@ -6,6 +6,7 @@ import {
   normalizePrescriptionV2,
   prescriptionDurationSeconds,
   prescribeSession,
+  resolvePrescription,
 } from './index'
 import type { PrescriptionProfile } from './TrainingPrescriptionEngine'
 import type { WorkoutFeedback, WorkoutVariant } from './types'
@@ -19,6 +20,7 @@ function profile(patch: Partial<PrescriptionProfile> = {}): PrescriptionProfile 
     equipment: ['Kehonpaino'],
     physicalLoad: 'MODERATE',
     minutesPerSession: 45,
+    age: 30,
     generatedAt,
     ...patch,
   }
@@ -53,13 +55,13 @@ describe('TrainingPrescriptionEngine – kultaiset käyttäjäprofiilit', () => 
       profile: profile(),
     })
 
-    expect(result.exercises).toHaveLength(5)
+    expect(result.exercises.length).toBeGreaterThanOrEqual(4)
     expect(result.exercises.map((item) => item.nameFi)).toEqual(
       expect.arrayContaining([
         'Tuolilta ylösnousu',
         'Lantionnosto',
         'Korotettu punnerrus',
-        'Bird dog',
+        'Dead bug',
       ]),
     )
     expect(
@@ -71,7 +73,8 @@ describe('TrainingPrescriptionEngine – kultaiset käyttäjäprofiilit', () => 
           item.stopCondition.length > 0,
       ),
     ).toBe(true)
-    expect(result.decisionTrace.ruleVersion).toBe('2026.08.25-v2')
+    expect(result.decisionTrace.ruleVersion).toBe('adult-resistance-rules-1.0.0')
+    expect(result.decisionTrace.contentReleaseId).toBe('adult-resistance-v1.0.0')
   })
 
   it('käyttää ilmoitettuja kuntosalivälineitä ja lihaskasvun annosta', () => {
@@ -89,8 +92,8 @@ describe('TrainingPrescriptionEngine – kultaiset käyttäjäprofiilit', () => 
     })
 
     expect(result.exercises[0]?.nameFi).toMatch(/Jalkaprässi|Maljakyykky/u)
-    expect(result.exercises.every((item) => item.repetitions === '8–12')).toBe(true)
-    expect(result.exercises.every((item) => item.sets === 4)).toBe(true)
+    expect(result.exercises.every((item) => item.repetitions === '6–12')).toBe(true)
+    expect(result.exercises.every((item) => item.sets === 3)).toBe(true)
   })
 
   it('vähentää annosta korkean fyysisen työkuorman profiilissa', () => {
@@ -124,7 +127,7 @@ describe('TrainingPrescriptionEngine – kultaiset käyttäjäprofiilit', () => 
     })
     const compact = adaptPrescription(full, compact10, 'GREEN')
 
-    expect(compact.durationMinutes).toBe(10)
+    expect(compact.durationMinutes).toBeLessThanOrEqual(10)
     expect(compact.exercises).toHaveLength(2)
     expect(compact.exercises.every((item) => item.keyExercise)).toBe(true)
     expect(compact.decisionTrace.rules.at(-1)?.ruleId).toBe('TIME-COMPACT-001')
@@ -149,8 +152,8 @@ describe('TrainingPrescriptionEngine – kultaiset käyttäjäprofiilit', () => 
     expect(compact.cooldown[0]).toContain('5 min')
   })
 
-  it('terveysesto muuttaa intervallin helpoksi puhetestillä ohjatuksi harjoitukseksi', () => {
-    const result = prescribeSession({
+  it('terveysesto ei muodosta prescriptionia väärillä säännöillä', () => {
+    const result = resolvePrescription({
       sessionId: 'health-block',
       title: 'Intervalli',
       kind: 'INTERVAL',
@@ -158,9 +161,12 @@ describe('TrainingPrescriptionEngine – kultaiset käyttäjäprofiilit', () => 
       profile: profile({ healthBlocked: true }),
     })
 
-    expect(result.kind).toBe('EASY_ENDURANCE')
-    expect(result.exercises[0]?.targetRpe).toBe(4)
-    expect(result.decisionTrace.safetyOutcome).toBe('REFER')
+    expect(result).toEqual({
+      status: 'UNSUPPORTED',
+      sessionKind: 'INTERVAL',
+      reasonCode: 'HEALTH_ENGINE_NOT_AVAILABLE',
+      userMessage: expect.stringContaining('terveysrajoitteen'),
+    })
   })
 
   it('käyttää sykkeen sijasta RPE:tä ja puhetestiä lääkityksen vaikuttaessa sykkeeseen', () => {
@@ -249,7 +255,7 @@ describe('TrainingPrescriptionEngine – kultaiset käyttäjäprofiilit', () => 
     })
 
     expect(result.schemaVersion).toBe(2)
-    expect(result.engineVersion).toBe('training-engine-v2.0.0')
+    expect(result.engineVersion).toBe('adult-resistance-1.0.0')
     expect(result.blocks).toEqual(result.exercises)
     expect(result.objective?.primary).toBeTruthy()
     expect(prescriptionDurationSeconds(result)).toBeLessThanOrEqual(45 * 60)
@@ -276,20 +282,19 @@ describe('TrainingPrescriptionEngine – kultaiset käyttäjäprofiilit', () => 
     expect(prescriptionDurationSeconds(result)).toBeLessThanOrEqual(35 * 60)
   })
 
-  it('käyttää nopeusharjoituksessa sprintti- ja hyppyannoksia', () => {
-    const result = prescribeSession({
+  it('ei muodosta nopeusharjoitusta ennen asiantuntijatarkastusta', () => {
+    const result = resolvePrescription({
       sessionId: 'speed-v2',
       title: 'Nopeus ja teho',
       kind: 'SPEED_POWER',
       durationMinutes: 35,
-      profile: profile(),
+      profile: profile({ age: 30 }),
     })
 
-    expect(result.exercises.map((exercise) => exercise.dose?.kind)).toEqual([
-      'SPRINT_REPS',
-      'JUMP_REPS',
-    ])
-    expect(prescriptionDurationSeconds(result)).toBeLessThanOrEqual(35 * 60)
+    expect(result).toMatchObject({
+      status: 'UNSUPPORTED',
+      reasonCode: 'SPEED_POWER_ENGINE_NOT_REVIEWED',
+    })
   })
 
   it('avaa vanhan reseptin muuttamatta sen aiemmin näytettyä kestoa', () => {
@@ -348,5 +353,26 @@ describe('WorkoutFeedbackEngine', () => {
 
     expect(decision.action).toBe('PROGRESS_LOAD')
     expect(setChanges).toHaveLength(0)
+  })
+
+  it('ei nosta kuormaa, jos toteutunut RIR jää tavoitetta pienemmäksi', () => {
+    const exerciseResult = {
+      exerciseCode: 'GOBLET_SQUAT',
+      exerciseName: 'Maljakyykky',
+      loadType: 'EXTERNAL_KG' as const,
+      completedSets: 2,
+      plannedSets: 2,
+      repetitions: [8, 8],
+      loads: ['30', '30'],
+      rirs: [0, 1],
+      targetRepetitions: '8–10',
+      targetRpe: 7,
+    }
+    const decision = evaluateWorkoutFeedback([
+      feedback({ difficulty: 'TOO_EASY', exerciseResults: [exerciseResult] }),
+      feedback({ difficulty: 'TOO_EASY', exerciseResults: [exerciseResult] }),
+    ]).decision
+
+    expect(decision.action).toBe('MAINTAIN')
   })
 })

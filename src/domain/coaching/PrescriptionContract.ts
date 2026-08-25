@@ -195,7 +195,8 @@ export function withV2Blocks(
     ...prescription,
     durationMinutes: calculatedDurationMinutes,
     schemaVersion: PRESCRIPTION_SCHEMA_VERSION,
-    engineVersion: PRESCRIPTION_ENGINE_VERSION,
+    engineVersion:
+      prescription.decisionTrace.engineVersion ?? PRESCRIPTION_ENGINE_VERSION,
     confidence: prescription.decisionTrace.confidence,
     exercises,
     blocks: exercises,

@@ -25,19 +25,29 @@ export function estimateExerciseCapability(
         const kilograms = numericLoad(load)
         const repetitions = result.repetitions[index]
         if (kilograms === null || repetitions === null || repetitions <= 0) return []
-        return [{ kilograms, repetitions }]
+        const rir = result.rirs?.[index]
+        return [
+          {
+            kilograms,
+            repetitions,
+            rir: typeof rir === 'number' ? rir : null,
+          },
+        ]
       }),
     )
   const latest = comparable.at(-1)
+  const rirSupported = comparable.filter((set) => set.rir !== null)
   const confidence =
-    comparable.length >= 6 ? 'HIGH' : comparable.length >= 2 ? 'MODERATE' : 'LOW'
+    rirSupported.length >= 6 ? 'HIGH' : rirSupported.length >= 2 ? 'MODERATE' : 'LOW'
   return {
     confidence,
     suggestedLoad: latest ? String(latest.kilograms).replace('.', ',') : null,
     estimatedOneRepMaxKg: latest
-      ? Math.round(latest.kilograms * (1 + latest.repetitions / 30) * 10) / 10
+      ? Math.round(
+          latest.kilograms * (1 + (latest.repetitions + (latest.rir ?? 0)) / 30) * 10,
+        ) / 10
       : null,
-    calibrationRequired: comparable.length < 2,
+    calibrationRequired: rirSupported.length < 2,
     comparableSets: comparable.length,
   }
 }
