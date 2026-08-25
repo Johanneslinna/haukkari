@@ -176,6 +176,41 @@ export type Database = {
         }
         Relationships: []
       }
+      exercise_definitions: {
+        Row: {
+          content_release_id: string
+          created_at: string
+          definition: Json
+          definition_version: string
+          exercise_code: string
+          name_fi: string
+        }
+        Insert: {
+          content_release_id: string
+          created_at?: string
+          definition: Json
+          definition_version: string
+          exercise_code: string
+          name_fi: string
+        }
+        Update: {
+          content_release_id?: string
+          created_at?: string
+          definition?: Json
+          definition_version?: string
+          exercise_code?: string
+          name_fi?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "exercise_definitions_content_release_id_fkey"
+            columns: ["content_release_id"]
+            isOneToOne: false
+            referencedRelation: "training_content_releases"
+            referencedColumns: ["release_id"]
+          },
+        ]
+      }
       exercise_set_logs: {
         Row: {
           created_at: string
@@ -243,7 +278,10 @@ export type Database = {
         Row: {
           category: string
           code: string
+          content_release_id: string | null
+          content_version: string | null
           created_at: string
+          definition: Json
           equipment: string[]
           id: string
           instructions_fi: string
@@ -254,7 +292,10 @@ export type Database = {
         Insert: {
           category: string
           code: string
+          content_release_id?: string | null
+          content_version?: string | null
           created_at?: string
+          definition?: Json
           equipment?: string[]
           id?: string
           instructions_fi?: string
@@ -265,7 +306,10 @@ export type Database = {
         Update: {
           category?: string
           code?: string
+          content_release_id?: string | null
+          content_version?: string | null
           created_at?: string
+          definition?: Json
           equipment?: string[]
           id?: string
           instructions_fi?: string
@@ -1032,6 +1076,36 @@ export type Database = {
             referencedColumns: ["id", "user_id"]
           },
         ]
+      }
+      training_content_releases: {
+        Row: {
+          content_digest: string
+          created_at: string
+          immutable: boolean
+          published_at: string
+          release_id: string
+          semantic_version: string
+          status: string
+        }
+        Insert: {
+          content_digest: string
+          created_at?: string
+          immutable?: boolean
+          published_at: string
+          release_id: string
+          semantic_version: string
+          status: string
+        }
+        Update: {
+          content_digest?: string
+          created_at?: string
+          immutable?: boolean
+          published_at?: string
+          release_id?: string
+          semantic_version?: string
+          status?: string
+        }
+        Relationships: []
       }
       training_plans: {
         Row: {

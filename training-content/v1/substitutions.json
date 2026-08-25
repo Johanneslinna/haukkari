@@ -1,0 +1,35 @@
+[
+  { "fromCode": "CHAIR_SQUAT", "toCodes": ["BODYWEIGHT_SQUAT", "LEG_PRESS"] },
+  { "fromCode": "BODYWEIGHT_SQUAT", "toCodes": ["CHAIR_SQUAT", "GOBLET_SQUAT"] },
+  { "fromCode": "GOBLET_SQUAT", "toCodes": ["BODYWEIGHT_SQUAT", "LEG_PRESS"] },
+  { "fromCode": "LEG_PRESS", "toCodes": ["GOBLET_SQUAT", "CHAIR_SQUAT"] },
+  { "fromCode": "GLUTE_BRIDGE", "toCodes": ["DUMBBELL_RDL", "CABLE_PULL_THROUGH"] },
+  { "fromCode": "DUMBBELL_RDL", "toCodes": ["GLUTE_BRIDGE", "BARBELL_RDL"] },
+  { "fromCode": "BARBELL_RDL", "toCodes": ["DUMBBELL_RDL", "CABLE_PULL_THROUGH"] },
+  { "fromCode": "CABLE_PULL_THROUGH", "toCodes": ["GLUTE_BRIDGE", "DUMBBELL_RDL"] },
+  { "fromCode": "SUPPORTED_SPLIT_SQUAT", "toCodes": ["STEP_UP", "REVERSE_LUNGE"] },
+  { "fromCode": "REVERSE_LUNGE", "toCodes": ["SUPPORTED_SPLIT_SQUAT", "STEP_UP"] },
+  { "fromCode": "STEP_UP", "toCodes": ["SUPPORTED_SPLIT_SQUAT", "REVERSE_LUNGE"] },
+  { "fromCode": "ELEVATED_PUSH_UP", "toCodes": ["PUSH_UP", "DUMBBELL_BENCH_PRESS"] },
+  { "fromCode": "PUSH_UP", "toCodes": ["ELEVATED_PUSH_UP", "DUMBBELL_BENCH_PRESS"] },
+  { "fromCode": "DUMBBELL_BENCH_PRESS", "toCodes": ["ELEVATED_PUSH_UP", "PUSH_UP"] },
+  {
+    "fromCode": "DUMBBELL_OVERHEAD_PRESS",
+    "toCodes": ["MACHINE_SHOULDER_PRESS", "ELEVATED_PUSH_UP"]
+  },
+  {
+    "fromCode": "MACHINE_SHOULDER_PRESS",
+    "toCodes": ["DUMBBELL_OVERHEAD_PRESS", "ELEVATED_PUSH_UP"]
+  },
+  { "fromCode": "ONE_ARM_ROW", "toCodes": ["SEATED_CABLE_ROW", "BAND_ROW"] },
+  { "fromCode": "SEATED_CABLE_ROW", "toCodes": ["ONE_ARM_ROW", "BAND_ROW"] },
+  { "fromCode": "BAND_ROW", "toCodes": ["ONE_ARM_ROW", "SEATED_CABLE_ROW"] },
+  { "fromCode": "LAT_PULLDOWN", "toCodes": ["ASSISTED_PULL_UP", "BAND_VERTICAL_PULL"] },
+  { "fromCode": "ASSISTED_PULL_UP", "toCodes": ["LAT_PULLDOWN", "BAND_VERTICAL_PULL"] },
+  { "fromCode": "BAND_VERTICAL_PULL", "toCodes": ["LAT_PULLDOWN", "BAND_ROW"] },
+  { "fromCode": "STANDING_CALF_RAISE", "toCodes": ["CHAIR_SQUAT", "STEP_UP"] },
+  { "fromCode": "DEAD_BUG", "toCodes": ["BIRD_DOG", "FRONT_PLANK"] },
+  { "fromCode": "BIRD_DOG", "toCodes": ["DEAD_BUG", "FRONT_PLANK"] },
+  { "fromCode": "FRONT_PLANK", "toCodes": ["DEAD_BUG", "PALLOF_PRESS"] },
+  { "fromCode": "PALLOF_PRESS", "toCodes": ["DEAD_BUG", "BAND_ROW"] }
+]
