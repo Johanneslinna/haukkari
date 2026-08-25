@@ -2,15 +2,23 @@ import { useState, type FormEvent } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { useAuth } from '../authContextValue'
 import { authErrorMessage } from '../formUtils'
-import { clearLocalAccountData } from '../../privacy/localPrivacy'
+import {
+  clearLocalAccountData,
+  resetTrainingProfileData,
+} from '../../privacy/localPrivacy'
 import { HaukkariLogo } from '../../../app/HaukkariLogo'
+import { useAppData } from '../../app-data/appDataContextValue'
 
 export function AccountPage() {
   const { api, session } = useAuth()
+  const data = useAppData()
   const navigate = useNavigate()
   const [confirmation, setConfirmation] = useState('')
+  const [profileResetConfirmation, setProfileResetConfirmation] = useState('')
   const [error, setError] = useState('')
-  const [pending, setPending] = useState<'signout' | 'delete' | null>(null)
+  const [pending, setPending] = useState<'signout' | 'profile-reset' | 'delete' | null>(
+    null,
+  )
 
   const signOut = async () => {
     setError('')
@@ -19,6 +27,27 @@ export function AccountPage() {
       await api.signOut()
       if (session) await clearLocalAccountData(session.user.id)
       navigate('/kirjaudu', { replace: true })
+    } catch (reason) {
+      setError(authErrorMessage(reason))
+    } finally {
+      setPending(null)
+    }
+  }
+
+  const resetTrainingProfile = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault()
+    if (profileResetConfirmation !== 'ALOITA ALUSTA') {
+      setError('Kirjoita ALOITA ALUSTA täsmälleen pyydetyssä muodossa.')
+      return
+    }
+    setError('')
+    setPending('profile-reset')
+    try {
+      // Poistot kirjoitetaan normaaliin offline-outboxiin. Näin ne poistavat myös
+      // palvelimelle aiemmin synkronoidun datan eivätkä vain selaimen kopiota.
+      await resetTrainingProfileData(data)
+      setProfileResetConfirmation('')
+      navigate('/aloitus', { replace: true })
     } catch (reason) {
       setError(authErrorMessage(reason))
     } finally {
@@ -74,8 +103,31 @@ export function AccountPage() {
         >
           {pending === 'signout'
             ? 'Kirjaudutaan ulos…'
-            : 'Kirjaudu ulos tältä laitteelta'}
+            : 'Kirjaudu ulos ja vaihda käyttäjää'}
         </button>
+      </section>
+
+      <section className="content-card danger-card">
+        <h2>Poista harjoitteluprofiilini ja aloita alusta</h2>
+        <p>
+          Tämä poistaa tavoitteet, suunnitelmat, harjoitushistorian, terveystiedot,
+          mittaukset ja muistutukset. Käyttäjätili ja sähköpostiosoite säilyvät. Poistot
+          synkronoidaan palvelimelle, kun yhteys on käytettävissä.
+        </p>
+        <form className="form" onSubmit={resetTrainingProfile}>
+          <label className="field">
+            <span>Vahvista kirjoittamalla ALOITA ALUSTA</span>
+            <input
+              value={profileResetConfirmation}
+              onChange={(event) => setProfileResetConfirmation(event.target.value)}
+            />
+          </label>
+          <button className="button button-danger" disabled={pending !== null}>
+            {pending === 'profile-reset'
+              ? 'Poistetaan harjoitteluprofiilia…'
+              : 'Poista harjoitteluprofiili ja aloita alusta'}
+          </button>
+        </form>
       </section>
 
       <section className="content-card danger-card">

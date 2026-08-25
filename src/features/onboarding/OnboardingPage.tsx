@@ -49,11 +49,13 @@ const metricOptions = [
   'Harjoitusten toteuma',
   'Voimatasot',
   'Kestävyyskunto',
+  'Juoksutulos',
+  'Nopeus ja hyppy',
+  'Liikkuvuus ja toimintakyky',
   'Paino',
   'Vyötärönympärys',
   'Koettu energia ja palautuminen',
-  'Liikkuvuus ja toimintakyky',
-  'Nopeus ja räjähtävä voima',
+  'Kipuvapaat harjoitukset',
 ]
 
 const dataControllerName =
@@ -602,9 +604,7 @@ export function OnboardingPage() {
                     className="button button-secondary"
                     type="button"
                     key={preset.label}
-                    onClick={() =>
-                      setForm({ ...form, equipment: [...preset.equipment] })
-                    }
+                    onClick={() => setForm({ ...form, equipment: [...preset.equipment] })}
                   >
                     {preset.label}
                   </button>

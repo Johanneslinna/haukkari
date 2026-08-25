@@ -176,50 +176,54 @@ function planFromPreferences(
     'weeklyActivities' in preferences && Array.isArray(preferences.weeklyActivities)
       ? preferences.weeklyActivities
       : []
-  const structuredFixedSessions: PlannedSession[] = weeklyActivities.flatMap((value, index) => {
-    if (!value || typeof value !== 'object') return []
-    const activity = value as Record<string, unknown>
-    if (
-      typeof activity.day !== 'number' ||
-      typeof activity.durationMinutes !== 'number' ||
-      (activity.intensity !== 'EASY' &&
-        activity.intensity !== 'MODERATE' &&
-        activity.intensity !== 'HARD')
-    ) {
-      return []
-    }
-    const activityKind = typeof activity.kind === 'string' ? activity.kind : 'OTHER'
-    const kind =
-      activityKind === 'RUNNING'
-        ? ('EASY_ENDURANCE' as const)
-        : activityKind === 'STRENGTH'
-          ? ('STRENGTH' as const)
-          : ('SPORT' as const)
-    return [{
-      id: `onboarding-fixed-${String(activity.id ?? index)}`,
-      day: activity.day,
-      kind,
-      title:
+  const structuredFixedSessions: PlannedSession[] = weeklyActivities.flatMap(
+    (value, index) => {
+      if (!value || typeof value !== 'object') return []
+      const activity = value as Record<string, unknown>
+      if (
+        typeof activity.day !== 'number' ||
+        typeof activity.durationMinutes !== 'number' ||
+        (activity.intensity !== 'EASY' &&
+          activity.intensity !== 'MODERATE' &&
+          activity.intensity !== 'HARD')
+      ) {
+        return []
+      }
+      const activityKind = typeof activity.kind === 'string' ? activity.kind : 'OTHER'
+      const kind =
         activityKind === 'RUNNING'
-          ? 'Säännöllinen juoksuharjoitus'
+          ? ('EASY_ENDURANCE' as const)
           : activityKind === 'STRENGTH'
-            ? 'Säännöllinen voimaharjoitus'
-            : activityKind === 'SPORT'
-              ? 'Säännöllinen lajiharjoitus'
-              : 'Muu säännöllinen liikunta',
-      durationMinutes: activity.durationMinutes,
-      intensity: activity.intensity,
-      loadRegion:
-        activityKind === 'RUNNING'
-          ? ('CARDIO' as const)
-          : activityKind === 'STRENGTH'
-            ? ('FULL_BODY' as const)
-            : ('FULL_BODY' as const),
-      fixed: true,
-      source: activityKind === 'STRENGTH' ? ('COACH' as const) : ('SPORT' as const),
-      notes: ['Käyttäjän aloituskartoituksessa ilmoittama kiinteä viikkotapahtuma.'],
-    }]
-  })
+            ? ('STRENGTH' as const)
+            : ('SPORT' as const)
+      return [
+        {
+          id: `onboarding-fixed-${String(activity.id ?? index)}`,
+          day: activity.day,
+          kind,
+          title:
+            activityKind === 'RUNNING'
+              ? 'Säännöllinen juoksuharjoitus'
+              : activityKind === 'STRENGTH'
+                ? 'Säännöllinen voimaharjoitus'
+                : activityKind === 'SPORT'
+                  ? 'Säännöllinen lajiharjoitus'
+                  : 'Muu säännöllinen liikunta',
+          durationMinutes: activity.durationMinutes,
+          intensity: activity.intensity,
+          loadRegion:
+            activityKind === 'RUNNING'
+              ? ('CARDIO' as const)
+              : activityKind === 'STRENGTH'
+                ? ('FULL_BODY' as const)
+                : ('FULL_BODY' as const),
+          fixed: true,
+          source: activityKind === 'STRENGTH' ? ('COACH' as const) : ('SPORT' as const),
+          notes: ['Käyttäjän aloituskartoituksessa ilmoittama kiinteä viikkotapahtuma.'],
+        },
+      ]
+    },
+  )
   const generated = generatePlan({
     goal,
     experience:
@@ -272,8 +276,7 @@ function planFromPreferences(
       typeof preferences.enduranceSportBackground === 'string' &&
       preferences.enduranceSportBackground.trim().length > 0,
     medicationAffectsHeartRate: preferences.medicationAffectsHeartRate === true,
-    hockeyBeta:
-      'hockeyBeta' in preferences && preferences.hockeyBeta === true,
+    hockeyBeta: 'hockeyBeta' in preferences && preferences.hockeyBeta === true,
   })
   if (healthBlocked) {
     generated.decision.sessions = generated.decision.sessions
@@ -850,56 +853,86 @@ export async function addBodyMetric(
   )
 }
 
-function calendarPlanningInputs(data: AppDataContextValue) {
+type CalendarPlanMutation = {
+  upsert?: LocalRecord
+  remove?: LocalRecord
+}
+
+function calendarPlanningInputs(
+  data: AppDataContextValue,
+  mutation?: CalendarPlanMutation,
+) {
   const now = new Date()
-  const fixedSessions: PlannedSession[] = data.list('fixed_sport_sessions').map(
-    (record) => {
-      const sessionData = objectValue(record.data.session_data)
-      const startsAt = new Date(stringValue(record.data.starts_at))
-      const rpe = typeof record.data.rpe === 'number' ? record.data.rpe : 6
-      return {
-        id: `calendar-${record.id}`,
-        day: startsAt.getDay() || 7,
-        kind: 'SPORT',
-        title:
-          stringValue(sessionData.title) ||
-          (stringValue(sessionData.event_kind) === 'ICE_PRACTICE'
-            ? 'Jääharjoitus'
-            : 'Kiinteä lajiharjoitus'),
-        durationMinutes:
-          typeof record.data.duration_minutes === 'number'
-            ? record.data.duration_minutes
-            : 60,
-        intensity: rpe >= 8 ? 'HARD' : rpe >= 5 ? 'MODERATE' : 'EASY',
-        loadRegion: 'FULL_BODY',
-        fixed: true,
-        source: 'SPORT',
-        notes: [
-          'Kalenterin kiinteä lajiharjoitus – sovellus ei siirrä tapahtumaa.',
-          ...(objectValue(sessionData.recurrence).frequency === 'WEEKLY'
-            ? ['Toistuu viikoittain.']
-            : []),
-        ],
-      }
-    },
-  )
+  const fixedRecords = data.list('fixed_sport_sessions').filter((record) => {
+    if (record.id === mutation?.remove?.id) return false
+    const recurrence = objectValue(objectValue(record.data.session_data).recurrence)
+    return (
+      recurrence.frequency === 'WEEKLY' ||
+      new Date(stringValue(record.data.starts_at)).getTime() >= now.getTime()
+    )
+  })
+  if (mutation?.upsert?.table === 'fixed_sport_sessions') {
+    const index = fixedRecords.findIndex((record) => record.id === mutation.upsert?.id)
+    if (index >= 0) fixedRecords[index] = mutation.upsert
+    else fixedRecords.push(mutation.upsert)
+  }
+  const fixedSessions: PlannedSession[] = fixedRecords.map((record) => {
+    const sessionData = objectValue(record.data.session_data)
+    const startsAt = new Date(stringValue(record.data.starts_at))
+    const rpe = typeof record.data.rpe === 'number' ? record.data.rpe : 6
+    return {
+      id: `calendar-${record.id}`,
+      day: startsAt.getDay() || 7,
+      kind: 'SPORT',
+      title:
+        stringValue(sessionData.title) ||
+        (stringValue(sessionData.event_kind) === 'ICE_PRACTICE'
+          ? 'Jääharjoitus'
+          : 'Kiinteä lajiharjoitus'),
+      durationMinutes:
+        typeof record.data.duration_minutes === 'number'
+          ? record.data.duration_minutes
+          : 60,
+      intensity: rpe >= 8 ? 'HARD' : rpe >= 5 ? 'MODERATE' : 'EASY',
+      loadRegion: 'FULL_BODY',
+      fixed: true,
+      source: 'SPORT',
+      notes: [
+        'Kalenterin kiinteä lajiharjoitus – sovellus ei siirrä tapahtumaa.',
+        ...(objectValue(sessionData.recurrence).frequency === 'WEEKLY'
+          ? ['Toistuu viikoittain.']
+          : []),
+      ],
+    }
+  })
+  const competitionRecords = data
+    .list('competition_events')
+    .filter(
+      (record) =>
+        record.id !== mutation?.remove?.id &&
+        new Date(stringValue(record.data.starts_at)).getTime() >= now.getTime(),
+    )
+  if (mutation?.upsert?.table === 'competition_events') {
+    const index = competitionRecords.findIndex(
+      (record) => record.id === mutation.upsert?.id,
+    )
+    if (index >= 0) competitionRecords[index] = mutation.upsert
+    else competitionRecords.push(mutation.upsert)
+  }
   const competitions: Array<{
     id: string
     day: number
     name: string
     priority: 'A' | 'B' | 'TRAINING'
     daysUntil: number
-  }> = data.list('competition_events').map((record) => {
+  }> = competitionRecords.map((record) => {
     const startsAt = new Date(stringValue(record.data.starts_at))
     const priority = stringValue(record.data.priority)
     return {
       id: record.id,
       day: startsAt.getDay() || 7,
       name: stringValue(record.data.name, 'Ottelu tai kilpailu'),
-      priority:
-        priority === 'B' || priority === 'TRAINING'
-          ? priority
-          : ('A' as const),
+      priority: priority === 'B' || priority === 'TRAINING' ? priority : ('A' as const),
       daysUntil: Math.ceil((startsAt.getTime() - now.getTime()) / 86_400_000),
     }
   })
@@ -909,6 +942,7 @@ function calendarPlanningInputs(data: AppDataContextValue) {
 async function createCalendarPlanVersion(
   data: AppDataContextValue,
   changeReason: string,
+  mutation?: CalendarPlanMutation,
 ) {
   const goalRecord = activeGoalRecord(data)
   const goalPeriod = data
@@ -925,7 +959,9 @@ async function createCalendarPlanVersion(
   const basePreferences = objectValue(goalRecord.data.preferences)
   const profileSettings = objectValue(data.latest('profiles')?.data.app_settings)
   const latestSportProfile = data.latest('sport_profiles')
-  const sportCode = stringValue(latestSportProfile?.data.sport_code)
+  const sportCode =
+    stringValue(objectValue(mutation?.upsert?.data.session_data).sport_code) ||
+    stringValue(latestSportProfile?.data.sport_code)
   const hockeyBetaEnabled =
     import.meta.env.VITE_HOCKEY_BETA === 'true' &&
     sportCode === 'ice-hockey-adult-amateur-skater'
@@ -941,7 +977,7 @@ async function createCalendarPlanVersion(
     goal,
     preferences,
     screeningStatus === 'HIGH_INTENSITY_BLOCKED' || screeningStatus === 'NEEDS_REVIEW',
-    calendarPlanningInputs(data),
+    calendarPlanningInputs(data, mutation),
   )
   const previousVersion = data.latest('plan_versions')
   const planVersionId = crypto.randomUUID()
@@ -1023,13 +1059,13 @@ export async function addFixedSportSession(
         event_kind: input.eventKind ?? 'OTHER_ACTIVITY',
         season_phase: input.seasonPhase,
         recurrence:
-          input.recurrence === 'WEEKLY'
-            ? { frequency: 'WEEKLY', interval: 1 }
-            : {},
+          input.recurrence === 'WEEKLY' ? { frequency: 'WEEKLY', interval: 1 } : {},
       },
     }),
   )
-  await createCalendarPlanVersion(data, 'Kalenteriin lisätty kiinteä harjoitus')
+  await createCalendarPlanVersion(data, 'Kalenteriin lisätty kiinteä harjoitus', {
+    upsert: record,
+  })
   return record
 }
 
@@ -1047,8 +1083,55 @@ export async function addCompetition(
       details: { planner_event_kind: 'MATCH' },
     }),
   )
-  await createCalendarPlanVersion(data, 'Kalenteriin lisätty kilpailu tai ottelu')
+  await createCalendarPlanVersion(data, 'Kalenteriin lisätty kilpailu tai ottelu', {
+    upsert: record,
+  })
   return record
+}
+
+export async function rescheduleCalendarRecord(
+  data: AppDataContextValue,
+  record: LocalRecord,
+  startsAt: string,
+) {
+  if (record.table !== 'fixed_sport_sessions' && record.table !== 'competition_events') {
+    throw new Error('Tätä tietuetta ei voi siirtää kalenterissa.')
+  }
+  assertFutureCalendarRecord(record)
+  if (new Date(startsAt).getTime() < Date.now()) {
+    throw new Error('Uuden ajankohdan pitää olla tulevaisuudessa.')
+  }
+  const updated = await data.update(
+    record,
+    toJsonObject({ starts_at: new Date(startsAt).toISOString() }),
+  )
+  await createCalendarPlanVersion(data, 'Kalenteritapahtuman ajankohtaa muutettiin', {
+    upsert: updated,
+  })
+  return updated
+}
+
+export async function removeCalendarRecord(
+  data: AppDataContextValue,
+  record: LocalRecord,
+) {
+  if (record.table !== 'fixed_sport_sessions' && record.table !== 'competition_events') {
+    throw new Error('Tätä tietuetta ei voi poistaa kalenterista.')
+  }
+  assertFutureCalendarRecord(record)
+  await data.remove(record)
+  await createCalendarPlanVersion(data, 'Kalenteritapahtuma poistettiin', {
+    remove: record,
+  })
+}
+
+function assertFutureCalendarRecord(record: LocalRecord) {
+  const recurrence = objectValue(objectValue(record.data.session_data).recurrence)
+  if (recurrence.frequency === 'WEEKLY') return
+  const start = new Date(stringValue(record.data.starts_at))
+  if (!Number.isFinite(start.getTime()) || start.getTime() < Date.now()) {
+    throw new Error('Mennyttä tapahtumaa ei muuteta, jotta toteutunut historia säilyy.')
+  }
 }
 
 export function activeTrainingPlan(data: AppDataContextValue) {

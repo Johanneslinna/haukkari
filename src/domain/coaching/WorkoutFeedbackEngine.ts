@@ -39,7 +39,8 @@ export function evaluateWorkoutFeedback(
         safetyOutcome: 'PROCEED',
         setDelta: 0,
         targetRpeDelta: 0,
-        message: 'Palautetta ei ole vielä riittävästi muutokseen.',
+        message:
+          'Vertailukelpoinen toteuma puuttuu. Kirjaa vastaavasta harjoituksesta tehdyt sarjat tai työosuudet sekä koko harjoituksen RPE ja kipupalaute.',
         ruleId: 'FEEDBACK-NONE-001',
       },
       reasons: [],
@@ -154,7 +155,7 @@ export function evaluateWorkoutFeedback(
       setDelta: 0,
       targetRpeDelta: 0,
       message:
-        'Nykyinen annos säilytetään, kunnes vertailukelpoista palautetta on lisää.',
+        'Nykyinen annos säilyy. Kuorman nostaminen vaatii kaksi peräkkäistä onnistunutta, kivutonta ja vertailukelpoista toteumaa; tämänhetkinen palaute ei vielä täytä ehtoa.',
       ruleId: 'FEEDBACK-MAINTAIN-001',
     },
     reasons: [
@@ -209,9 +210,7 @@ export function applyWorkoutProgression(
           ...dose,
           sets: Math.max(1, dose.sets - 1),
           targetRpe,
-          targetRir: dose.targetRir
-            ? Math.min(5, dose.targetRir + 1)
-            : undefined,
+          targetRir: dose.targetRir ? Math.min(5, dose.targetRir + 1) : undefined,
         })
       case 'CONTINUOUS_TIME':
         return withExerciseDose(exercise, {
