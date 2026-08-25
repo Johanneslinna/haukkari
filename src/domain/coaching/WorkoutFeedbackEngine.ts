@@ -4,6 +4,11 @@ import type {
   WorkoutFeedback,
   WorkoutProgressionDecision,
 } from './types'
+import {
+  legacyDose,
+  normalizePrescriptionV2,
+  withExerciseDose,
+} from './PrescriptionContract'
 
 function isSuccessful(feedback: WorkoutFeedback) {
   return (
@@ -167,21 +172,22 @@ export function applyWorkoutProgression(
   prescription: PrescribedSession,
   decision: WorkoutProgressionDecision,
 ): PrescribedSession {
+  const normalized = normalizePrescriptionV2(prescription)
   if (
     decision.action === 'MAINTAIN' ||
     decision.action === 'RECOVERY' ||
     decision.action === 'REFER'
   ) {
     return {
-      ...prescription,
+      ...normalized,
       decisionTrace: {
-        ...prescription.decisionTrace,
+        ...normalized.decisionTrace,
         safetyOutcome:
           decision.safetyOutcome === 'REFER'
             ? 'REFER'
-            : prescription.decisionTrace.safetyOutcome,
+            : normalized.decisionTrace.safetyOutcome,
         rules: [
-          ...prescription.decisionTrace.rules,
+          ...normalized.decisionTrace.rules,
           {
             ruleId: decision.ruleId,
             outcome: decision.safetyOutcome,
@@ -193,27 +199,62 @@ export function applyWorkoutProgression(
     }
   }
 
+  const exercises = normalized.exercises.map((exercise) => {
+    if (decision.action !== 'REDUCE_LOAD') return exercise
+    const dose = legacyDose(exercise)
+    const targetRpe = Math.max(3, dose.targetRpe - 1)
+    switch (dose.kind) {
+      case 'STRENGTH_SETS':
+        return withExerciseDose(exercise, {
+          ...dose,
+          sets: Math.max(1, dose.sets - 1),
+          targetRpe,
+          targetRir: dose.targetRir
+            ? Math.min(5, dose.targetRir + 1)
+            : undefined,
+        })
+      case 'CONTINUOUS_TIME':
+        return withExerciseDose(exercise, {
+          ...dose,
+          durationSeconds: Math.max(60, Math.round(dose.durationSeconds * 0.8)),
+          targetRpe,
+        })
+      case 'INTERVAL_BLOCKS':
+      case 'SPRINT_REPS':
+        return withExerciseDose(exercise, {
+          ...dose,
+          repetitions: Math.max(1, dose.repetitions - 1),
+          targetRpe,
+        })
+      case 'JUMP_REPS':
+        return withExerciseDose(exercise, {
+          ...dose,
+          sets: Math.max(1, dose.sets - 1),
+          targetRpe,
+        })
+      case 'SKILL_DRILL':
+        return withExerciseDose(exercise, {
+          ...dose,
+          sets: Math.max(1, dose.sets - 1),
+          durationSeconds: dose.durationSeconds
+            ? Math.max(60, Math.round(dose.durationSeconds * 0.8))
+            : undefined,
+          targetRpe,
+        })
+    }
+  })
   return {
-    ...prescription,
-    exercises: prescription.exercises.map((exercise) => {
-      if (decision.action === 'REDUCE_LOAD') {
-        return {
-          ...exercise,
-          sets: Math.max(1, exercise.sets - 1),
-          targetRpe: Math.max(3, exercise.targetRpe - 1),
-          targetRir: exercise.targetRir ? Math.min(5, exercise.targetRir + 1) : undefined,
-        }
-      }
-      return exercise
-    }),
+    ...normalized,
+    exercises,
+    blocks: exercises,
     decisionTrace: {
-      ...prescription.decisionTrace,
+      ...normalized.decisionTrace,
       safetyOutcome:
         decision.safetyOutcome === 'MODIFY'
           ? 'MODIFY'
-          : prescription.decisionTrace.safetyOutcome,
+          : normalized.decisionTrace.safetyOutcome,
       rules: [
-        ...prescription.decisionTrace.rules,
+        ...normalized.decisionTrace.rules,
         {
           ruleId: decision.ruleId,
           outcome: decision.safetyOutcome,

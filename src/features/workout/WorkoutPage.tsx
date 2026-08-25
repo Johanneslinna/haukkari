@@ -3,8 +3,12 @@ import { Link, useNavigate, useSearchParams } from 'react-router-dom'
 import {
   adaptPrescription,
   applyWorkoutProgression,
+  doseLabelFi,
+  doseUnitCount,
   exerciseSubstitutions,
   evaluateWorkoutFeedback,
+  legacyDose,
+  normalizePrescriptionV2,
   prescribeSession,
   type CompletedSet,
   type ExercisePrescription,
@@ -51,9 +55,33 @@ type EditableSet = CompletedSet & {
 function savedPrescription(record: LocalRecord | null) {
   if (!record) return null
   const value = objectValue(record.data.prescription)
-  return typeof value.id === 'string' && Array.isArray(value.exercises)
-    ? (value as unknown as PrescribedSession)
-    : null
+  if (
+    typeof value.id !== 'string' ||
+    (!Array.isArray(value.exercises) && !Array.isArray(value.blocks))
+  ) {
+    return null
+  }
+  const legacy = value as unknown as PrescribedSession
+  return normalizePrescriptionV2({
+    ...legacy,
+    exercises: Array.isArray(value.exercises)
+      ? legacy.exercises
+      : (legacy.blocks ?? []),
+  })
+}
+
+function usesStrengthLog(exercise: ExercisePrescription) {
+  return legacyDose(exercise).kind === 'STRENGTH_SETS'
+}
+
+function doseUnitLabel(exercise: ExercisePrescription, count: number) {
+  const dose = legacyDose(exercise)
+  if (dose.kind === 'INTERVAL_BLOCKS' || dose.kind === 'SPRINT_REPS') {
+    return `Veto ${count}`
+  }
+  if (dose.kind === 'CONTINUOUS_TIME') return 'Työosuus'
+  if (dose.kind === 'SKILL_DRILL') return `Osuus ${count}`
+  return `Sarja ${count}`
 }
 
 function createSetRows(
@@ -64,7 +92,7 @@ function createSetRows(
 ): EditableSet[] {
   if (!prescription) return []
   return prescription.exercises.flatMap((exercise) =>
-    Array.from({ length: exercise.sets }, (_, index) => {
+    Array.from({ length: doseUnitCount(exercise) }, (_, index) => {
       const setNumber = index + 1
       const persisted = persistedSets.find((record) => {
         const details = objectValue(record.data.data)
@@ -577,7 +605,7 @@ export function WorkoutPage() {
           exerciseName: exercise.nameFi,
           loadType: exercise.loadType,
           completedSets: exerciseSets.filter((item) => item.completed).length,
-          plannedSets: exercise.sets,
+          plannedSets: doseUnitCount(exercise),
           repetitions: exerciseSets.map((item) =>
             parseOptionalNumber(item.repetitionsInput),
           ),
@@ -641,6 +669,9 @@ export function WorkoutPage() {
     const nextPrescription: PrescribedSession = {
       ...runningPrescription,
       exercises: runningPrescription.exercises.map((exercise) =>
+        exercise.id === activeExercise.id ? replacement : exercise,
+      ),
+      blocks: runningPrescription.blocks?.map((exercise) =>
         exercise.id === activeExercise.id ? replacement : exercise,
       ),
     }
@@ -722,14 +753,10 @@ export function WorkoutPage() {
                     <h3>{exercise.nameFi}</h3>
                     <p>{exercise.instructionsFi}</p>
                     <div className="exercise-dose">
-                      <strong>
-                        {exercise.repetitions ? `${exercise.sets} sarjaa` : '1 työosuus'}
-                      </strong>
-                      <span>
-                        {exercise.repetitions ??
-                          `${Math.round((exercise.durationSeconds ?? 0) / 60)} min`}
-                      </span>
-                      <span>{exercise.restSeconds} s palautus</span>
+                      <strong>{doseLabelFi(exercise)}</strong>
+                      {exercise.restSeconds > 0 && (
+                        <span>{exercise.restSeconds} s palautus</span>
+                      )}
                       <span>RPE {exercise.targetRpe}/10</span>
                     </div>
                   </div>
@@ -791,17 +818,12 @@ export function WorkoutPage() {
           )}
           <div className="exercise-target-grid">
             <div>
-              <span>Sarjat</span>
-              <strong>
-                {activeExercise.repetitions ? activeExercise.sets : '1 osuus'}
-              </strong>
+              <span>Sarjat, vedot tai osuudet</span>
+              <strong>{doseUnitCount(activeExercise)}</strong>
             </div>
             <div>
-              <span>Toistot</span>
-              <strong>
-                {activeExercise.repetitions ??
-                  `${Math.round((activeExercise.durationSeconds ?? 0) / 60)} min`}
-              </strong>
+              <span>Annos</span>
+              <strong>{doseLabelFi(activeExercise)}</strong>
             </div>
             <details className="target-help">
               <summary>
@@ -826,12 +848,12 @@ export function WorkoutPage() {
               .map((item) => (
                 <div
                   className={`set-row${item.completed ? ' completed' : ''}${
-                    activeExercise.repetitions ? '' : ' duration'
+                    usesStrengthLog(activeExercise) ? '' : ' duration'
                   }`}
                   key={item.setNumber}
                 >
-                  <strong>Sarja {item.setNumber}</strong>
-                  {activeExercise.repetitions && (
+                  <strong>{doseUnitLabel(activeExercise, item.setNumber)}</strong>
+                  {usesStrengthLog(activeExercise) && (
                     <label className="compact-field">
                       <span>Toistot</span>
                       <input
@@ -850,7 +872,7 @@ export function WorkoutPage() {
                       />
                     </label>
                   )}
-                  {activeExercise.repetitions && activeExercise.loadType !== 'NONE' && (
+                  {usesStrengthLog(activeExercise) && activeExercise.loadType !== 'NONE' && (
                     <label className="compact-field">
                       <span>{activeExercise.loadLabelFi}</span>
                       {activeExercise.loadType === 'BAND' ? (

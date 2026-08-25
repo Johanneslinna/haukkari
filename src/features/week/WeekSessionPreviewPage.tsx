@@ -1,4 +1,5 @@
 import { Link, useParams } from 'react-router-dom'
+import { doseLabelFi } from '../../domain/coaching'
 import { useAppData } from '../app-data/appDataContextValue'
 import { activeTrainingPlan } from '../coaching/coachingActions'
 import { planSessions, sessionLabels } from '../coaching/coachingData'
@@ -121,14 +122,10 @@ export function WeekSessionPreviewPage() {
                     <h3>{exercise.nameFi}</h3>
                     <p>{exercise.instructionsFi}</p>
                     <div className="exercise-dose">
-                      <strong>
-                        {exercise.repetitions ? `${exercise.sets} sarjaa` : '1 työosuus'}
-                      </strong>
-                      <span>
-                        {exercise.repetitions ??
-                          `${Math.round((exercise.durationSeconds ?? 0) / 60)} min`}
-                      </span>
-                      <span>{exercise.restSeconds} s palautus sarjojen välissä</span>
+                      <strong>{doseLabelFi(exercise)}</strong>
+                      {exercise.restSeconds > 0 && (
+                        <span>{exercise.restSeconds} s palautus suoritusten välissä</span>
+                      )}
                       <span>RPE {exercise.targetRpe}/10</span>
                     </div>
                     <small className="preview-load-guidance">

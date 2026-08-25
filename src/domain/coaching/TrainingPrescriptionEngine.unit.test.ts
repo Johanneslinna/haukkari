@@ -3,6 +3,8 @@ import {
   adaptPrescription,
   applyWorkoutProgression,
   evaluateWorkoutFeedback,
+  normalizePrescriptionV2,
+  prescriptionDurationSeconds,
   prescribeSession,
 } from './index'
 import type { PrescriptionProfile } from './TrainingPrescriptionEngine'
@@ -69,7 +71,7 @@ describe('TrainingPrescriptionEngine – kultaiset käyttäjäprofiilit', () => 
           item.stopCondition.length > 0,
       ),
     ).toBe(true)
-    expect(result.decisionTrace.ruleVersion).toBe('2026.08.25-v1')
+    expect(result.decisionTrace.ruleVersion).toBe('2026.08.25-v2')
   })
 
   it('käyttää ilmoitettuja kuntosalivälineitä ja lihaskasvun annosta', () => {
@@ -170,6 +172,82 @@ describe('TrainingPrescriptionEngine – kultaiset käyttäjäprofiilit', () => 
       profile: profile({ equipment: ['Käsipainot'] }),
     }
     expect(prescribeSession(input)).toEqual(prescribeSession(input))
+  })
+
+  it('tuottaa v2-sopimuksen ja laskee kaikki osat aikabudjettiin', () => {
+    const result = prescribeSession({
+      sessionId: 'v2-contract',
+      title: 'Voima',
+      kind: 'STRENGTH',
+      durationMinutes: 45,
+      profile: profile(),
+    })
+
+    expect(result.schemaVersion).toBe(2)
+    expect(result.engineVersion).toBe('training-engine-v2.0.0')
+    expect(result.blocks).toEqual(result.exercises)
+    expect(result.objective?.primary).toBeTruthy()
+    expect(prescriptionDurationSeconds(result)).toBeLessThanOrEqual(45 * 60)
+    expect(result.durationMinutes).toBe(
+      Math.ceil(prescriptionDurationSeconds(result) / 60),
+    )
+  })
+
+  it('mallintaa intervallin vetoina ja palautuksina eikä pitkänä toistona', () => {
+    const result = prescribeSession({
+      sessionId: 'interval-v2',
+      title: 'Hallittu intervalli',
+      kind: 'INTERVAL',
+      durationMinutes: 35,
+      profile: profile(),
+    })
+    const dose = result.exercises[0]?.dose
+
+    expect(dose?.kind).toBe('INTERVAL_BLOCKS')
+    if (dose?.kind !== 'INTERVAL_BLOCKS') throw new Error('Intervalliannos puuttuu')
+    expect(dose.repetitions).toBeGreaterThanOrEqual(2)
+    expect(dose.workSeconds).toBe(180)
+    expect(dose.recoverySeconds).toBe(120)
+    expect(prescriptionDurationSeconds(result)).toBeLessThanOrEqual(35 * 60)
+  })
+
+  it('käyttää nopeusharjoituksessa sprintti- ja hyppyannoksia', () => {
+    const result = prescribeSession({
+      sessionId: 'speed-v2',
+      title: 'Nopeus ja teho',
+      kind: 'SPEED_POWER',
+      durationMinutes: 35,
+      profile: profile(),
+    })
+
+    expect(result.exercises.map((exercise) => exercise.dose?.kind)).toEqual([
+      'SPRINT_REPS',
+      'JUMP_REPS',
+    ])
+    expect(prescriptionDurationSeconds(result)).toBeLessThanOrEqual(35 * 60)
+  })
+
+  it('avaa vanhan reseptin muuttamatta sen aiemmin näytettyä kestoa', () => {
+    const current = prescribeSession({
+      sessionId: 'legacy-source',
+      title: 'Voima',
+      kind: 'STRENGTH',
+      durationMinutes: 45,
+      profile: profile(),
+    })
+    const legacy = {
+      ...current,
+      schemaVersion: undefined,
+      engineVersion: undefined,
+      blocks: undefined,
+      durationMinutes: 45,
+      exercises: current.exercises.map(({ dose: _dose, ...exercise }) => exercise),
+    }
+    const normalized = normalizePrescriptionV2(legacy)
+
+    expect(normalized.schemaVersion).toBe(2)
+    expect(normalized.durationMinutes).toBe(45)
+    expect(normalized.exercises.every((exercise) => Boolean(exercise.dose))).toBe(true)
   })
 })
 

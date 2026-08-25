@@ -205,6 +205,74 @@ export type ExerciseLoadType =
   | 'LEVEL'
   | 'NONE'
 
+export type StrengthSetsDose = {
+  kind: 'STRENGTH_SETS'
+  sets: number
+  repetitions: string
+  restSeconds: number
+  targetRpe: number
+  targetRir?: number
+}
+
+export type ContinuousTimeDose = {
+  kind: 'CONTINUOUS_TIME'
+  durationSeconds: number
+  targetRpe: number
+  intensityCue: string
+}
+
+export type IntervalBlocksDose = {
+  kind: 'INTERVAL_BLOCKS'
+  repetitions: number
+  workSeconds: number
+  recoverySeconds: number
+  targetRpe: number
+  intensityCue: string
+}
+
+export type SprintRepsDose = {
+  kind: 'SPRINT_REPS'
+  repetitions: number
+  distanceMeters: number
+  recoverySeconds: number
+  targetRpe: number
+  qualityStopRule: string
+}
+
+export type JumpRepsDose = {
+  kind: 'JUMP_REPS'
+  sets: number
+  repetitions: number
+  recoverySeconds: number
+  targetRpe: number
+  qualityStopRule: string
+}
+
+export type SkillDrillDose = {
+  kind: 'SKILL_DRILL'
+  sets: number
+  repetitions?: string
+  durationSeconds?: number
+  recoverySeconds: number
+  targetRpe: number
+  qualityCue: string
+}
+
+export type PrescriptionDose =
+  | StrengthSetsDose
+  | ContinuousTimeDose
+  | IntervalBlocksDose
+  | SprintRepsDose
+  | JumpRepsDose
+  | SkillDrillDose
+
+export type SessionObjective = {
+  primary: string
+  secondary: string[]
+  fatigueBudget: 'LOW' | 'MODERATE' | 'HIGH'
+  avoid: string[]
+}
+
 export type ExercisePrescription = {
   id: string
   code: string
@@ -226,17 +294,29 @@ export type ExercisePrescription = {
   loadOptions?: string[]
   techniqueVideoUrl?: string
   keyExercise: boolean
+  /** V2:n yksikäsitteinen annos. Puuttuu vain ennen v2:ta tallennetuista snapshoteista. */
+  dose?: PrescriptionDose
 }
 
 export type PrescribedSession = {
+  /** Puuttuva arvo tarkoittaa ennen v2:ta tallennettua legacy-snapshotia. */
+  schemaVersion?: 1 | 2
+  engineVersion?: string
   id: string
   title: string
   kind: SessionKind
   goal: GoalType
   durationMinutes: number
+  timeBudgetMinutes?: number
+  objective?: SessionObjective
+  confidence?: DecisionTrace['confidence']
   warmup: string[]
+  warmupMinutes?: number
   exercises: ExercisePrescription[]
+  /** V2-nimi suoritusjärjestyksessä oleville harjoitusblokeille. */
+  blocks?: ExercisePrescription[]
   cooldown: string[]
+  cooldownMinutes?: number
   progression: string
   decisionTrace: DecisionTrace
 }

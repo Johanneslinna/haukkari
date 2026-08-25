@@ -55,6 +55,31 @@ describe('PlanGenerator, ScheduleOptimizer ja lajisovittimet', () => {
     expect(enduranceMinutes).toBe(180)
   })
 
+  it('ei ylitä 90 minuutin rajaa eikä muodosta 267 minuutin harjoitusta', () => {
+    const result = generatePlan({
+      goal: { primary: 'ENDURANCE', secondary: [], inputs: {} },
+      experience: 'INTERMEDIATE',
+      availableDays: [2],
+      currentEnduranceMinutes: 267,
+      fixedSessions: [],
+      competitions: [],
+      minutesPerSession: 90,
+      minutesByDay: { '2': 90 },
+    })
+    const generated = result.decision.sessions.filter(
+      (session) => session.source === 'APP',
+    )
+
+    expect(generated).toHaveLength(1)
+    expect(generated[0]?.durationMinutes).toBe(90)
+    expect(
+      generated[0]?.variants?.every((variant) => variant.durationMinutes <= 90),
+    ).toBe(true)
+    expect(result.reasons.map((reason) => reason.code)).toContain(
+      'ENDURANCE_VOLUME_CAPPED_BY_AVAILABLE_TIME',
+    )
+  })
+
   it('22: aloittelijan voimatavoite ei sisällä yhden toiston maksimitestiä', () => {
     const result = generatePlan({
       goal: { primary: 'MAX_STRENGTH', secondary: [], inputs: {} },

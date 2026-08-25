@@ -4,6 +4,7 @@ import {
   evaluateNutritionPolicy,
   evaluateProgress,
   evaluateReadiness,
+  doseUnitCount,
   generatePlan,
   getGoalStrategy,
   previewGoalChange,
@@ -636,7 +637,7 @@ function completedSetOrdinal(prescription: PrescribedSession, set: CompletedSet)
   let ordinal = set.setNumber
   for (const exercise of prescription.exercises) {
     if (exercise.id === set.exerciseId) return ordinal
-    ordinal += exercise.sets
+    ordinal += doseUnitCount(exercise)
   }
   return ordinal
 }

@@ -13,6 +13,19 @@ export {
 export { PlanGenerator, generatePlan } from './PlanGenerator'
 export { ProgressEvaluator, evaluateProgress } from './ProgressEvaluator'
 export { ProgressionEngine, evaluateProgression } from './ProgressionEngine'
+export {
+  PRESCRIPTION_ENGINE_VERSION,
+  PRESCRIPTION_SCHEMA_VERSION,
+  doseDurationSeconds,
+  doseLabelFi,
+  doseUnitCount,
+  legacyDose,
+  normalizePrescriptionV2,
+  prescriptionBlocks,
+  prescriptionDurationSeconds,
+  withV2Blocks,
+  withExerciseDose,
+} from './PrescriptionContract'
 export { ReadinessEngine, evaluateReadiness } from './ReadinessEngine'
 export { ScheduleOptimizer, optimizeSchedule } from './ScheduleOptimizer'
 export {

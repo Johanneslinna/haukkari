@@ -236,18 +236,26 @@ function desiredAppSessionCount(input: PlanGenerationInput) {
 function distributeCurrentEnduranceVolume(
   sessions: PlannedSession[],
   currentEnduranceMinutes: number,
+  minutesPerSession = 90,
+  minutesByDay?: Record<string, number>,
 ) {
   const enduranceSessions = sessions.filter(
     (session) => session.kind === 'EASY_ENDURANCE' || session.kind === 'INTERVAL',
   )
-  if (enduranceSessions.length === 0 || currentEnduranceMinutes <= 0) return
-  const baseMinutes = Math.floor(currentEnduranceMinutes / enduranceSessions.length)
-  let remainder = currentEnduranceMinutes - baseMinutes * enduranceSessions.length
-  for (const session of enduranceSessions) {
-    session.durationMinutes = baseMinutes + (remainder > 0 ? 1 : 0)
+  if (enduranceSessions.length === 0 || currentEnduranceMinutes <= 0) return 0
+  let remainingMinutes = currentEnduranceMinutes
+  for (const [index, session] of enduranceSessions.entries()) {
+    const remainingSessions = enduranceSessions.length - index
+    const requestedMinutes = Math.ceil(remainingMinutes / remainingSessions)
+    const dayMaximum = Math.max(
+      1,
+      minutesByDay?.[String(session.day)] ?? minutesPerSession,
+    )
+    session.durationMinutes = Math.min(requestedMinutes, dayMaximum)
     session.variants = createWorkoutVariants(session.durationMinutes)
-    remainder -= remainder > 0 ? 1 : 0
+    remainingMinutes = Math.max(0, remainingMinutes - session.durationMinutes)
   }
+  return remainingMinutes
 }
 
 export function generatePlan(
@@ -261,8 +269,14 @@ export function generatePlan(
 
   const strategy = getGoalStrategy(input.goal.primary)
   const appSessions = createAppSessions(input)
+  let unallocatedEnduranceMinutes = 0
   if (input.goal.primary === 'ENDURANCE') {
-    distributeCurrentEnduranceVolume(appSessions, input.currentEnduranceMinutes)
+    unallocatedEnduranceMinutes = distributeCurrentEnduranceVolume(
+      appSessions,
+      input.currentEnduranceMinutes,
+      input.minutesPerSession ?? 90,
+      input.minutesByDay,
+    )
   }
 
   const competitionSessions: PlannedSession[] = input.competitions.map((competition) => ({
@@ -343,6 +357,16 @@ export function generatePlan(
       message: `Kestävyysviikko alkaa nykyisestä ${input.currentEnduranceMinutes} minuutin viikkomäärästä.`,
       priority: 'PRIMARY_GOAL',
     })
+    if (unallocatedEnduranceMinutes > 0) {
+      reasons.push({
+        code: 'ENDURANCE_VOLUME_CAPPED_BY_AVAILABLE_TIME',
+        message: `Nykyisestä viikkomäärästä ${unallocatedEnduranceMinutes} minuuttia ei mahdu turvallisesti valituille päiville ja päiväkohtaisiin aikarajoihin.`,
+        priority: 'TIME',
+      })
+      warnings.push(
+        'Viikkovolyymia ei kasata yhteen liian pitkään harjoitukseen. Lisää aikaa tai päiviä, jos haluat säilyttää koko nykyisen määrän.',
+      )
+    }
   }
 
   if (input.goal.primary === 'MAX_STRENGTH' && input.experience === 'BEGINNER') {
