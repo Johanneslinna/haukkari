@@ -124,6 +124,31 @@ describe('SyncEngine', () => {
     expect(await db.outbox.count()).toBe(0)
   })
 
+  it('säilyttää sarjakohtaisen RIR:n paikallisessa tallennuksessa ja synkronoinnissa', async () => {
+    const db = database('rir-sync')
+    const remote = new FakeSyncRemoteGateway()
+    const { writes, engine } = runtime(db, remote, () => true)
+    const id = 'abababab-abab-4bab-8bab-abababababab'
+    await writes.create({
+      userId: user,
+      deviceId: deviceA.id,
+      table: 'exercise_set_logs',
+      id,
+      data: {
+        workout_log_id: 'cdcdcdcd-cdcd-4dcd-8dcd-cdcdcdcdcdcd',
+        ordinal: 1,
+        repetitions: 8,
+        load_kg: 30,
+        rir: 2,
+      },
+    })
+
+    const local = await db.records.where('id').equals(id).first()
+    expect(local?.data.rir).toBe(2)
+    await engine.sync({ userId: user, device: deviceA })
+    expect(remote.get('exercise_set_logs', id)?.rir).toBe(2)
+  })
+
   it('vetää kaikki samalla aikaleimalla muuttuneet tietueet vakaalla kursorilla', async () => {
     const db = database('cursor')
     const remote = new FakeSyncRemoteGateway()

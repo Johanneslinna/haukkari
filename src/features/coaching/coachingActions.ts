@@ -84,6 +84,29 @@ export function hasMeaningfulRestrictionText(value: string) {
   )
 }
 
+export function classifyOnboardingHealth(
+  input: Pick<
+    OnboardingInput,
+    | 'healthConcern'
+    | 'exertionWarningSymptoms'
+    | 'doctorRestrictions'
+    | 'currentInjuries'
+    | 'pelvicFloorSymptoms'
+    | 'pregnancyStatus'
+  >,
+) {
+  const safetyReviewRequired = input.healthConcern || input.exertionWarningSymptoms
+  return {
+    safetyReviewRequired,
+    highIntensityBlocked:
+      safetyReviewRequired ||
+      hasMeaningfulRestrictionText(input.doctorRestrictions) ||
+      hasMeaningfulRestrictionText(input.pelvicFloorSymptoms) ||
+      input.pregnancyStatus === 'PREGNANT' ||
+      input.pregnancyStatus === 'POSTPARTUM',
+  }
+}
+
 function birthDateFromAge(age: number) {
   return `${new Date().getFullYear() - age}-01-01`
 }
@@ -278,6 +301,8 @@ function planFromPreferences(
       preferences.enduranceSportBackground.trim().length > 0,
     medicationAffectsHeartRate: preferences.medicationAffectsHeartRate === true,
     hockeyBeta: 'hockeyBeta' in preferences && preferences.hockeyBeta === true,
+    age: typeof preferences.age === 'number' ? preferences.age : undefined,
+    generatedAt: new Date().toISOString(),
   })
   if (healthBlocked) {
     generated.decision.sessions = generated.decision.sessions
@@ -302,14 +327,7 @@ export async function completeOnboarding(
   data: AppDataContextValue,
   input: OnboardingInput,
 ) {
-  const safetyReviewRequired = input.healthConcern || input.exertionWarningSymptoms
-  const highIntensityBlocked =
-    safetyReviewRequired ||
-    hasMeaningfulRestrictionText(input.doctorRestrictions) ||
-    hasMeaningfulRestrictionText(input.currentInjuries) ||
-    hasMeaningfulRestrictionText(input.pelvicFloorSymptoms) ||
-    input.pregnancyStatus === 'PREGNANT' ||
-    input.pregnancyStatus === 'POSTPARTUM'
+  const { safetyReviewRequired, highIntensityBlocked } = classifyOnboardingHealth(input)
   const goal: GoalProfile = {
     primary: input.primaryGoal,
     secondary: input.secondaryGoals,
@@ -942,7 +960,13 @@ export function calendarPlanningInputs(
 
 async function createCalendarPlanVersion(
   data: AppDataContextValue,
-  changeReason: string,
+  changeReason:
+    | 'FIXED_SESSION_ADDED'
+    | 'COMPETITION_ADDED'
+    | 'COMPETITION_RESCHEDULED'
+    | 'FIXED_SESSION_RESCHEDULED'
+    | 'FIXED_SESSION_CANCELLED'
+    | 'COMPETITION_CANCELLED',
   mutation?: CalendarPlanMutation,
 ) {
   const goalRecord = activeGoalRecord(data)
@@ -1063,7 +1087,7 @@ export async function addFixedSportSession(
       },
     }),
   )
-  await createCalendarPlanVersion(data, 'Kalenteriin lisätty kiinteä harjoitus', {
+  await createCalendarPlanVersion(data, 'FIXED_SESSION_ADDED', {
     upsert: record,
   })
   return record
@@ -1083,7 +1107,7 @@ export async function addCompetition(
       details: { planner_event_kind: 'MATCH' },
     }),
   )
-  await createCalendarPlanVersion(data, 'Kalenteriin lisätty kilpailu tai ottelu', {
+  await createCalendarPlanVersion(data, 'COMPETITION_ADDED', {
     upsert: record,
   })
   return record
@@ -1105,9 +1129,15 @@ export async function rescheduleCalendarRecord(
     record,
     toJsonObject({ starts_at: new Date(startsAt).toISOString() }),
   )
-  await createCalendarPlanVersion(data, 'Kalenteritapahtuman ajankohtaa muutettiin', {
-    upsert: updated,
-  })
+  await createCalendarPlanVersion(
+    data,
+    record.table === 'competition_events'
+      ? 'COMPETITION_RESCHEDULED'
+      : 'FIXED_SESSION_RESCHEDULED',
+    {
+      upsert: updated,
+    },
+  )
   return updated
 }
 
@@ -1120,9 +1150,15 @@ export async function removeCalendarRecord(
   }
   assertFutureCalendarRecord(record)
   await data.remove(record)
-  await createCalendarPlanVersion(data, 'Kalenteritapahtuma poistettiin', {
-    remove: record,
-  })
+  await createCalendarPlanVersion(
+    data,
+    record.table === 'competition_events'
+      ? 'COMPETITION_CANCELLED'
+      : 'FIXED_SESSION_CANCELLED',
+    {
+      remove: record,
+    },
+  )
 }
 
 function assertFutureCalendarRecord(record: LocalRecord) {

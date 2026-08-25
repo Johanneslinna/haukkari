@@ -9,7 +9,14 @@ const goalValues = Object.keys(goalStrategies) as [
 export const onboardingSchema = z
   .object({
     displayName: z.string().trim().min(2, 'Anna vähintään kaksi merkkiä pitkä nimi.'),
-    age: z.number().int().min(16).max(100),
+    age: z
+      .number()
+      .int()
+      .min(
+        18,
+        'Haukkarin automaattinen harjoitusmoottori on tällä hetkellä tarkoitettu vähintään 18-vuotiaille.',
+      )
+      .max(100),
     heightCm: z.number().min(80).max(250),
     weightKg: z.number().min(20).max(400),
     primaryGoal: z.enum(goalValues),

@@ -2,6 +2,7 @@ import { useEffect, useState, type FormEvent } from 'react'
 import { Link, useNavigate, useSearchParams } from 'react-router-dom'
 import {
   adaptPrescription,
+  adaptNextSet,
   applyWorkoutProgression,
   doseLabelFi,
   doseUnitCount,
@@ -10,10 +11,12 @@ import {
   evaluateWorkoutFeedback,
   legacyDose,
   normalizePrescriptionV2,
-  prescribeSession,
+  resolvePrescription,
   type CompletedSet,
+  type AdultResistanceSetHistory,
   type ExercisePrescription,
   type PrescribedSession,
+  type PrescriptionResult,
   type ReadinessState,
   type WorkoutCompletionStatus,
   type WorkoutFeedback,
@@ -180,11 +183,45 @@ function parseOptionalNumber(value: string) {
   return Number.isFinite(parsed) && parsed >= 0 ? parsed : null
 }
 
+function ageFromBirthDate(value: unknown) {
+  if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}$/u.test(value)) return undefined
+  const today = todayIso()
+  const years = Number(today.slice(0, 4)) - Number(value.slice(0, 4))
+  const birthdayPassed = today.slice(5) >= value.slice(5)
+  return years - (birthdayPassed ? 0 : 1)
+}
+
 function savedFeedback(record: LocalRecord) {
   const value = objectValue(record.data.feedback)
   return typeof value.sessionRpe === 'number'
     ? (value as unknown as WorkoutFeedback)
     : null
+}
+
+function strengthHistoryFromLogs(records: LocalRecord[]): AdultResistanceSetHistory[] {
+  return records.flatMap((record) => {
+    const feedback = savedFeedback(record)
+    if (!feedback?.exerciseResults) return []
+    const completedAt = stringValue(record.data.performed_at, record.createdAt)
+    return feedback.exerciseResults.flatMap((result) =>
+      result.repetitions.flatMap((repetitions, index) => {
+        const load = result.loads[index]
+        const loadKg = load ? Number(load.replace(',', '.')) : Number.NaN
+        if (repetitions === null || !Number.isFinite(loadKg) || loadKg <= 0) return []
+        return [
+          {
+            exerciseCode: result.exerciseCode,
+            loadKg,
+            repetitions,
+            rir: result.rirs?.[index] ?? null,
+            completedAt,
+            pain: feedback.pain !== 'NONE',
+            techniqueOk: feedback.stopReason !== 'TECHNIQUE',
+          },
+        ]
+      }),
+    )
+  })
 }
 
 export function WorkoutPage() {
@@ -259,10 +296,19 @@ export function WorkoutPage() {
     durationMinutes: session?.durationMinutes ?? 30,
     volumeMultiplier: 1,
   }
-  const generatedPrescription = (() => {
+  const workoutLogs = data.list('workout_logs')
+  const allFeedback = workoutLogs
+    .map(savedFeedback)
+    .filter((value): value is WorkoutFeedback => value !== null)
+  const prescriptionResolution: PrescriptionResult | null = (() => {
     if (!session) return null
-    if (session.prescriptionDetail && effectiveSessionKind === session.kind) {
-      return session.prescriptionDetail
+    if (session.unsupportedPrescription) return session.unsupportedPrescription
+    if (
+      session.prescriptionDetail &&
+      effectiveSessionKind === session.kind &&
+      session.kind !== 'STRENGTH'
+    ) {
+      return { status: 'SUPPORTED', prescription: session.prescriptionDetail }
     }
     const profile = data.latest('profiles')
     const settings = objectValue(profile?.data.app_settings)
@@ -273,7 +319,7 @@ export function WorkoutPage() {
     const equipment = Array.isArray(settings.equipment)
       ? settings.equipment.filter((item): item is string => typeof item === 'string')
       : ['Kehonpaino']
-    return prescribeSession({
+    return resolvePrescription({
       sessionId: session.id,
       title:
         effectiveSessionKind === session.kind
@@ -310,13 +356,19 @@ export function WorkoutPage() {
         healthBlocked:
           screening?.data.status === 'HIGH_INTENSITY_BLOCKED' ||
           screening?.data.status === 'NEEDS_REVIEW',
+        age: ageFromBirthDate(profile?.data.birth_date),
+        generatedAt: new Date().toISOString(),
+        readiness,
+        strengthHistory: strengthHistoryFromLogs(workoutLogs),
       },
     })
   })()
-  const allFeedback = data
-    .list('workout_logs')
-    .map(savedFeedback)
-    .filter((value): value is WorkoutFeedback => value !== null)
+  const generatedPrescription =
+    prescriptionResolution?.status === 'SUPPORTED'
+      ? prescriptionResolution.prescription
+      : null
+  const unsupportedPrescription =
+    prescriptionResolution?.status === 'UNSUPPORTED' ? prescriptionResolution : null
   const feedbackDecision = evaluateWorkoutFeedback(
     allFeedback,
     generatedPrescription?.exercises.map((exercise) => exercise.code),
@@ -477,6 +529,26 @@ export function WorkoutPage() {
         </div>
         <Link className="button button-secondary" to="/">
           Takaisin Tänään-näkymään
+        </Link>
+      </div>
+    )
+  }
+
+  if (unsupportedPrescription) {
+    return (
+      <div className="page-stack narrow-page">
+        <header className="section-heading">
+          <div>
+            <p className="eyebrow">Harjoitustyyppi ei ole vielä tuettu</p>
+            <h1>Harjoitusta ei muodosteta väärillä säännöillä</h1>
+            <p>{unsupportedPrescription.userMessage}</p>
+          </div>
+        </header>
+        <div className="status-banner" role="status">
+          Tämä rajoitus estää vääränlaisen harjoituksen näyttämisen turvallisuussyistä.
+        </div>
+        <Link className="button button-secondary" to="/viikko">
+          Katso viikkosuunnitelma
         </Link>
       </div>
     )
@@ -670,6 +742,88 @@ export function WorkoutPage() {
         activeExercise.code,
       )
     : null
+  const currentExperience =
+    profileSettings.experience === 'INTERMEDIATE' ||
+    profileSettings.experience === 'ADVANCED'
+      ? profileSettings.experience
+      : 'BEGINNER'
+
+  const applySetAdaptation = (exercise: ExercisePrescription, completed: EditableSet) => {
+    if (!usesStrengthLog(exercise) || exercise.targetRir === undefined) return
+    const repetitions = parseOptionalNumber(completed.repetitionsInput)
+    const completedRir = parseOptionalNumber(completed.rirInput)
+    const completedLoadKg = numericLoad(exercise, completed.loadInput)
+    if (repetitions === null || completedRir === null) return
+    const targetRepetitions = Number(
+      exercise.repetitions?.match(/\d+/u)?.[0] ?? repetitions,
+    )
+    const loadIncrementKg = exercise.loadType === 'DUMBBELL_KG_EACH' ? 1 : 2.5
+    const adaptation = adaptNextSet({
+      prescribedLoadKg: completedLoadKg ?? undefined,
+      prescribedRepetitions: targetRepetitions,
+      targetRir: [exercise.targetRir, Math.min(5, exercise.targetRir + 1)],
+      completedLoadKg: completedLoadKg ?? undefined,
+      completedRepetitions: repetitions,
+      completedRir,
+      pain: 'NONE',
+      techniqueOk: true,
+      experience: currentExperience,
+      loadIncrementKg,
+    })
+    const nextSetNumber = completed.setNumber + 1
+    setSets((current) =>
+      current.map((candidate) => {
+        if (
+          candidate.exerciseId !== completed.exerciseId ||
+          candidate.setNumber !== nextSetNumber ||
+          candidate.completed
+        ) {
+          return candidate
+        }
+        if (adaptation.adjustedLoadKg !== undefined) {
+          return {
+            ...candidate,
+            loadInput: String(adaptation.adjustedLoadKg).replace('.', ','),
+          }
+        }
+        if (adaptation.adjustedRepetitions !== undefined) {
+          return {
+            ...candidate,
+            repetitionsInput: String(adaptation.adjustedRepetitions),
+          }
+        }
+        return candidate
+      }),
+    )
+    setRunningPrescription((current) =>
+      current
+        ? {
+            ...current,
+            decisionTrace: {
+              ...current.decisionTrace,
+              adaptations: [
+                ...(current.decisionTrace.adaptations ?? []),
+                {
+                  original: {
+                    exerciseCode: exercise.code,
+                    setNumber: completed.setNumber,
+                    loadKg: completedLoadKg,
+                    repetitions,
+                    rir: completedRir,
+                  },
+                  adjusted: {
+                    action: adaptation.action,
+                    nextLoadKg: adaptation.adjustedLoadKg ?? null,
+                    nextRepetitions: adaptation.adjustedRepetitions ?? null,
+                  },
+                  reasonCodes: adaptation.reasonCodes,
+                },
+              ],
+            },
+          }
+        : current,
+    )
+  }
 
   const switchExercise = (replacement: ExercisePrescription) => {
     if (!runningPrescription || !activeExercise) return
@@ -971,6 +1125,9 @@ export function WorkoutPage() {
                         persistSet(nextSet)
                         if (nextSet.completed && activeExercise.restSeconds > 0) {
                           setRestSeconds(activeExercise.restSeconds)
+                        }
+                        if (nextSet.completed) {
+                          applySetAdaptation(activeExercise, nextSet)
                         }
                       }}
                     />

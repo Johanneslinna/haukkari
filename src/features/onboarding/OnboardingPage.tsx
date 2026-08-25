@@ -240,11 +240,15 @@ export function OnboardingPage() {
                 <span>Ikä</span>
                 <ClearableNumberInput
                   inputMode="numeric"
-                  min="16"
+                  min="18"
                   max="100"
                   value={form.age}
                   onValueChange={(age) => setForm({ ...form, age })}
                 />
+                <small>
+                  Automaattinen ohjelmointi on tässä versiossa tarkoitettu vähintään
+                  18-vuotiaille. Junioriohjelmointi ei ole vielä käytössä.
+                </small>
               </label>
               <label className="field">
                 <span>Pituus (cm)</span>

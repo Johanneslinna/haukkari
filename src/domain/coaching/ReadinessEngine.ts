@@ -151,6 +151,37 @@ export function evaluateReadiness(
     input.newPain?.severity === 'MODERATE',
     cycleImpact === 'MODERATE',
   ].filter(Boolean).length
+  const recoveryReasons = [
+    ...(input.sleep === 'POOR'
+      ? [{ code: 'POOR_SLEEP', message: 'Uni oli tavallista huonompaa.' }]
+      : []),
+    ...(input.energy === 'LOW'
+      ? [{ code: 'LOW_ENERGY', message: 'Energia oli tavallista matalampi.' }]
+      : []),
+    ...(input.stress === 'HIGH'
+      ? [{ code: 'HIGH_STRESS', message: 'Stressi oli tavallista korkeampi.' }]
+      : []),
+    ...(input.soreness === 'HIGH'
+      ? [{ code: 'HIGH_SORENESS', message: 'Lihasarkuus oli tavallista suurempi.' }]
+      : []),
+    ...(input.newPain?.severity === 'MODERATE'
+      ? [
+          {
+            code: 'MODERATE_NEW_PAIN',
+            message: 'Uuden kivun voimakkuus oli kohtalainen.',
+          },
+        ]
+      : []),
+    ...(cycleImpact === 'MODERATE'
+      ? [
+          {
+            code: 'USER_REPORTED_CYCLE_SYMPTOM_IMPACT',
+            message:
+              'Käyttäjän ilmoittama oireiden vaikutus oli kohtalainen; kierron vaihetta ei käytetty oletuksena.',
+          },
+        ]
+      : []),
+  ].map((reason) => ({ ...reason, priority: 'RECOVERY' as const }))
 
   if (recoveryFlags >= 3) {
     return {
@@ -170,6 +201,7 @@ export function evaluateReadiness(
           message: `${recoveryFlags} samanaikaista palautumistekijää muuttaa päivän harjoituksen palauttavaksi.`,
           priority: 'RECOVERY',
         },
+        ...recoveryReasons,
       ],
       warnings: [],
     }
@@ -197,6 +229,7 @@ export function evaluateReadiness(
           message: `${recoveryFlags} palautumistekijää keventää päivän kuormaa.`,
           priority: 'RECOVERY',
         },
+        ...recoveryReasons,
       ],
       warnings: [],
     }
