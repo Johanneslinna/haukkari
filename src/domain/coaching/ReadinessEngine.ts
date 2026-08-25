@@ -120,15 +120,36 @@ export function evaluateReadiness(
   }
 
   const cycleImpact = input.menstrualCycle?.symptomsImpact
+  if (cycleImpact === 'HIGH') {
+    return {
+      decision: {
+        state: 'ORANGE_RECOVERY',
+        allowedSession: 'RECOVERY',
+        volumeMultiplier: 0,
+        maximumAttemptsAllowed: false,
+        compactVariantMinutes: null,
+        goalChanged: false,
+        action:
+          'Ilmoittamasi oireiden voimakas vaikutus ohjaa tänään lepoon tai erittäin kevyeen palauttavaan liikkeeseen.',
+      },
+      reasons: [
+        {
+          code: 'USER_REPORTED_CYCLE_SYMPTOM_IMPACT',
+          message:
+            'Harjoitusta muuttaa käyttäjän ilmoittama oireiden vaikutus, ei kuukautiskierron oletettu vaihe.',
+          priority: 'RECOVERY',
+        },
+      ],
+      warnings: [],
+    }
+  }
   const recoveryFlags = [
     input.sleep === 'POOR',
     input.energy === 'LOW',
     input.stress === 'HIGH',
     input.soreness === 'HIGH',
     input.newPain?.severity === 'MODERATE',
-    cycleImpact === 'MODERATE' || cycleImpact === 'HIGH',
-    cycleImpact === 'HIGH',
-    cycleImpact === 'HIGH',
+    cycleImpact === 'MODERATE',
   ].filter(Boolean).length
 
   if (recoveryFlags >= 3) {

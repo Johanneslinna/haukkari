@@ -2,6 +2,11 @@ import { optimizeSchedule } from './ScheduleOptimizer'
 import { getSportAdapter } from './SportAdapterRegistry'
 import { getGoalStrategy } from './strategies'
 import {
+  AthleteStateBuilder,
+  ConstraintEngine,
+  type AthleteState,
+} from './engine'
+import {
   prescribeSession,
   TRAINING_RULE_VERSION,
   type PrescriptionProfile,
@@ -161,7 +166,7 @@ function createWorkoutVariants(durationMinutes: number): WorkoutVariant[] {
   ]
 }
 
-function createAppSessions(input: PlanGenerationInput) {
+function createAppSessions(input: PlanGenerationInput, athleteState: AthleteState) {
   const strategy = getGoalStrategy(input.goal.primary)
   const sessions: PlannedSession[] = []
   const occupiedDays = new Set(
@@ -193,10 +198,10 @@ function createAppSessions(input: PlanGenerationInput) {
       const index = (produced.get(kind) ?? 0) + 1
       const defaults = sessionDefaults[kind]
       const day = openDays[sessions.length] ?? 1
-      const dayMaximum = input.minutesByDay?.[String(day)] ?? input.minutesPerSession
-      const recommendedDuration = Math.min(
+      const recommendedDuration = ConstraintEngine.capSessionMinutes(
+        athleteState,
+        day,
         defaults.durationMinutes,
-        dayMaximum ?? defaults.durationMinutes,
       )
       sessions.push({
         id: `generated-${kind.toLocaleLowerCase('fi-FI')}-${index}`,
@@ -268,14 +273,15 @@ export function generatePlan(
   }
 
   const strategy = getGoalStrategy(input.goal.primary)
-  const appSessions = createAppSessions(input)
+  const athleteState = AthleteStateBuilder.build(input)
+  const appSessions = createAppSessions(input, athleteState)
   let unallocatedEnduranceMinutes = 0
   if (input.goal.primary === 'ENDURANCE') {
     unallocatedEnduranceMinutes = distributeCurrentEnduranceVolume(
       appSessions,
       input.currentEnduranceMinutes,
-      input.minutesPerSession ?? 90,
-      input.minutesByDay,
+      athleteState.schedule.defaultMaximumMinutes,
+      athleteState.schedule.maximumMinutesByDay,
     )
   }
 
@@ -298,13 +304,13 @@ export function generatePlan(
   const profile: PrescriptionProfile = {
     goal: input.goal.primary,
     experience: input.experience,
-    equipment: input.equipment?.length ? input.equipment : ['Kehonpaino'],
-    physicalLoad: input.physicalLoad ?? 'MODERATE',
-    minutesPerSession: input.minutesPerSession ?? 45,
+    equipment: athleteState.longTerm.equipment,
+    physicalLoad: athleteState.acute.physicalLoad,
+    minutesPerSession: athleteState.schedule.defaultMaximumMinutes,
     likes: input.likes,
     dislikes: input.dislikes,
     limitations: input.limitations,
-    healthBlocked: input.healthBlocked,
+    healthBlocked: athleteState.acute.healthBlocked,
   }
   const prescribedSessions = optimization.decision.map((session) =>
     session.source === 'APP'

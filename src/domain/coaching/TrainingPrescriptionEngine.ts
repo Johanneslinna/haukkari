@@ -19,6 +19,13 @@ import {
   withExerciseDose,
   withV2Blocks,
 } from './PrescriptionContract'
+import {
+  CandidateSelector,
+  ConstraintEngine,
+  DecisionRecorder,
+  ExerciseRanker,
+  SessionObjectivePlanner,
+} from './engine'
 
 export const TRAINING_RULE_VERSION = '2026.08.25-v2'
 
@@ -244,34 +251,22 @@ function loadTracking(template: ExerciseTemplate): {
   return { loadType: 'EXTERNAL_KG', loadLabelFi: 'Kuorma kg' }
 }
 
-function hasEquipment(template: ExerciseTemplate, available: string[]) {
-  return template.equipment.some(
-    (item) => item === 'Kehonpaino' || available.includes(item),
-  )
-}
-
 function chooseExercise(
   category: string,
   available: string[],
+  likes: string,
   dislikes: string,
   fallbackCode: string,
 ) {
-  const candidates = exerciseLibrary
-    .filter((item) => item.category === category && hasEquipment(item, available))
-    .sort((left, right) => {
-      const leftSpecific = left.equipment.some(
-        (item) => item !== 'Kehonpaino' && available.includes(item),
-      )
-      const rightSpecific = right.equipment.some(
-        (item) => item !== 'Kehonpaino' && available.includes(item),
-      )
-      return Number(rightSpecific) - Number(leftSpecific)
-    })
-  const preferred = candidates.find(
-    (item) =>
-      !dislikes.includes(item.nameFi.toLocaleLowerCase('fi-FI')) &&
-      !dislikes.includes(item.category.toLocaleLowerCase('fi-FI')),
-  )
+  const candidates = CandidateSelector.select(exerciseLibrary, {
+    category,
+    equipment: available,
+  })
+  const preferred = ExerciseRanker.rank(candidates, {
+    equipment: available,
+    likes,
+    dislikes,
+  })[0]
   return (
     preferred ??
     candidates[0] ??
@@ -317,7 +312,7 @@ function decisionTrace(
     profile.healthBlocked ||
     profile.limitations?.trim() ||
     profile.physicalLoad === 'HIGH'
-  return {
+  return DecisionRecorder.record({
     ruleVersion: TRAINING_RULE_VERSION,
     generatedAt: profile.generatedAt ?? new Date().toISOString(),
     safetyOutcome: profile.healthBlocked
@@ -335,7 +330,7 @@ function decisionTrace(
     ],
     missingData,
     rules,
-  }
+  })
 }
 
 function toPrescription(
@@ -414,7 +409,12 @@ export function exerciseSubstitutions(
 ): ExercisePrescription[] {
   return exercise.substitutions.flatMap((name) => {
     const template = exerciseLibrary.find((candidate) => candidate.nameFi === name)
-    if (!template || !hasEquipment(template, availableEquipment)) return []
+    if (
+      !template ||
+      !ConstraintEngine.exerciseIsAvailable(template.equipment, availableEquipment)
+    ) {
+      return []
+    }
     return [
       {
         ...exercise,
@@ -434,6 +434,7 @@ function prescribeStrength(
   durationMinutes: number,
   profile: PrescriptionProfile,
 ): PrescribedSession {
+  const likes = profile.likes?.toLocaleLowerCase('fi-FI') ?? ''
   const dislikes = profile.dislikes?.toLocaleLowerCase('fi-FI') ?? ''
   const available = profile.equipment.length ? profile.equipment : ['Kehonpaino']
   const categories = [
@@ -447,7 +448,7 @@ function prescribeStrength(
   const candidateExercises = categories.map(([category, fallback], index) =>
     toPrescription(
       sessionId,
-      chooseExercise(category, available, dislikes, fallback),
+      chooseExercise(category, available, likes, dislikes, fallback),
       index,
       parameters,
       profile,
@@ -523,7 +524,8 @@ function prescribeStrength(
     durationMinutes: Math.min(timeBudgetMinutes, estimatedMinutes),
     timeBudgetMinutes,
     objective: {
-      primary: kind === 'SPEED_POWER' ? 'Nopeus ja räjähtävä voima' : 'Kokovartalon voima',
+      ...SessionObjectivePlanner.plan(kind, profile.goal),
+      primary: 'Kokovartalon voima',
       secondary: ['Liikehallinta'],
       fatigueBudget: profile.physicalLoad === 'HIGH' ? 'LOW' : 'MODERATE',
       avoid: profile.limitations?.trim() ? ['Oiretta provosoivat liikkeet'] : [],

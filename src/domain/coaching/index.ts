@@ -1,4 +1,5 @@
 export { evaluateGoalConflicts } from './ConflictEngine'
+export * from './engine'
 export {
   GoalEngine,
   confirmGoalChange,
