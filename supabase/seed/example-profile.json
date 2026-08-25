@@ -1,0 +1,10 @@
+{
+  "displayName": "Esimerkkikäyttäjä",
+  "sex": "FEMALE",
+  "heightCm": 168,
+  "weightKg": 60,
+  "trainingBackground": "Hyvä juoksukunto",
+  "primaryGoal": "BODY_RECOMPOSITION",
+  "secondaryGoals": ["POSTURE_MOBILITY", "ENDURANCE"],
+  "isEditableFixture": true
+}

@@ -1,0 +1,435 @@
+export type GoalType =
+  | 'BODY_RECOMPOSITION'
+  | 'FAT_LOSS'
+  | 'MUSCLE_GAIN'
+  | 'MAX_STRENGTH'
+  | 'ENDURANCE'
+  | 'SPEED_POWER'
+  | 'GENERAL_FITNESS'
+  | 'POSTURE_MOBILITY'
+  | 'SPORT_PERFORMANCE'
+
+export type DecisionPriority =
+  | 'SAFETY'
+  | 'COACH_FIXED'
+  | 'TIME'
+  | 'PRIMARY_GOAL'
+  | 'SECONDARY_GOAL'
+  | 'RECOVERY'
+  | 'PREFERENCE'
+
+export type DecisionReason = {
+  code: string
+  message: string
+  priority: DecisionPriority
+}
+
+export type ExplainableDecision<T> = {
+  decision: T
+  reasons: DecisionReason[]
+  warnings: string[]
+}
+
+export type SafetyOutcome = 'PROCEED' | 'MODIFY' | 'STOP' | 'REFER'
+
+export type RuleDecision = {
+  ruleId: string
+  outcome: SafetyOutcome
+  message: string
+  evidenceIds: string[]
+}
+
+export type DecisionTrace = {
+  ruleVersion: string
+  generatedAt: string
+  safetyOutcome: SafetyOutcome
+  confidence: 'HIGH' | 'MODERATE' | 'LOW'
+  inputSummary: string[]
+  missingData: string[]
+  rules: RuleDecision[]
+}
+
+export type SessionKind =
+  | 'STRENGTH'
+  | 'EASY_ENDURANCE'
+  | 'INTERVAL'
+  | 'SPEED_POWER'
+  | 'MOBILITY'
+  | 'SPORT'
+  | 'MATCH'
+  | 'RECOVERY'
+  | 'REST'
+
+export type LoadRegion = 'LOWER' | 'UPPER' | 'FULL_BODY' | 'CARDIO' | 'NONE'
+export type SessionIntensity = 'EASY' | 'MODERATE' | 'HARD'
+export type ExperienceLevel = 'BEGINNER' | 'INTERMEDIATE' | 'ADVANCED'
+export type EnergyFocus =
+  | 'MAINTENANCE'
+  | 'APPROVED_MODERATE_DEFICIT'
+  | 'APPROVED_SMALL_SURPLUS'
+  | 'ADEQUATE_ENERGY'
+  | 'PERFORMANCE_FUELING'
+
+export type WeeklyRange = {
+  min: number
+  max: number
+}
+
+export type GoalStrategy = {
+  id: GoalType
+  label: string
+  requiredInputs: string[]
+  weeklyStructure: Partial<Record<SessionKind, WeeklyRange>>
+  keyWorkouts: SessionKind[]
+  progression: string[]
+  deload: string[]
+  nutrition: {
+    energyFocus: EnergyFocus
+    proteinGramsPerKg?: WeeklyRange
+    notes: string[]
+  }
+  metrics: string[]
+  conflictRules: string[]
+}
+
+export type GoalProfile = {
+  primary: GoalType
+  secondary: GoalType[]
+  inputs: Record<string, unknown>
+}
+
+export type GoalConflictCode =
+  | 'FAT_LOSS_VS_MAXIMAL_MUSCLE_GAIN'
+  | 'LARGE_DEFICIT_VS_COMPETITION'
+  | 'MARATHON_PEAK_VS_MAX_STRENGTH_PEAK'
+  | 'RUN_VOLUME_VS_LOWER_HYPERTROPHY'
+  | 'SPEED_WHILE_FATIGUED'
+  | 'TWO_A_EVENTS'
+  | 'WEIGHT_LOSS_VS_LOW_ENERGY'
+
+export type GoalConflict = {
+  code: GoalConflictCode
+  severity: 'TRADEOFF' | 'BLOCKING'
+  message: string
+  choices: string[]
+}
+
+export type GoalConflictContext = {
+  primary: GoalType
+  secondary: GoalType[]
+  maximalMuscleGainRequested?: boolean
+  energyDeficit?: 'NONE' | 'MODERATE' | 'LARGE'
+  competitionPeak?: 'NONE' | 'B_EVENT' | 'A_EVENT'
+  marathonPeak?: boolean
+  maxStrengthPeak?: boolean
+  highRunningVolume?: boolean
+  highLowerBodyHypertrophy?: boolean
+  speedSessionWhileFatigued?: boolean
+  simultaneousAEvents?: number
+  lowEnergyAvailabilitySigns?: boolean
+}
+
+export type PlanVersion = {
+  id: string
+  goalPeriodId: string
+  goal: GoalProfile
+  startsOn: string
+  createdAt: string
+  transitionWeek: boolean
+  strategyId: GoalType
+}
+
+export type GoalPeriod = {
+  id: string
+  goal: GoalProfile
+  startsOn: string
+  endsOn: string | null
+  planVersionId: string
+}
+
+export type GoalHistory = {
+  activePeriodId: string | null
+  periods: GoalPeriod[]
+  planVersions: PlanVersion[]
+}
+
+export type GoalChangePreview = {
+  kind: 'GOAL_CHANGE_PREVIEW'
+  token: string
+  currentGoal: GoalType | null
+  proposedGoal: GoalProfile
+  startsOn: string
+  transitionWeek: boolean
+  missingInputs: string[]
+  conflicts: GoalConflict[]
+  comparison: {
+    currentWeeklyStructure: Partial<Record<SessionKind, WeeklyRange>> | null
+    proposedWeeklyStructure: Partial<Record<SessionKind, WeeklyRange>>
+    currentNutritionFocus: EnergyFocus | null
+    proposedNutritionFocus: EnergyFocus
+    developed: string[]
+    maintained: string[]
+    metrics: string[]
+  }
+}
+
+export type PlannedSession = {
+  id: string
+  day: number
+  kind: SessionKind
+  title?: string
+  prescription?: string[]
+  durationMinutes: number
+  intensity: SessionIntensity
+  loadRegion: LoadRegion
+  fixed: boolean
+  source: 'APP' | 'COACH' | 'SPORT' | 'COMPETITION'
+  isNewStimulus?: boolean
+  notes?: string[]
+  variants?: WorkoutVariant[]
+  prescriptionDetail?: PrescribedSession
+}
+
+export type WorkoutVariant = {
+  kind: 'FULL' | 'LIGHT' | 'COMPACT_10' | 'COMPACT_20' | 'COMPACT_30'
+  durationMinutes: number
+  volumeMultiplier: number
+}
+
+export type ExerciseLoadType =
+  | 'EXTERNAL_KG'
+  | 'DUMBBELL_KG_EACH'
+  | 'MACHINE_KG'
+  | 'BAND'
+  | 'BODYWEIGHT'
+  | 'LEVEL'
+  | 'NONE'
+
+export type ExercisePrescription = {
+  id: string
+  code: string
+  nameFi: string
+  category: string
+  equipment: string[]
+  instructionsFi: string
+  sets: number
+  repetitions?: string
+  durationSeconds?: number
+  restSeconds: number
+  targetRpe: number
+  targetRir?: number
+  loadGuidance: string
+  stopCondition: string
+  substitutions: string[]
+  loadType: ExerciseLoadType
+  loadLabelFi: string
+  loadOptions?: string[]
+  techniqueVideoUrl?: string
+  keyExercise: boolean
+}
+
+export type PrescribedSession = {
+  id: string
+  title: string
+  kind: SessionKind
+  goal: GoalType
+  durationMinutes: number
+  warmup: string[]
+  exercises: ExercisePrescription[]
+  cooldown: string[]
+  progression: string
+  decisionTrace: DecisionTrace
+}
+
+export type WorkoutCompletionStatus = 'COMPLETED' | 'PARTIAL' | 'STOPPED'
+
+export type WorkoutFeedback = {
+  completionStatus: WorkoutCompletionStatus
+  sessionRpe: number
+  difficulty: 'TOO_EASY' | 'RIGHT' | 'TOO_HARD'
+  pain: 'NONE' | 'MILD' | 'MODERATE' | 'SEVERE'
+  painLocation: string
+  felt: 'WORSE' | 'SAME' | 'BETTER'
+  notes: string
+  stopReason?: 'PAIN' | 'DIZZINESS' | 'BREATHING' | 'TECHNIQUE' | 'EQUIPMENT' | 'OTHER'
+  exerciseResults?: WorkoutExerciseResult[]
+}
+
+export type WorkoutExerciseResult = {
+  exerciseCode: string
+  exerciseName: string
+  loadType: ExerciseLoadType
+  completedSets: number
+  plannedSets: number
+  repetitions: Array<number | null>
+  loads: Array<string | null>
+  targetRepetitions?: string
+  targetRpe: number
+}
+
+export type WorkoutProgressionDecision = {
+  action: 'MAINTAIN' | 'PROGRESS_LOAD' | 'REDUCE_LOAD' | 'RECOVERY' | 'REFER'
+  safetyOutcome: SafetyOutcome
+  setDelta: -1 | 0 | 1
+  targetRpeDelta: -1 | 0
+  message: string
+  ruleId: string
+}
+
+export type CompletedSet = {
+  exerciseId: string
+  setNumber: number
+  repetitions: number | null
+  loadKg: number | null
+  loadText?: string | null
+  completed: boolean
+}
+
+export type CompetitionEvent = {
+  id: string
+  day: number
+  name: string
+  priority: 'A' | 'B' | 'TRAINING'
+  daysUntil: number
+}
+
+export type TrainingPlan = {
+  goal: GoalType
+  sessions: PlannedSession[]
+  startingEnduranceMinutes: number
+  assessments: string[]
+  ruleVersion: string
+}
+
+export type ReadinessState = 'GREEN' | 'YELLOW' | 'ORANGE_RECOVERY' | 'RED_STOP'
+export type SafetySymptom =
+  | 'CHEST_PAIN'
+  | 'FAINTING'
+  | 'UNUSUAL_BREATHLESSNESS'
+  | 'NEW_NEUROLOGICAL_SYMPTOM'
+  | 'FEVER'
+  | 'SIGNIFICANT_DEHYDRATION'
+  | 'SEVERE_ACUTE_PAIN'
+  | 'JOINT_GIVING_WAY'
+
+export type RelativeLevel = 'LOW' | 'NORMAL' | 'HIGH'
+export type ReadinessInput = {
+  goal: GoalType
+  plannedSession: SessionKind
+  safetySymptoms: SafetySymptom[]
+  sleep: 'POOR' | 'NORMAL' | 'GOOD'
+  energy: RelativeLevel
+  stress: RelativeLevel
+  motivation: RelativeLevel
+  soreness: RelativeLevel
+  illnessSymptoms: boolean
+  newPain?: {
+    location: string
+    severity: 'MILD' | 'MODERATE' | 'SEVERE'
+    altersGait: boolean
+  }
+  availableMinutes: number
+  menstrualCycle?: {
+    phase: 'MENSTRUATION' | 'FOLLICULAR' | 'OVULATION' | 'LUTEAL' | 'UNSURE'
+    symptomsImpact: 'NONE' | 'MILD' | 'MODERATE' | 'HIGH'
+  }
+}
+
+export type ReadinessDecision = {
+  state: ReadinessState
+  allowedSession: SessionKind
+  volumeMultiplier: number
+  maximumAttemptsAllowed: boolean
+  compactVariantMinutes: 10 | 20 | 30 | null
+  goalChanged: false
+  action: string
+}
+
+export type ProgressionInput = {
+  currentWeeklyVolume: number
+  adherence: number
+  recentReadiness: ReadinessState[]
+  missedSession: boolean
+  comparablePlateauPeriods: number
+  previousChangedVariable: 'VOLUME' | 'INTENSITY' | 'FREQUENCY' | null
+}
+
+export type ProgressionDecision = {
+  action: 'DELOAD' | 'SIMPLIFY' | 'PROGRESS' | 'MAINTAIN' | 'EVALUATE_PLATEAU'
+  nextWeeklyVolume: number
+  changedVariable: 'VOLUME' | 'INTENSITY' | 'FREQUENCY' | null
+  missedLoadCarriedOver: false
+}
+
+export type LowEnergySign =
+  | 'MENSTRUAL_CHANGE'
+  | 'DECLINING_PERFORMANCE'
+  | 'PERSISTENT_FATIGUE_OR_COLD'
+  | 'REPEATED_ILLNESS_OR_STRESS_INJURY'
+  | 'CONCERNING_EATING_BEHAVIOUR'
+
+export type NutritionInput = {
+  goal: GoalType
+  weightKg?: number
+  reliableWeeklyWeightTrend: number[]
+  lowEnergySigns: LowEnergySign[]
+  competitionDaysUntil?: number
+  desiredChangeKg?: number
+  deadlineWeeks?: number
+  eatingDisorderHistory?: boolean
+}
+
+export type EnergyAction =
+  'MAINTAIN' | 'PROPOSE_MODERATE_DEFICIT' | 'PROPOSE_SMALL_SURPLUS' | 'SUSPEND_DEFICIT'
+
+export type NutritionDecision = {
+  energyAction: EnergyAction
+  requiresUserApproval: boolean
+  approved: boolean
+  proteinGramsPerKg: WeeklyRange
+  usePortionModel: boolean
+  deadlineAdjusted: boolean
+  fatLossGuidanceActive: boolean
+  guidance: string[]
+}
+
+export type ProgressPeriod = {
+  label: string
+  comparable: boolean
+  metricValue: number
+  dataPoints: number
+}
+
+export type ProgressEvaluation = {
+  status: 'INSUFFICIENT_DATA' | 'IMPROVING' | 'PLATEAU' | 'DECLINING'
+  delta: number | null
+}
+
+export type SportDemandProfile = {
+  aerobicEndurance: number
+  anaerobicCapacity: number
+  repeatedSprints: number
+  speedAcceleration: number
+  changeOfDirection: number
+  maximalStrength: number
+  explosivePower: number
+  jumpThrowAbility: number
+  rotation: number
+  localMuscularEndurance: number
+  mobility: number
+  contactImpactLoad: number
+}
+
+export type SportAdapter = {
+  id: string
+  disciplines: string[]
+  demandProfile: SportDemandProfile
+  keySessions: SessionKind[]
+  constraints: string[]
+  warning: string | null
+}
+
+export type SportAdapterMatch = {
+  supportLevel: 'FULL' | 'GENERAL_SUPPORT'
+  adapter: SportAdapter
+}

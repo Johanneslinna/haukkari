@@ -1,0 +1,11 @@
+<svg
+  xmlns="http://www.w3.org/2000/svg"
+  viewBox="0 0 64 64"
+  role="img"
+  aria-label="Haukkari"
+>
+  <rect width="64" height="64" rx="14" fill="#F8F3E8" />
+  <path d="M5 14 27 22v9l-12-4v5l12 4v12L5 38l9-6-9-6Z" fill="#103F35" />
+  <path d="m59 14-22 8v9l12-4v5l-12 4v12l22-10-9-6 9-6Z" fill="#103F35" />
+  <path d="M24 26h16v12H24z" fill="#BFE47A" />
+</svg>

@@ -1,0 +1,10 @@
+dist
+coverage
+node_modules
+playwright-report
+playwright-report-app
+playwright-report-sync
+test-results
+dev-dist
+supabase/.temp
+src/infrastructure/supabase/database.types.ts
