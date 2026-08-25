@@ -4,6 +4,18 @@ export {
   estimateExerciseCapability,
 } from './CapabilityEstimator'
 export type { ExerciseCapabilityEstimate } from './CapabilityEstimator'
+export {
+  exerciseAllowedForExperience,
+  exerciseConflictsWithLimitations,
+  exerciseLibrary,
+  verifiedTechniqueUrl,
+} from './ExerciseLibrary'
+export type {
+  ExerciseDifficulty,
+  ExerciseFatigueCost,
+  ExerciseTemplate,
+  TechniqueReviewStatus,
+} from './ExerciseLibrary'
 export { PlannerEventModel, plannerEventToSession, plannerEventWeekday } from './PlannerEvent'
 export type { PlannerEvent, PlannerEventKind } from './PlannerEvent'
 export { applyHockeyMicrocycle, iceHockeyAdapter } from './sports/iceHockeyAdapter'

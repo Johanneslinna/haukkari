@@ -26,6 +26,13 @@ import {
   ExerciseRanker,
   SessionObjectivePlanner,
 } from './engine'
+import {
+  exerciseConflictsWithLimitations,
+  exerciseLibrary as expandedExerciseLibrary,
+  exerciseAllowedForExperience,
+  verifiedTechniqueUrl,
+  type ExerciseTemplate as LibraryExerciseTemplate,
+} from './ExerciseLibrary'
 
 export const TRAINING_RULE_VERSION = '2026.08.25-v2'
 
@@ -44,197 +51,54 @@ export type PrescriptionProfile = {
   generatedAt?: string
 }
 
-type ExerciseTemplate = Omit<
-  ExercisePrescription,
-  | 'id'
-  | 'sets'
-  | 'repetitions'
-  | 'durationSeconds'
-  | 'restSeconds'
-  | 'targetRpe'
-  | 'targetRir'
-  | 'loadGuidance'
-  | 'loadType'
-  | 'loadLabelFi'
-  | 'loadOptions'
-  | 'techniqueVideoUrl'
-  | 'keyExercise'
->
-
-const exerciseLibrary: ExerciseTemplate[] = [
-  {
-    code: 'CHAIR_SQUAT',
-    nameFi: 'Tuolilta ylösnousu',
-    category: 'Kyykky',
-    equipment: ['Kehonpaino'],
-    instructionsFi:
-      'Pidä jalkapohjat maassa, nouse hallitusti ja kosketa tuolia kevyesti jokaisella toistolla.',
-    stopCondition:
-      'Lopeta, jos kipu voimistuu, tasapaino pettää tai tekniikka ei pysy hallittuna.',
-    substitutions: ['Kehonpainokyykky', 'Maljakyykky'],
-  },
-  {
-    code: 'GOBLET_SQUAT',
-    nameFi: 'Maljakyykky',
-    category: 'Kyykky',
-    equipment: ['Käsipainot', 'Kahvakuula'],
-    instructionsFi:
-      'Pidä paino rinnan edessä, polvet varpaiden suuntaan ja käytä kivutonta liikerataa.',
-    stopCondition: 'Lopeta, jos kipu voimistuu tai vartalon hallinta katoaa.',
-    substitutions: ['Tuolilta ylösnousu', 'Jalkaprässi'],
-  },
-  {
-    code: 'LEG_PRESS',
-    nameFi: 'Jalkaprässi',
-    category: 'Kyykky',
-    equipment: ['Kuntosalilaitteet'],
-    instructionsFi: 'Pidä alaselkä tuettuna ja työnnä polvet varpaiden suuntaan.',
-    stopCondition: 'Lopeta, jos polvi- tai selkäkipu voimistuu.',
-    substitutions: ['Maljakyykky', 'Tuolilta ylösnousu'],
-  },
-  {
-    code: 'GLUTE_BRIDGE',
-    nameFi: 'Lantionnosto',
-    category: 'Lannesarana',
-    equipment: ['Kehonpaino'],
-    instructionsFi:
-      'Paina jalkapohjat lattiaan, nosta lantio ilman alaselän yliojennusta ja laske rauhallisesti.',
-    stopCondition: 'Lopeta, jos alaselkään tai takareiteen tulee terävää kipua.',
-    substitutions: ['Romanialainen maastaveto', 'Bird dog'],
-  },
-  {
-    code: 'ROMANIAN_DEADLIFT',
-    nameFi: 'Romanialainen maastaveto',
-    category: 'Lannesarana',
-    equipment: ['Käsipainot', 'Kahvakuula', 'Levytanko ja painot'],
-    instructionsFi:
-      'Vie lantiota taakse, pidä kuorma lähellä vartaloa ja selkä hallitussa neutraaliasennossa.',
-    stopCondition: 'Lopeta, jos selän asento ei pysy tai kipu voimistuu.',
-    substitutions: ['Lantionnosto', 'Taljaveto jalkojen välistä'],
-  },
-  {
-    code: 'ELEVATED_PUSH_UP',
-    nameFi: 'Korotettu punnerrus',
-    category: 'Työntö',
-    equipment: ['Kehonpaino'],
-    instructionsFi:
-      'Tue kädet vakaalle tasolle, pidä vartalo suorana ja laske rinta hallitusti kohti tukea.',
-    stopCondition: 'Lopeta, jos olkapääkipu voimistuu tai vartalon linja pettää.',
-    substitutions: ['Punnerrus', 'Käsipainopenkkipunnerrus'],
-  },
-  {
-    code: 'DUMBBELL_FLOOR_PRESS',
-    nameFi: 'Käsipainopunnerrus lattialla',
-    category: 'Työntö',
-    equipment: ['Käsipainot'],
-    instructionsFi:
-      'Pidä ranteet suorina, laske olkavarret rauhallisesti lattiaan ja työnnä ilman kiirettä.',
-    stopCondition: 'Lopeta, jos rintaan tai olkapäähän tulee poikkeavaa kipua.',
-    substitutions: ['Korotettu punnerrus', 'Rintaprässi'],
-  },
-  {
-    code: 'CHEST_PRESS',
-    nameFi: 'Rintaprässi',
-    category: 'Työntö',
-    equipment: ['Kuntosalilaitteet'],
-    instructionsFi: 'Säädä istuin, tue selkä ja työnnä kahvat hallitusti eteen.',
-    stopCondition: 'Lopeta, jos olkapää- tai rintakipu voimistuu.',
-    substitutions: ['Korotettu punnerrus', 'Käsipainopunnerrus lattialla'],
-  },
-  {
-    code: 'PRONE_W_RAISE',
-    nameFi: 'Vatsamakuun W-nosto',
-    category: 'Veto',
-    equipment: ['Kehonpaino'],
-    instructionsFi:
-      'Makaa vatsallasi, vedä kyynärpäät W-asentoon ja nosta käsiä vain vähän puristaen lapoja yhteen.',
-    stopCondition: 'Lopeta, jos niska- tai olkapääkipu voimistuu.',
-    substitutions: ['Soutu vastuskuminauhalla', 'Yhden käden soutu'],
-  },
-  {
-    code: 'BAND_ROW',
-    nameFi: 'Soutu vastuskuminauhalla',
-    category: 'Veto',
-    equipment: ['Vastuskuminauhat'],
-    instructionsFi:
-      'Kiinnitä nauha varmasti, vedä kyynärpäät kohti kylkiä ja palauta rauhallisesti.',
-    stopCondition: 'Lopeta, jos kiinnitys liikkuu tai olkapääkipu voimistuu.',
-    substitutions: ['Yhden käden soutu', 'Soutu laitteessa'],
-  },
-  {
-    code: 'ONE_ARM_ROW',
-    nameFi: 'Yhden käden soutu',
-    category: 'Veto',
-    equipment: ['Käsipainot', 'Kahvakuula'],
-    instructionsFi:
-      'Tue vapaa käsi, vedä kyynärpää kohti kylkeä ja vältä vartalon kiertoa.',
-    stopCondition: 'Lopeta, jos selkä- tai olkapääkipu voimistuu.',
-    substitutions: ['Soutu vastuskuminauhalla', 'Soutu laitteessa'],
-  },
-  {
-    code: 'SEATED_ROW',
-    nameFi: 'Soutu laitteessa',
-    category: 'Veto',
-    equipment: ['Kuntosalilaitteet'],
-    instructionsFi: 'Pidä rintakehä ryhdikkäänä ja vedä kahvat kohti kylkiä.',
-    stopCondition: 'Lopeta, jos olkapää- tai selkäkipu voimistuu.',
-    substitutions: ['Yhden käden soutu', 'Soutu vastuskuminauhalla'],
-  },
-  {
-    code: 'BIRD_DOG',
-    nameFi: 'Bird dog',
-    category: 'Keskivartalo',
-    equipment: ['Kehonpaino'],
-    instructionsFi:
-      'Ojenna vastakkainen käsi ja jalka ilman lantion kiertoa. Pidä hengitys rauhallisena.',
-    stopCondition: 'Lyhennä liikettä tai lopeta, jos alaselkäkipu voimistuu.',
-    substitutions: ['Dead bug', 'Sivulankku polvet maassa'],
-  },
-  {
-    code: 'DEAD_BUG',
-    nameFi: 'Dead bug',
-    category: 'Keskivartalo',
-    equipment: ['Kehonpaino'],
-    instructionsFi:
-      'Pidä alaselkä hallittuna, hengitä ulos ojennuksen aikana ja käytä liikerataa, jonka hallitset.',
-    stopCondition: 'Lyhennä liikettä tai lopeta, jos selkäkipu voimistuu.',
-    substitutions: ['Bird dog', 'Sivulankku polvet maassa'],
-  },
-  {
-    code: 'SPLIT_SQUAT',
-    nameFi: 'Tuettu askelkyykky',
-    category: 'Yhden jalan voima',
-    equipment: ['Kehonpaino'],
-    instructionsFi:
-      'Ota tarvittaessa tukea, laskeudu suoraan alas ja pidä etummaisen jalan jalkapohja maassa.',
-    stopCondition: 'Lopeta, jos tasapaino pettää tai polvikipu voimistuu.',
-    substitutions: ['Tuolilta ylösnousu', 'Matala porrasnousu'],
-  },
-]
+type ExerciseTemplate = LibraryExerciseTemplate
+const exerciseLibrary = expandedExerciseLibrary
 
 const bodyweightCodes = new Set([
   'CHAIR_SQUAT',
+  'BODYWEIGHT_SQUAT',
   'GLUTE_BRIDGE',
   'ELEVATED_PUSH_UP',
+  'PUSH_UP',
   'PRONE_W_RAISE',
   'BIRD_DOG',
   'DEAD_BUG',
-  'SPLIT_SQUAT',
+  'SUPPORTED_SPLIT_SQUAT',
+  'KNEELING_SIDE_PLANK',
+  'FRONT_PLANK',
+  'MARCHING_DRILL',
+  'FAST_HIGH_KNEES',
+  'LOW_INTENSITY_ACCELERATION',
+  'ANKLE_HOP',
+  'COUNTERMOVEMENT_JUMP',
+  'FAST_CALF_RAISE',
+  'LOW_STEP_POWER',
+  'ANKLE_ROCK',
+  'CALF_MOBILITY',
+  'HIP_FLEXOR_MOBILITY',
+  'SUPINE_HIP_ROTATION',
+  'THORACIC_ROTATION',
+  'CAT_COW',
 ])
 
-const techniqueVideos: Partial<Record<string, string>> = {
-  GOBLET_SQUAT: 'https://www.youtube.com/watch?v=nfX7IFK9UNI',
-  ROMANIAN_DEADLIFT: 'https://www.youtube.com/watch?v=H71kODJpFus',
-  DUMBBELL_FLOOR_PRESS: 'https://www.youtube.com/watch?v=qHCI9rK7HqM',
-  BIRD_DOG: 'https://www.youtube.com/watch?v=egKWoMZ6cXM',
-}
+const dumbbellPerHandCodes = new Set([
+  'DUMBBELL_FLOOR_PRESS',
+  'DUMBBELL_BENCH_PRESS',
+  'DUMBBELL_OVERHEAD_PRESS',
+  'ONE_ARM_ROW',
+  'FARMER_CARRY',
+  'SUITCASE_CARRY',
+])
 
 function loadTracking(template: ExerciseTemplate): {
   loadType: ExerciseLoadType
   loadLabelFi: string
   loadOptions?: string[]
 } {
-  if (template.code === 'BAND_ROW') {
+  if (
+    template.equipment.includes('Vastuskuminauhat') &&
+    !template.equipment.includes('Kuntosalilaitteet')
+  ) {
     return {
       loadType: 'BAND',
       loadLabelFi: 'Nauhan vastus',
@@ -247,7 +111,7 @@ function loadTracking(template: ExerciseTemplate): {
   if (template.equipment.includes('Kuntosalilaitteet')) {
     return { loadType: 'MACHINE_KG', loadLabelFi: 'Laitteen kuorma kg' }
   }
-  if (template.code === 'DUMBBELL_FLOOR_PRESS' || template.code === 'ONE_ARM_ROW') {
+  if (dumbbellPerHandCodes.has(template.code)) {
     return { loadType: 'DUMBBELL_KG_EACH', loadLabelFi: 'Kuorma kg / käsipaino' }
   }
   return { loadType: 'EXTERNAL_KG', loadLabelFi: 'Kuorma kg' }
@@ -259,11 +123,20 @@ function chooseExercise(
   likes: string,
   dislikes: string,
   fallbackCode: string,
+  experience: ExperienceLevel,
+  limitations: string,
 ) {
-  const candidates = CandidateSelector.select(exerciseLibrary, {
+  const equipmentCandidates = CandidateSelector.select(exerciseLibrary, {
     category,
     equipment: available,
   })
+  const safeCandidates = equipmentCandidates.filter(
+    (candidate) => !exerciseConflictsWithLimitations(candidate, limitations),
+  )
+  const candidates = safeCandidates.filter(
+    (candidate) =>
+      exerciseAllowedForExperience(candidate, experience),
+  )
   const preferred = ExerciseRanker.rank(candidates, {
     equipment: available,
     likes,
@@ -272,7 +145,14 @@ function chooseExercise(
   return (
     preferred ??
     candidates[0] ??
-    exerciseLibrary.find((item) => item.code === fallbackCode) ??
+    safeCandidates.find((item) => item.code === fallbackCode) ??
+    safeCandidates[0] ??
+    exerciseLibrary.find(
+      (item) =>
+        item.equipment.includes('Kehonpaino') &&
+        exerciseAllowedForExperience(item, 'BEGINNER') &&
+        !exerciseConflictsWithLimitations(item, limitations),
+    ) ??
     exerciseLibrary[0]!
   )
 }
@@ -348,7 +228,7 @@ function toPrescription(
   return {
     ...template,
     ...loadTracking(template),
-    techniqueVideoUrl: techniqueVideos[template.code],
+    techniqueVideoUrl: verifiedTechniqueUrl(template),
     id: `${sessionId}-${template.code.toLocaleLowerCase('en-US')}`,
     sets,
     repetitions: parameters.repetitions,
@@ -422,7 +302,7 @@ export function exerciseSubstitutions(
         ...exercise,
         ...template,
         ...loadTracking(template),
-        techniqueVideoUrl: techniqueVideos[template.code],
+        techniqueVideoUrl: verifiedTechniqueUrl(template),
         id: `${exercise.id}-sub-${template.code.toLocaleLowerCase('en-US')}`,
       },
     ]
@@ -450,7 +330,15 @@ function prescribeStrength(
   const candidateExercises = categories.map(([category, fallback], index) =>
     toPrescription(
       sessionId,
-      chooseExercise(category, available, likes, dislikes, fallback),
+      chooseExercise(
+        category,
+        available,
+        likes,
+        dislikes,
+        fallback,
+        profile.experience,
+        profile.limitations ?? '',
+      ),
       index,
       parameters,
       profile,

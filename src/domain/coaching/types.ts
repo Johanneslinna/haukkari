@@ -293,6 +293,12 @@ export type ExercisePrescription = {
   loadLabelFi: string
   loadOptions?: string[]
   techniqueVideoUrl?: string
+  /** Harjoitekirjaston v2-metatiedot; puuttuvat vanhoista snapshot-versioista. */
+  difficulty?: 'BEGINNER' | 'INTERMEDIATE' | 'ADVANCED'
+  trainingEffects?: string[]
+  fatigueCost?: 'LOW' | 'MODERATE' | 'HIGH'
+  contraindications?: string[]
+  techniqueReviewStatus?: 'VERIFIED' | 'PENDING_REVIEW'
   keyExercise: boolean
   /** V2:n yksikäsitteinen annos. Puuttuu vain ennen v2:ta tallennetuista snapshoteista. */
   dose?: PrescriptionDose
