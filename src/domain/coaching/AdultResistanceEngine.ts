@@ -11,6 +11,7 @@ import {
 } from './TimeBudgetPolicy'
 import type {
   CapabilityEstimate,
+  ExerciseProgressionDecision,
   ExerciseLoadType,
   ExercisePrescription,
   ExperienceLevel,
@@ -18,6 +19,7 @@ import type {
   PrescribedSession,
   SetPainResponse,
   SessionObjective,
+  WorkoutCompletionStatus,
 } from './types'
 import { evaluateStrengthSafetyGate } from './StrengthSafetyGate'
 import {
@@ -28,8 +30,9 @@ import {
   type MuscleVolume,
 } from './StrengthVolumePolicy'
 
-export const ADULT_RESISTANCE_ENGINE_VERSION = 'adult-resistance-1.1.0'
-export const ADULT_RESISTANCE_RULE_VERSION = 'adult-resistance-rules-1.1.0'
+export const ADULT_RESISTANCE_ENGINE_VERSION = 'adult-resistance-1.2.0'
+export const ADULT_RESISTANCE_RULE_VERSION = 'adult-resistance-rules-1.2.0'
+export const ADULT_RESISTANCE_LOAD_CONTEXT_VERSION = 'adult-resistance-load-context-1.0.0'
 
 const experienceRank: Record<ExperienceLevel, number> = {
   BEGINNER: 1,
@@ -38,17 +41,26 @@ const experienceRank: Record<ExperienceLevel, number> = {
 }
 
 export type AdultResistanceSetHistory = {
+  /** Tallennetun WorkoutRecordin tunniste; saman harjoituksen kaikilla sarjoilla sama. */
+  sessionId?: string
   exerciseCode: string
   exerciseVersion?: string
   movementPatterns?: readonly string[]
   primaryMuscles?: readonly string[]
   secondaryMuscles?: readonly string[]
   loadKg: number | null
+  loadType?: ExerciseLoadType
+  /** Versionoitu väline-/kuormakonteksti, jossa kilogrammat ovat vertailukelpoisia. */
+  loadContextId?: string
+  /** Käyttäjän välineille vahvistettu todellinen pienin kuormaporras. */
+  loadIncrementKg?: number
   repetitions: number
   rir?: number | null
   completedAt: string
   pain?: boolean
   techniqueOk?: boolean
+  completionStatus?: WorkoutCompletionStatus
+  doseCompleted?: boolean
 }
 
 export type AdultResistanceAthleteContext = {
@@ -132,15 +144,12 @@ export function nextAutomaticLoadKg(
 }
 
 export type InterSessionProgressionDecision = {
-  action:
-    | 'MAINTAIN_AND_COLLECT_MORE_DATA'
-    | 'INCREASE_LOAD'
-    | 'INCREASE_REPETITIONS'
-    | 'DECREASE_LOAD'
+  action: 'RECALIBRATE_LOAD' | 'KEEP_LOAD' | 'INCREASE_LOAD' | 'INCREASE_REPETITIONS'
   nextLoadKg?: number
   nextRepetitions?: number
   changedVariable: 'NONE' | 'LOAD' | 'REPETITIONS'
   reasonCodes: string[]
+  supportingSessionIds: string[]
 }
 
 function goalAdaptation(goal: GoalType) {
@@ -268,10 +277,17 @@ export function scoreExerciseCandidates(
 ): ExerciseCandidateScore[] {
   return eligibleExercises
     .map((exercise) => {
-      const recentSuccesses = history.filter(
-        (item) =>
-          item.exerciseCode === exercise.code && !item.pain && item.techniqueOk !== false,
-      ).length
+      const recentSuccesses = new Set(
+        history
+          .filter(
+            (item) =>
+              item.exerciseCode === exercise.code &&
+              item.sessionId &&
+              item.pain === false &&
+              item.techniqueOk === true,
+          )
+          .map((item) => item.sessionId!),
+      ).size
       const scoreComponents = {
         adaptationFit: exercise.adaptationTargets.includes(
           sessionObjective.primaryAdaptation ?? '',
@@ -323,6 +339,46 @@ function roundToIncrement(value: number, increment: number) {
   return Math.round(value / increment) * increment
 }
 
+function isKilogramLoadType(loadType: ExerciseLoadType) {
+  return (
+    loadType === 'EXTERNAL_KG' ||
+    loadType === 'DUMBBELL_KG_EACH' ||
+    loadType === 'MACHINE_KG'
+  )
+}
+
+export function defaultResistanceLoadContextId(
+  exercise: ExerciseDefinition,
+): string | undefined {
+  const loadType = (exercise.loadTypes[0] ?? 'NONE') as ExerciseLoadType
+  if (loadType === 'EXTERNAL_KG') {
+    return `${ADULT_RESISTANCE_LOAD_CONTEXT_VERSION}:external-kg`
+  }
+  if (loadType === 'DUMBBELL_KG_EACH') {
+    return `${ADULT_RESISTANCE_LOAD_CONTEXT_VERSION}:dumbbell-kg-each`
+  }
+  // Laitteen kilomäärä on vertailukelpoinen vasta, kun juuri käytetty laite on
+  // tunnistettu. Kehonpaino- ja nauhaliikkeille kilogrammakontekstia ei luoda.
+  return undefined
+}
+
+function historyAgeDays(completedAt: string, generatedAtMs: number) {
+  return (generatedAtMs - Date.parse(completedAt)) / 86_400_000
+}
+
+function groupBySession(
+  history: readonly AdultResistanceSetHistory[],
+): Map<string, AdultResistanceSetHistory[]> {
+  const sessions = new Map<string, AdultResistanceSetHistory[]>()
+  for (const item of history) {
+    if (!item.sessionId) continue
+    const existing = sessions.get(item.sessionId) ?? []
+    existing.push(item)
+    sessions.set(item.sessionId, existing)
+  }
+  return sessions
+}
+
 export function estimateAdultResistanceCapability(
   exercise: ExerciseDefinition,
   history: readonly AdultResistanceSetHistory[],
@@ -331,37 +387,70 @@ export function estimateAdultResistanceCapability(
 ): CapabilityEstimate {
   const now = Date.parse(generatedAt)
   const primaryMovementPattern = exercise.movementPatterns[0]
-  const supportsComparableKilograms = exercise.loadTypes.some((loadType) =>
-    ['EXTERNAL_KG', 'DUMBBELL_KG_EACH', 'MACHINE_KG'].includes(loadType),
-  )
+  const loadType = (exercise.loadTypes[0] ?? 'NONE') as ExerciseLoadType
+  const supportsComparableKilograms = isKilogramLoadType(loadType)
   if (!supportsComparableKilograms) {
     return {
       exerciseCode: exercise.code,
       confidence: 'LOW',
       supportingSetCount: 0,
+      supportingSessionCount: 0,
+      supportingSessionIds: [],
       calibrationRequired: true,
       reasons: ['LOAD_TYPE_NOT_COMPARABLE_IN_KILOGRAMS', 'PRECISE_LOAD_WITHHELD'],
     }
   }
+  const requiredLoadContextId = defaultResistanceLoadContextId(exercise)
+  if (!requiredLoadContextId) {
+    return {
+      exerciseCode: exercise.code,
+      confidence: 'LOW',
+      supportingSetCount: 0,
+      supportingSessionCount: 0,
+      supportingSessionIds: [],
+      calibrationRequired: true,
+      reasons: [
+        'COMPARABLE_LOAD_CONTEXT_REQUIRED',
+        'MACHINE_LOAD_NOT_COMPARABLE_ACROSS_DEVICES',
+        'PRECISE_LOAD_WITHHELD',
+      ],
+    }
+  }
   const exerciseSets = history.filter((item) => {
-    const ageDays = (now - Date.parse(item.completedAt)) / 86_400_000
+    const ageDays = historyAgeDays(item.completedAt, now)
     return (
       item.exerciseCode === exercise.code &&
+      item.exerciseVersion === exercise.version &&
+      Boolean(item.sessionId) &&
+      item.loadType === loadType &&
+      item.loadContextId === requiredLoadContextId &&
+      item.completionStatus === 'COMPLETED' &&
+      item.doseCompleted === true &&
       item.loadKg &&
       item.loadKg > 0 &&
       item.repetitions > 0 &&
       item.repetitions <= 15 &&
       ageDays >= 0 &&
-      ageDays <= 180 &&
-      !item.pain &&
-      item.techniqueOk !== false
+      ageDays <= 180
     )
   })
-  const valid = exerciseSets.filter((item) => item.rir !== null && item.rir !== undefined)
-  const support = valid.length
-  if (support < 2) {
+  const sessions = new Map(
+    [...groupBySession(exerciseSets).entries()].filter(([, sets]) =>
+      sets.every(
+        (item) =>
+          item.pain === false &&
+          item.techniqueOk === true &&
+          item.rir !== null &&
+          item.rir !== undefined,
+      ),
+    ),
+  )
+  const valid = [...sessions.values()].flat()
+  const supportingSessionIds = [...sessions.keys()].sort()
+  const supportingSessionCount = supportingSessionIds.length
+  if (supportingSessionCount < 2) {
     const movementFamilySupport = history.filter((item) => {
-      const ageDays = (now - Date.parse(item.completedAt)) / 86_400_000
+      const ageDays = historyAgeDays(item.completedAt, now)
       return (
         item.exerciseCode !== exercise.code &&
         primaryMovementPattern !== undefined &&
@@ -378,14 +467,23 @@ export function estimateAdultResistanceCapability(
     return {
       exerciseCode: exercise.code,
       confidence: 'LOW',
-      supportingSetCount: support + movementFamilySupport,
+      supportingSetCount: valid.length + movementFamilySupport,
+      supportingSessionCount,
+      supportingSessionIds,
       latestValidSetAt: exerciseSets
         .map((item) => item.completedAt)
         .sort()
         .at(-1),
       calibrationRequired: true,
       reasons: [
-        'COMPARABLE_EXERCISE_RIR_SETS_BELOW_TWO',
+        ...(history.some(
+          (item) =>
+            item.exerciseCode === exercise.code &&
+            (!item.sessionId || !item.exerciseVersion || !item.loadContextId),
+        )
+          ? ['LEGACY_HISTORY_IDENTITY_OR_CONTEXT_INCOMPLETE']
+          : []),
+        'COMPARABLE_EXERCISE_SESSIONS_BELOW_TWO',
         ...(movementFamilySupport > 0
           ? ['MOVEMENT_FAMILY_HISTORY_USED_AS_CONTEXT_ONLY']
           : []),
@@ -397,24 +495,30 @@ export function estimateAdultResistanceCapability(
     .map((item) => item.completedAt)
     .sort()
     .at(-1)!
-  const latestAgeDays = (now - Date.parse(latestValidSetAt)) / 86_400_000
+  const latestAgeDays = historyAgeDays(latestValidSetAt, now)
   if (latestAgeDays > 90) {
     return {
       exerciseCode: exercise.code,
       confidence: 'LOW',
-      supportingSetCount: support,
+      supportingSetCount: valid.length,
+      supportingSessionCount,
+      supportingSessionIds,
       latestValidSetAt,
       calibrationRequired: true,
       reasons: ['COMPARABLE_HISTORY_OLDER_THAN_NINETY_DAYS', 'PRECISE_LOAD_WITHHELD'],
     }
   }
-  const estimates = valid.map(
-    (item) => item.loadKg! * (1 + (item.repetitions + (item.rir ?? 0)) / 30),
-  )
+  const estimates = [...sessions.values()].map((sets) => {
+    const setEstimates = sets.map(
+      (item) => item.loadKg! * (1 + (item.repetitions + (item.rir ?? 0)) / 30),
+    )
+    return setEstimates.reduce((total, value) => total + value, 0) / setEstimates.length
+  })
   const estimated1RmKg = roundToIncrement(
     estimates.reduce((total, value) => total + value, 0) / estimates.length,
     0.5,
   )
+  // Tämä on arvion esitystarkkuus, ei käyttäjän todellinen kuormaporras.
   const increment = exercise.loadTypes.includes('DUMBBELL_KG_EACH') ? 1 : 2.5
   const range: [number, number] = [
     roundToIncrement(estimated1RmKg * 0.65, increment),
@@ -425,21 +529,22 @@ export function estimateAdultResistanceCapability(
     estimated1RmKg,
     workingLoadRangeKg: range,
     confidence:
-      support >= 4 &&
+      supportingSessionCount >= 4 &&
       experience !== 'BEGINNER' &&
       latestAgeDays <= 45 &&
       !exercise.loadTypes.includes('MACHINE_KG')
         ? 'HIGH'
         : 'MODERATE',
-    supportingSetCount: support,
+    supportingSetCount: valid.length,
+    supportingSessionCount,
+    supportingSessionIds,
     latestValidSetAt,
     calibrationRequired: false,
     reasons: [
       'RECENT_COMPARABLE_LOAD_REPS_RIR_USED',
       'ESTIMATE_NOT_MEASURED_MAXIMUM',
-      ...(exercise.loadTypes.includes('MACHINE_KG')
-        ? ['MACHINE_LOAD_NOT_COMPARABLE_ACROSS_DEVICES']
-        : []),
+      'DISTINCT_WORKOUT_RECORDS_USED',
+      `LOAD_CONTEXT:${requiredLoadContextId}`,
     ],
   }
 }
@@ -463,10 +568,14 @@ export function prescribeResistanceDose(
     sets > 2
   )
     sets = Math.max(1, sets - 1)
-  const repetitions: [number, number] = strengthGoal
-    ? [4, 6]
-    : hypertrophyGoal
-      ? [6, 12]
+  const repetitions: [number, number] = hypertrophyGoal
+    ? [8, 12]
+    : strengthGoal
+      ? capability.calibrationRequired || athleteContext.experience === 'BEGINNER'
+        ? [6, 10]
+        : athleteContext.experience === 'INTERMEDIATE'
+          ? [5, 8]
+          : [4, 6]
       : [8, 12]
   const targetRir: [number, number] =
     athleteContext.experience === 'BEGINNER'
@@ -508,6 +617,7 @@ function loadTracking(exercise: ExerciseDefinition): {
   loadType: ExerciseLoadType
   loadLabelFi: string
   loadOptions?: string[]
+  loadContextId?: string
 } {
   const available = exercise.loadTypes[0] ?? 'NONE'
   if (available === 'BAND')
@@ -519,16 +629,62 @@ function loadTracking(exercise: ExerciseDefinition): {
   if (available === 'BODYWEIGHT')
     return { loadType: 'BODYWEIGHT', loadLabelFi: 'Variaatio tai lisäpaino' }
   if (available === 'DUMBBELL_KG_EACH')
-    return { loadType: 'DUMBBELL_KG_EACH', loadLabelFi: 'Kuorma kg / käsipaino' }
+    return {
+      loadType: 'DUMBBELL_KG_EACH',
+      loadLabelFi: 'Kuorma kg / käsipaino',
+      loadContextId: defaultResistanceLoadContextId(exercise),
+    }
   if (available === 'MACHINE_KG')
     return { loadType: 'MACHINE_KG', loadLabelFi: 'Laitteen kuorma kg' }
-  return { loadType: 'EXTERNAL_KG', loadLabelFi: 'Kuorma kg' }
+  return {
+    loadType: 'EXTERNAL_KG',
+    loadLabelFi: 'Kuorma kg',
+    loadContextId: defaultResistanceLoadContextId(exercise),
+  }
 }
 
 function selectedPatternOrder(minutes: number) {
   if (minutes <= 20) return ['SQUAT', 'HORIZONTAL_PUSH', 'HORIZONTAL_PULL']
   if (minutes <= 30) return ['SQUAT', 'HINGE', 'HORIZONTAL_PUSH', 'HORIZONTAL_PULL']
   return ['SQUAT', 'HINGE', 'HORIZONTAL_PUSH', 'HORIZONTAL_PULL', 'ANTI_EXTENSION']
+}
+
+function verifiedLoadIncrementKg(
+  history: readonly AdultResistanceSetHistory[],
+  exercise: ExerciseDefinition,
+  loadContextId: string | undefined,
+) {
+  if (!loadContextId) return undefined
+  const increments = [
+    ...new Set(
+      history
+        .filter(
+          (item) =>
+            item.exerciseCode === exercise.code &&
+            item.exerciseVersion === exercise.version &&
+            item.sessionId &&
+            item.loadContextId === loadContextId &&
+            item.completionStatus === 'COMPLETED' &&
+            typeof item.loadIncrementKg === 'number' &&
+            item.loadIncrementKg > 0,
+        )
+        .map((item) => item.loadIncrementKg!),
+    ),
+  ]
+  return increments.length === 1 ? increments[0] : undefined
+}
+
+function progressionGuidanceFi(decision: InterSessionProgressionDecision) {
+  switch (decision.action) {
+    case 'INCREASE_REPETITIONS':
+      return `Seuraava askel: lisää yksi toisto (${decision.nextRepetitions}) ja säilytä sama kuorma.`
+    case 'INCREASE_LOAD':
+      return `Seuraava askel: nosta kuorma vahvistettuun seuraavaan portaaseen (${decision.nextLoadKg} kg).`
+    case 'KEEP_LOAD':
+      return 'Seuraava askel: säilytä nykyinen kuorma.'
+    case 'RECALIBRATE_LOAD':
+      return 'Seuraava askel: kalibroi kuorma uudelleen ennen tarkkaa kuormasuositusta.'
+  }
 }
 
 export function prescribeAdultResistanceSession(input: {
@@ -557,8 +713,8 @@ export function prescribeAdultResistanceSession(input: {
     ...item,
     movementPatterns:
       item.movementPatterns ?? catalog.getExercise(item.exerciseCode)?.movementPatterns,
-    exerciseVersion:
-      item.exerciseVersion ?? catalog.getExercise(item.exerciseCode)?.version,
+    // Legacy-rivin puuttuvaa versiota ei saa jälkikäteen nimetä nykyversioksi.
+    exerciseVersion: item.exerciseVersion,
     primaryMuscles:
       item.primaryMuscles ?? catalog.getExercise(item.exerciseCode)?.primaryMuscles,
     secondaryMuscles:
@@ -649,6 +805,27 @@ export function prescribeAdultResistanceSession(input: {
       : String(dose.repetitions)
     const targetRir = Array.isArray(dose.targetRir) ? dose.targetRir[0] : dose.targetRir
     const load = loadTracking(item.exercise)
+    const loadIncrementKg = verifiedLoadIncrementKg(
+      history,
+      item.exercise,
+      load.loadContextId,
+    )
+    const maximumRepetitions = Array.isArray(dose.repetitions)
+      ? dose.repetitions[1]
+      : dose.repetitions
+    const progressionDecision = decideInterSessionProgression({
+      comparableSessions: history,
+      targetRir: Array.isArray(dose.targetRir)
+        ? dose.targetRir
+        : [dose.targetRir, dose.targetRir],
+      loadIncrementKg,
+      targetExerciseCode: item.exercise.code,
+      targetExerciseVersion: item.exercise.version,
+      targetLoadType: load.loadType,
+      targetLoadContextId: load.loadContextId,
+      maximumRepetitions,
+      generatedAt: input.context.generatedAt,
+    })
     const substitutions = item.exercise.substitutionCodes
       .map((code) => catalog.getExercise(code)?.nameFi)
       .filter((name): name is string => Boolean(name))
@@ -668,13 +845,17 @@ export function prescribeAdultResistanceSession(input: {
         targetRir,
         warmupSets: index === 0 && dose.calibrationRequired ? 1 : 0,
         estimatedWorkSetSeconds: ADULT_STRENGTH_TIME_POLICY.workSetSeconds,
-        loadGuidance: dose.calibrationRequired
-          ? 'Aloita kevyellä kalibroivalla sarjalla. Valitse kuorma, jolla tavoitetoistot onnistuvat hallitusti ja toistoja jää tavoitealueen verran varastoon.'
-          : `Suositeltu työkuorma on arviolta ${dose.prescribedLoadRangeKg?.[0]}–${dose.prescribedLoadRangeKg?.[1]} kg. Arvio ei ole mitattu maksimi.`,
+        loadGuidance: `${
+          dose.calibrationRequired
+            ? 'Aloita kevyellä kalibroivalla sarjalla. Valitse kuorma, jolla tavoitetoistot onnistuvat hallitusti ja toistoja jää tavoitealueen verran varastoon.'
+            : `Suositeltu työkuorma on arviolta ${dose.prescribedLoadRangeKg?.[0]}–${dose.prescribedLoadRangeKg?.[1]} kg. Arvio ei ole mitattu maksimi.`
+        } ${progressionGuidanceFi(progressionDecision)}`,
         stopCondition:
           'Keskeytä, jos liike provosoi kipua tai tekniikka ei pysy hallittuna.',
         substitutions,
         ...load,
+        loadIncrementKg,
+        progressionDecision: progressionDecision as ExerciseProgressionDecision,
         difficulty: item.exercise.minimumExperience,
         trainingEffects: [...item.exercise.adaptationTargets],
         fatigueCost:
@@ -728,7 +909,7 @@ export function prescribeAdultResistanceSession(input: {
     cooldownMinutes,
     cooldown: [`${cooldownMinutes} min rauhallista liikettä ja hengityksen tasaus`],
     progression:
-      'Kuormaa muutetaan vasta vähintään kahden vertailukelpoisen, kivuttoman ja tavoite-RIR:ään osuneen harjoituksen jälkeen, yksi muuttuja kerrallaan.',
+      'Toistoa voidaan lisätä yhden onnistuneen harjoituskerran jälkeen. Kuormaa nostetaan vasta kahden eri, vertailukelpoisen ja onnistuneen harjoituskerran jälkeen, yksi muuttuja kerrallaan.',
     decisionTrace: {
       ruleVersion: input.context.ruleVersion,
       engineVersion: ADULT_RESISTANCE_ENGINE_VERSION,
@@ -807,7 +988,21 @@ export function prescribeAdultResistanceSession(input: {
       capabilityEstimates: capabilities.filter((capability) =>
         exercises.some((exercise) => exercise.code === capability.exerciseCode),
       ),
-      adaptations: [],
+      adaptations: exercises.map((exercise) => ({
+        original: {
+          exerciseCode: exercise.code,
+          exerciseVersion: exercise.contentVersion ?? null,
+          supportingSessionIds: exercise.progressionDecision?.supportingSessionIds ?? [],
+        },
+        adjusted: {
+          action: exercise.progressionDecision?.action ?? 'RECALIBRATE_LOAD',
+          nextLoadKg: exercise.progressionDecision?.nextLoadKg ?? null,
+          nextRepetitions: exercise.progressionDecision?.nextRepetitions ?? null,
+        },
+        reasonCodes: exercise.progressionDecision?.reasonCodes ?? [
+          'NO_COMPARABLE_SESSION_HISTORY',
+        ],
+      })),
     },
   })
   const fitted = fitStrengthPrescriptionToTimeBudget({
@@ -904,78 +1099,184 @@ export function adaptNextSet(input: {
 }
 
 export function decideInterSessionProgression(input: {
-  comparableSessions: {
-    exerciseCode?: string
-    exerciseVersion?: string
-    loadKg?: number
-    repetitions: number
-    rir: number
-    pain: boolean
-    techniqueOk: boolean
-  }[]
+  comparableSessions: readonly AdultResistanceSetHistory[]
   targetRir: [number, number]
-  loadIncrementKg: number
+  loadIncrementKg?: number
   targetExerciseCode?: string
   targetExerciseVersion?: string
+  targetLoadType?: ExerciseLoadType
+  targetLoadContextId?: string
   maximumRepetitions?: number
+  generatedAt?: string
 }): InterSessionProgressionDecision {
   if (!input.targetExerciseCode || !input.targetExerciseVersion) {
     return {
-      action: 'MAINTAIN_AND_COLLECT_MORE_DATA',
+      action: 'RECALIBRATE_LOAD',
       changedVariable: 'NONE',
       reasonCodes: ['EXERCISE_IDENTITY_AND_VERSION_REQUIRED'],
+      supportingSessionIds: [],
     }
   }
-  const comparable = input.comparableSessions.filter(
-    (item) =>
-      (input.targetExerciseCode === undefined ||
-        item.exerciseCode === input.targetExerciseCode) &&
-      (input.targetExerciseVersion === undefined ||
-        item.exerciseVersion === input.targetExerciseVersion) &&
-      !item.pain &&
-      item.techniqueOk &&
-      item.rir >= input.targetRir[0] &&
-      item.rir <= input.targetRir[1],
-  )
-  if (comparable.length < 2)
+  if (!input.generatedAt || !Number.isFinite(Date.parse(input.generatedAt))) {
     return {
-      action: 'MAINTAIN_AND_COLLECT_MORE_DATA',
+      action: 'RECALIBRATE_LOAD',
       changedVariable: 'NONE',
-      reasonCodes: ['FEWER_THAN_TWO_COMPARABLE_SUCCESSES'],
+      reasonCodes: ['EVALUATION_TIME_REQUIRED'],
+      supportingSessionIds: [],
     }
-  const latest = comparable.at(-1)!
-  if (latest.loadKg !== undefined) {
-    const nextLoadKg = nextAutomaticLoadKg(latest.loadKg, input.loadIncrementKg)
-    if (nextLoadKg === null) {
-      if (
-        input.maximumRepetitions !== undefined &&
-        latest.repetitions < input.maximumRepetitions
-      ) {
-        return {
-          action: 'INCREASE_REPETITIONS',
-          nextRepetitions: latest.repetitions + 1,
-          changedVariable: 'REPETITIONS',
-          reasonCodes: ['TWO_COMPARABLE_SUCCESSES', 'LOAD_INCREMENT_EXCEEDS_TEN_PERCENT'],
-        }
-      }
+  }
+  const targetLoadType = input.targetLoadType ?? 'EXTERNAL_KG'
+  const kilogramLoad = isKilogramLoadType(targetLoadType)
+  if (kilogramLoad && !input.targetLoadContextId) {
+    return {
+      action: 'RECALIBRATE_LOAD',
+      changedVariable: 'NONE',
+      reasonCodes: ['COMPARABLE_LOAD_CONTEXT_REQUIRED'],
+      supportingSessionIds: [],
+    }
+  }
+  const generatedAtMs = Date.parse(input.generatedAt)
+  const matchingIdentity = input.comparableSessions.filter((item) => {
+    const ageDays = historyAgeDays(item.completedAt, generatedAtMs)
+    return (
+      item.exerciseCode === input.targetExerciseCode &&
+      item.exerciseVersion === input.targetExerciseVersion &&
+      ageDays >= 0 &&
+      ageDays <= 56
+    )
+  })
+  const identifiedHistory = matchingIdentity.filter((item) => item.sessionId)
+  if (matchingIdentity.length > 0 && identifiedHistory.length === 0) {
+    return {
+      action: 'RECALIBRATE_LOAD',
+      changedVariable: 'NONE',
+      reasonCodes: ['SESSION_IDENTITY_REQUIRED'],
+      supportingSessionIds: [],
+    }
+  }
+  const sameContext = identifiedHistory.filter(
+    (item) =>
+      item.loadType === targetLoadType &&
+      (kilogramLoad ? item.loadContextId === input.targetLoadContextId : true),
+  )
+  if (sameContext.length === 0) {
+    return {
+      action: 'RECALIBRATE_LOAD',
+      changedVariable: 'NONE',
+      reasonCodes: [
+        matchingIdentity.length > 0
+          ? 'COMPARABLE_LOAD_CONTEXT_REQUIRED'
+          : 'NO_COMPARABLE_SESSION_HISTORY',
+      ],
+      supportingSessionIds: [],
+    }
+  }
+  const exposures = [...groupBySession(sameContext).entries()]
+    .map(([sessionId, sets]) => {
+      const sorted = [...sets].sort((left, right) =>
+        left.completedAt.localeCompare(right.completedAt),
+      )
+      const completedAt = sorted.at(-1)!.completedAt
+      const loads = sorted
+        .map((item) => item.loadKg)
+        .filter((value): value is number => typeof value === 'number' && value > 0)
+      const repetitions = Math.min(...sorted.map((item) => item.repetitions))
+      const success = sorted.every(
+        (item) =>
+          item.completionStatus === 'COMPLETED' &&
+          item.doseCompleted === true &&
+          !item.pain &&
+          item.techniqueOk === true &&
+          typeof item.rir === 'number' &&
+          item.rir >= input.targetRir[0] &&
+          item.rir <= input.targetRir[1] &&
+          item.repetitions > 0,
+      )
+      const sameLoad =
+        !kilogramLoad || (loads.length === sorted.length && new Set(loads).size === 1)
       return {
-        action: 'MAINTAIN_AND_COLLECT_MORE_DATA',
+        sessionId,
+        completedAt,
+        repetitions,
+        loadKg: kilogramLoad && sameLoad ? loads[0] : undefined,
+        success: success && sameLoad,
+      }
+    })
+    .sort((left, right) => left.completedAt.localeCompare(right.completedAt))
+  const latest = exposures.at(-1)
+  if (!latest || !latest.success) {
+    return {
+      action: 'KEEP_LOAD',
+      changedVariable: 'NONE',
+      reasonCodes: [latest ? 'SUCCESS_STREAK_BROKEN' : 'NO_COMPARABLE_SESSION_HISTORY'],
+      supportingSessionIds: latest ? [latest.sessionId] : [],
+    }
+  }
+  if (
+    input.maximumRepetitions !== undefined &&
+    latest.repetitions < input.maximumRepetitions
+  ) {
+    return {
+      action: 'INCREASE_REPETITIONS',
+      nextLoadKg: latest.loadKg,
+      nextRepetitions: latest.repetitions + 1,
+      changedVariable: 'REPETITIONS',
+      reasonCodes: ['ONE_SUCCESSFUL_DISTINCT_SESSION', 'BELOW_REPETITION_MAXIMUM'],
+      supportingSessionIds: [latest.sessionId],
+    }
+  }
+  const successStreak = [latest]
+  for (let index = exposures.length - 2; index >= 0; index -= 1) {
+    const exposure = exposures[index]!
+    if (!exposure.success) break
+    successStreak.unshift(exposure)
+  }
+  const latestTwo = successStreak.slice(-2)
+  const sameLoad =
+    latestTwo.length === 2 &&
+    latestTwo.every((item) => item.loadKg === latest.loadKg) &&
+    latest.loadKg !== undefined
+  if (kilogramLoad && latestTwo.length >= 2 && sameLoad) {
+    if (!input.loadIncrementKg) {
+      return {
+        action: 'KEEP_LOAD',
+        nextLoadKg: latest.loadKg,
+        changedVariable: 'NONE',
+        reasonCodes: ['ACTUAL_LOAD_INCREMENT_NOT_VERIFIED'],
+        supportingSessionIds: latestTwo.map((item) => item.sessionId),
+      }
+    }
+    const nextLoadKg = nextAutomaticLoadKg(latest.loadKg!, input.loadIncrementKg)
+    if (nextLoadKg === null) {
+      return {
+        action: 'KEEP_LOAD',
+        nextLoadKg: latest.loadKg,
         changedVariable: 'NONE',
         reasonCodes: ['LOAD_INCREMENT_EXCEEDS_TEN_PERCENT'],
+        supportingSessionIds: latestTwo.map((item) => item.sessionId),
       }
     }
     return {
       action: 'INCREASE_LOAD',
       nextLoadKg,
       changedVariable: 'LOAD',
-      reasonCodes: ['TWO_COMPARABLE_SUCCESSES', 'ONE_AVAILABLE_INCREMENT'],
+      reasonCodes: [
+        'TWO_SUCCESSFUL_DISTINCT_SESSIONS_AT_REPETITION_MAXIMUM',
+        'ONE_VERIFIED_AVAILABLE_INCREMENT',
+      ],
+      supportingSessionIds: latestTwo.map((item) => item.sessionId),
     }
   }
   return {
-    action: 'INCREASE_REPETITIONS',
-    nextRepetitions: latest.repetitions + 1,
-    changedVariable: 'REPETITIONS',
-    reasonCodes: ['TWO_COMPARABLE_SUCCESSES', 'BODYWEIGHT_REPETITION_PROGRESSION'],
+    action: 'KEEP_LOAD',
+    nextLoadKg: latest.loadKg,
+    changedVariable: 'NONE',
+    reasonCodes: [
+      kilogramLoad
+        ? 'FEWER_THAN_TWO_SUCCESSFUL_DISTINCT_SESSIONS_AT_REPETITION_MAXIMUM'
+        : 'NON_KILOGRAM_LOAD_HAS_NO_AUTOMATIC_KG_PROGRESSION',
+    ],
+    supportingSessionIds: [latest.sessionId],
   }
 }
 

@@ -84,7 +84,7 @@ describe('TrainingPrescriptionEngine – kultaiset käyttäjäprofiilit', () => 
           item.stopCondition.length > 0,
       ),
     ).toBe(true)
-    expect(result.decisionTrace.ruleVersion).toBe('adult-resistance-rules-1.1.0')
+    expect(result.decisionTrace.ruleVersion).toBe('adult-resistance-rules-1.2.0')
     expect(result.decisionTrace.contentReleaseId).toBe('adult-resistance-v1.0.0')
   })
 
@@ -103,7 +103,7 @@ describe('TrainingPrescriptionEngine – kultaiset käyttäjäprofiilit', () => 
     })
 
     expect(result.exercises[0]?.nameFi).toMatch(/Jalkaprässi|Maljakyykky/u)
-    expect(result.exercises.every((item) => item.repetitions === '6–12')).toBe(true)
+    expect(result.exercises.every((item) => item.repetitions === '8–12')).toBe(true)
     expect(result.exercises.every((item) => item.sets === 3)).toBe(true)
   })
 
@@ -274,7 +274,7 @@ describe('TrainingPrescriptionEngine – kultaiset käyttäjäprofiilit', () => 
     })
 
     expect(result.schemaVersion).toBe(2)
-    expect(result.engineVersion).toBe('adult-resistance-1.1.0')
+    expect(result.engineVersion).toBe('adult-resistance-1.2.0')
     expect(result.blocks).toEqual(result.exercises)
     expect(result.objective?.primary).toBeTruthy()
     expect(prescriptionDurationSeconds(result)).toBeLessThanOrEqual(45 * 60)

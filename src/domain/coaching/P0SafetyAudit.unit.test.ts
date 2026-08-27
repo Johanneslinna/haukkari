@@ -36,6 +36,29 @@ import {
 
 const generatedAt = '2026-08-27T08:00:00.000Z'
 const userId = '00000000-0000-4000-8000-000000000001'
+const externalLoadContext = 'adult-resistance-load-context-1.0.0:external-kg'
+
+function successfulProgressionSet(
+  overrides: Partial<AdultResistanceSetHistory> = {},
+): AdultResistanceSetHistory {
+  return {
+    sessionId: 'workout-1',
+    exerciseCode: 'TEST_LIFT',
+    exerciseVersion: '1.0.0',
+    loadKg: 40,
+    loadType: 'EXTERNAL_KG',
+    loadContextId: externalLoadContext,
+    loadIncrementKg: 2.5,
+    repetitions: 8,
+    rir: 3,
+    completedAt: '2026-08-20T08:00:00.000Z',
+    pain: false,
+    techniqueOk: true,
+    completionStatus: 'COMPLETED',
+    doseCompleted: true,
+    ...overrides,
+  }
+}
 
 function storedRecord(table: SyncableTable, id: string, data: JsonObject): LocalRecord {
   const timestamp = '2026-08-25T00:00:00.000Z'
@@ -425,45 +448,72 @@ describe('P0-2: sarjan todellinen kipu ja tekniikka', () => {
 })
 
 describe('P0-3: enintään 10 prosentin kuormaprogressio', () => {
+  it('ei tulkitse saman WorkoutRecordin kahta sarjaa kahdeksi exposureksi', () => {
+    const decision = decideInterSessionProgression({
+      comparableSessions: [
+        successfulProgressionSet({ sessionId: 'same-workout' }),
+        successfulProgressionSet({ sessionId: 'same-workout' }),
+      ],
+      targetExerciseCode: 'TEST_LIFT',
+      targetExerciseVersion: '1.0.0',
+      targetLoadType: 'EXTERNAL_KG',
+      targetLoadContextId: externalLoadContext,
+      targetRir: [2, 3],
+      maximumRepetitions: 8,
+      loadIncrementKg: 2.5,
+      generatedAt,
+    })
+
+    expect(decision.action).toBe('KEEP_LOAD')
+    expect(decision.supportingSessionIds).toEqual(['same-workout'])
+  })
+
   it('estää 5 -> 6 kg eikä keksi väliportaita', () => {
     expect(6 / 5).toBeGreaterThan(1.1) // Mutatoitu vanha tulos rikkoo hyväksymisrajan.
     const decision = decideInterSessionProgression({
-      comparableSessions: Array.from({ length: 2 }, () => ({
-        exerciseCode: 'TEST_LIFT',
-        exerciseVersion: '1.0.0',
-        loadKg: 5,
-        repetitions: 10,
-        rir: 3,
-        pain: false,
-        techniqueOk: true,
-      })),
+      comparableSessions: [
+        successfulProgressionSet({ loadKg: 5, repetitions: 10 }),
+        successfulProgressionSet({
+          sessionId: 'workout-2',
+          loadKg: 5,
+          repetitions: 10,
+          completedAt: '2026-08-24T08:00:00.000Z',
+        }),
+      ],
       targetExerciseCode: 'TEST_LIFT',
       targetExerciseVersion: '1.0.0',
       targetRir: [2, 3],
       loadIncrementKg: 1,
+      targetLoadType: 'EXTERNAL_KG',
+      targetLoadContextId: externalLoadContext,
+      maximumRepetitions: 10,
+      generatedAt,
     })
-    expect(decision.action).toBe('MAINTAIN_AND_COLLECT_MORE_DATA')
-    expect(decision.nextLoadKg).toBeUndefined()
+    expect(decision.action).toBe('KEEP_LOAD')
+    expect(decision.nextLoadKg).toBe(5)
     expect(decision.reasonCodes).toContain('LOAD_INCREMENT_EXCEEDS_TEN_PERCENT')
   })
 
   it('ei hyväksy toisen version historiaa', () => {
     const decision = decideInterSessionProgression({
-      comparableSessions: Array.from({ length: 2 }, () => ({
-        exerciseCode: 'TEST_LIFT',
-        exerciseVersion: '0.9.0',
-        loadKg: 40,
-        repetitions: 8,
-        rir: 3,
-        pain: false,
-        techniqueOk: true,
-      })),
+      comparableSessions: [
+        successfulProgressionSet({ exerciseVersion: '0.9.0' }),
+        successfulProgressionSet({
+          sessionId: 'workout-2',
+          exerciseVersion: '0.9.0',
+          completedAt: '2026-08-24T08:00:00.000Z',
+        }),
+      ],
       targetExerciseCode: 'TEST_LIFT',
       targetExerciseVersion: '1.0.0',
       targetRir: [2, 3],
       loadIncrementKg: 2.5,
+      targetLoadType: 'EXTERNAL_KG',
+      targetLoadContextId: externalLoadContext,
+      maximumRepetitions: 8,
+      generatedAt,
     })
-    expect(decision.reasonCodes).toContain('FEWER_THAN_TWO_COMPARABLE_SUCCESSES')
+    expect(decision.reasonCodes).toContain('NO_COMPARABLE_SESSION_HISTORY')
   })
 })
 

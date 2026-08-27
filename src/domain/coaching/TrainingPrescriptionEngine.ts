@@ -23,6 +23,7 @@ import {
 import { DecisionRecorder } from './engine'
 import {
   ADULT_RESISTANCE_RULE_VERSION,
+  defaultResistanceLoadContextId,
   prescribeAdultResistanceSession,
   type AdultResistanceSetHistory,
 } from './AdultResistanceEngine'
@@ -206,6 +207,14 @@ export function exerciseSubstitutions(
           loadType === 'BAND'
             ? ['Erittäin kevyt', 'Kevyt', 'Keskivahva', 'Vahva', 'Erittäin vahva']
             : undefined,
+        loadContextId: defaultResistanceLoadContextId(template),
+        loadIncrementKg: undefined,
+        progressionDecision: {
+          action: 'RECALIBRATE_LOAD',
+          changedVariable: 'NONE',
+          reasonCodes: ['EXERCISE_SUBSTITUTION_REQUIRES_RECALIBRATION'],
+          supportingSessionIds: [],
+        },
         primaryMuscles: [...template.primaryMuscles],
         secondaryMuscles: [...template.secondaryMuscles],
         id: `${exercise.id}-sub-${template.code.toLocaleLowerCase('en-US')}`,

@@ -10,16 +10,28 @@ async function completeSetSafely(setRow: Locator) {
 
 async function completeOnboarding(
   page: Page,
-  options: { withStrengthSafetyContext?: boolean } = {},
+  options: {
+    withStrengthSafetyContext?: boolean
+    strengthProgressionScenario?: boolean
+  } = {},
 ) {
   await page.goto('/')
   await expect(page).toHaveURL(/\/aloitus$/u)
   await page.getByLabel('Etunimi tai kutsumanimi').fill('Aino')
+  if (options.strengthProgressionScenario) {
+    await page
+      .getByRole('radio', { name: 'Lihasmassan kasvattaminen', exact: true })
+      .check()
+  }
   await page.getByRole('button', { name: 'Jatka' }).click()
   const weekday = await page.evaluate(() => new Date().getDay() || 7)
   const labels = ['Ma', 'Ti', 'Ke', 'To', 'Pe', 'La', 'Su']
   for (const [index, label] of labels.entries()) {
     await page.getByLabel(label, { exact: true }).setChecked(index + 1 === weekday)
+  }
+  if (options.strengthProgressionScenario) {
+    await page.getByRole('button', { name: 'Koti', exact: true }).click()
+    await page.getByLabel('Mieluisat harjoitukset').fill('Maljakyykky')
   }
   await page.getByRole('button', { name: 'Jatka' }).click()
   if (options.withStrengthSafetyContext) {
@@ -39,6 +51,141 @@ async function completeOnboarding(
   await page.getByRole('button', { name: 'Vahvista ja luo suunnitelma' }).click()
   await expect(page).toHaveURL(/\/$/u, { timeout: 30_000 })
   await expect(page.getByRole('heading', { name: /Aino/u })).toBeVisible()
+}
+
+function repetitionsFromDose(value: string, useMaximum: boolean) {
+  const numbers = [...value.matchAll(/\d+/gu)].map((match) => Number(match[0]))
+  const maximum = numbers.at(-1)
+  if (!maximum) throw new Error(`Toistoaluetta ei löytynyt annoksesta: ${value}`)
+  return useMaximum ? maximum : Math.max(1, maximum - 1)
+}
+
+async function verifyProgressionSurvivesReload(
+  page: Page,
+  guidance: RegExp,
+  expectedRepetitions: string,
+  expectedLoad: string,
+) {
+  await expect(page.getByText(guidance)).toBeVisible()
+  const firstRow = page.locator('.active-exercise-card .set-row').first()
+  await expect(firstRow.getByLabel('Toistot')).toHaveValue(expectedRepetitions)
+  await expect(
+    firstRow
+      .locator('label.compact-field')
+      .filter({ hasText: 'Kuorma kg / käsipaino' })
+      .locator('input'),
+  ).toHaveValue(expectedLoad)
+  await page.reload()
+  await expect(page.getByText(guidance)).toBeVisible()
+  await expect(
+    page.locator('.active-exercise-card .set-row').first().getByLabel('Toistot'),
+  ).toHaveValue(expectedRepetitions)
+}
+
+async function seedStrengthHistory(
+  page: Page,
+  sessions: Array<{ workoutId: string; repetitions: number }>,
+) {
+  await page.evaluate(
+    async ({ sessions }) => {
+      const database = await new Promise<IDBDatabase>((resolve, reject) => {
+        const request = indexedDB.open('treenikompassi')
+        request.onsuccess = () => resolve(request.result)
+        request.onerror = () => reject(request.error)
+      })
+      const transaction = database.transaction('records', 'readwrite')
+      const store = transaction.objectStore('records')
+      const records = await new Promise<Array<Record<string, unknown>>>(
+        (resolve, reject) => {
+          const request = store.getAll()
+          request.onsuccess = () => resolve(request.result)
+          request.onerror = () => reject(request.error)
+        },
+      )
+      const replacedTables = new Set([
+        'workouts',
+        'workout_exercises',
+        'workout_logs',
+        'exercise_set_logs',
+      ])
+      for (const record of records) {
+        if (replacedTables.has(String(record.table))) store.delete(String(record.key))
+      }
+      const userId = '44444444-4444-4444-8444-444444444444'
+      for (const [index, session] of sessions.entries()) {
+        const id = crypto.randomUUID()
+        const performedAt = new Date(
+          Date.now() - (sessions.length - index) * 86_400_000,
+        ).toISOString()
+        const data = {
+          id,
+          user_id: userId,
+          created_at: performedAt,
+          updated_at: performedAt,
+          deleted_at: null,
+          version: 1,
+          workout_id: session.workoutId,
+          performed_at: performedAt,
+          duration_minutes: 35,
+          rpe: 6,
+          notes: null,
+          completion_status: 'COMPLETED',
+          feedback: {
+            completionStatus: 'COMPLETED',
+            sessionRpe: 6,
+            difficulty: 'RIGHT',
+            pain: 'NONE',
+            painLocation: '',
+            felt: 'SAME',
+            notes: '',
+            exerciseResults: [
+              {
+                exerciseCode: 'GOBLET_SQUAT',
+                exerciseVersion: '1.0.0',
+                exerciseName: 'Maljakyykky',
+                loadType: 'DUMBBELL_KG_EACH',
+                loadContextId: 'adult-resistance-load-context-1.0.0:dumbbell-kg-each',
+                loadIncrementKg: 1,
+                completedSets: 2,
+                plannedSets: 2,
+                completed: [true, true],
+                repetitions: [session.repetitions, session.repetitions],
+                loads: ['20', '20'],
+                rirs: [3, 3],
+                painResponses: ['NONE', 'NONE'],
+                techniqueOk: [true, true],
+                targetRepetitions: '8–12',
+                targetRpe: 7,
+                primaryMuscles: ['quadriceps', 'gluteals'],
+                secondaryMuscles: ['trunk', 'upper back'],
+              },
+            ],
+          },
+          decision_trace: {},
+        }
+        store.put({
+          key: `${userId}\u001fworkout_logs\u001f${id}`,
+          entityKey: `workout_logs\u001f${id}`,
+          id,
+          userId,
+          table: 'workout_logs',
+          data,
+          createdAt: performedAt,
+          updatedAt: performedAt,
+          deletedAt: null,
+          version: 1,
+          syncState: 'SYNCED',
+        })
+      }
+      await new Promise<void>((resolve, reject) => {
+        transaction.oncomplete = () => resolve()
+        transaction.onerror = () => reject(transaction.error)
+        transaction.onabort = () => reject(transaction.error)
+      })
+      database.close()
+    },
+    { sessions },
+  )
 }
 
 test('ydinpolku toimii pienillä mobiileilla ja työpöydällä', async ({
@@ -192,6 +339,60 @@ test('kartoituksesta syntynyt harjoitus voidaan suorittaa ja avata palautteineen
   ).toBeVisible()
   await expect(page.getByText('Liikkeet tuntuivat hallituilta.')).toBeVisible()
   await expect(page.getByText('Vaikutus seuraavaan harjoitukseen')).toBeVisible()
+})
+
+test('tallennetut voimaharjoituskerrat ohjaavat seuraavan käyttäjänäkymän progressiota', async ({
+  page,
+}) => {
+  await completeOnboarding(page, {
+    withStrengthSafetyContext: true,
+    strengthProgressionScenario: true,
+  })
+  await page.getByRole('link', { name: 'Aloita treeni' }).click()
+  await page.getByRole('button', { name: 'Ei mitään poikkeavaa' }).click()
+  await page.getByRole('link', { name: 'Avaa päivän harjoitus' }).click()
+  await expect(page.getByRole('heading', { name: 'Maljakyykky' })).toBeVisible()
+  const firstDose = await page
+    .locator('.exercise-plan-list li')
+    .filter({ hasText: 'Maljakyykky' })
+    .locator('.exercise-dose strong')
+    .textContent()
+  const maximumRepetitions = repetitionsFromDose(firstDose ?? '', true)
+  await seedStrengthHistory(page, [
+    {
+      workoutId: '55555555-5555-4555-8555-555555555551',
+      repetitions: maximumRepetitions - 1,
+    },
+  ])
+  await page.reload()
+  await page.getByRole('button', { name: 'Aloita harjoitus' }).click()
+  const repetitionsGuidance =
+    /Seuraava askel: lisää yksi toisto \(\d+\) ja säilytä sama kuorma\./u
+  await verifyProgressionSurvivesReload(
+    page,
+    repetitionsGuidance,
+    String(maximumRepetitions),
+    '20',
+  )
+
+  await seedStrengthHistory(page, [
+    {
+      workoutId: '55555555-5555-4555-8555-555555555552',
+      repetitions: maximumRepetitions,
+    },
+    {
+      workoutId: '55555555-5555-4555-8555-555555555553',
+      repetitions: maximumRepetitions,
+    },
+  ])
+  await page.reload()
+  await page.getByRole('button', { name: 'Aloita harjoitus' }).click()
+  await verifyProgressionSurvivesReload(
+    page,
+    /Seuraava askel: nosta kuorma vahvistettuun seuraavaan portaaseen \(21 kg\)\./u,
+    String(maximumRepetitions),
+    '21',
+  )
 })
 
 test('voimakas kipu keskeyttää harjoituksen ja estää progression', async ({

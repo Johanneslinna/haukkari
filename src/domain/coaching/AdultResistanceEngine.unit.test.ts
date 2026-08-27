@@ -5,6 +5,7 @@ import {
   decideInterSessionProgression,
   estimateAdultResistanceCapability,
   filterEligibleExercises,
+  generatePlan,
   prescribeAdultResistanceSession,
   prescribeResistanceDose,
   resolvePrescription,
@@ -14,6 +15,30 @@ import {
 } from '.'
 
 const generatedAt = '2026-08-25T12:00:00.000Z'
+const dumbbellLoadContext = 'adult-resistance-load-context-1.0.0:dumbbell-kg-each'
+const externalLoadContext = 'adult-resistance-load-context-1.0.0:external-kg'
+
+function successfulSet(
+  overrides: Partial<AdultResistanceSetHistory> = {},
+): AdultResistanceSetHistory {
+  return {
+    sessionId: 'workout-1',
+    exerciseCode: 'TEST_LIFT',
+    exerciseVersion: '1.0.0',
+    loadKg: 40,
+    loadType: 'EXTERNAL_KG',
+    loadContextId: externalLoadContext,
+    loadIncrementKg: 2.5,
+    repetitions: 8,
+    rir: 2,
+    completedAt: '2026-08-20T10:00:00.000Z',
+    pain: false,
+    techniqueOk: true,
+    completionStatus: 'COMPLETED',
+    doseCompleted: true,
+    ...overrides,
+  }
+}
 
 function context(
   overrides: Partial<AdultResistanceAthleteContext> = {},
@@ -76,27 +101,39 @@ describe('AdultResistanceEngine', () => {
   it('käyttää keskitasoisen salikäyttäjän kuorma-, toisto- ja RIR-historiaa', () => {
     const exercise = publishedExerciseCatalog.getExercise('GOBLET_SQUAT')!
     const history: AdultResistanceSetHistory[] = [
-      {
+      successfulSet({
+        sessionId: 'goblet-1',
         exerciseCode: 'GOBLET_SQUAT',
+        exerciseVersion: exercise.version,
         loadKg: 30,
+        loadType: 'DUMBBELL_KG_EACH',
+        loadContextId: dumbbellLoadContext,
         repetitions: 8,
         rir: 2,
         completedAt: '2026-08-10T10:00:00.000Z',
-      },
-      {
+      }),
+      successfulSet({
+        sessionId: 'goblet-2',
         exerciseCode: 'GOBLET_SQUAT',
+        exerciseVersion: exercise.version,
         loadKg: 32,
+        loadType: 'DUMBBELL_KG_EACH',
+        loadContextId: dumbbellLoadContext,
         repetitions: 8,
         rir: 2,
         completedAt: '2026-08-17T10:00:00.000Z',
-      },
-      {
+      }),
+      successfulSet({
+        sessionId: 'goblet-3',
         exerciseCode: 'GOBLET_SQUAT',
+        exerciseVersion: exercise.version,
         loadKg: 32,
+        loadType: 'DUMBBELL_KG_EACH',
+        loadContextId: dumbbellLoadContext,
         repetitions: 9,
         rir: 2,
         completedAt: '2026-08-24T10:00:00.000Z',
-      },
+      }),
     ]
     const athlete = context({
       experience: 'INTERMEDIATE',
@@ -313,40 +350,34 @@ describe('AdultResistanceEngine', () => {
   it('progressio muuttaa oikeaa kuormaa vasta kahden vertailukelpoisen onnistumisen jälkeen', () => {
     expect(
       decideInterSessionProgression({
-        comparableSessions: [
-          {
-            exerciseCode: 'TEST_LIFT',
-            exerciseVersion: '1.0.0',
-            loadKg: 40,
-            repetitions: 8,
-            rir: 2,
-            pain: false,
-            techniqueOk: true,
-          },
-        ],
+        comparableSessions: [successfulSet()],
         targetRir: [2, 3],
         loadIncrementKg: 2.5,
         targetExerciseCode: 'TEST_LIFT',
         targetExerciseVersion: '1.0.0',
+        targetLoadType: 'EXTERNAL_KG',
+        targetLoadContextId: externalLoadContext,
+        maximumRepetitions: 8,
+        generatedAt,
       }).action,
-    ).toBe('MAINTAIN_AND_COLLECT_MORE_DATA')
+    ).toBe('KEEP_LOAD')
     expect(
       decideInterSessionProgression({
         comparableSessions: [
-          ...Array.from({ length: 2 }, () => ({
-            exerciseCode: 'TEST_LIFT',
-            exerciseVersion: '1.0.0',
-            loadKg: 40,
-            repetitions: 8,
-            rir: 2,
-            pain: false,
-            techniqueOk: true,
-          })),
+          successfulSet({ sessionId: 'workout-1' }),
+          successfulSet({
+            sessionId: 'workout-2',
+            completedAt: '2026-08-24T10:00:00.000Z',
+          }),
         ],
         targetRir: [2, 3],
         loadIncrementKg: 2.5,
         targetExerciseCode: 'TEST_LIFT',
         targetExerciseVersion: '1.0.0',
+        targetLoadType: 'EXTERNAL_KG',
+        targetLoadContextId: externalLoadContext,
+        maximumRepetitions: 8,
+        generatedAt,
       }),
     ).toMatchObject({
       action: 'INCREASE_LOAD',
@@ -358,27 +389,348 @@ describe('AdultResistanceEngine', () => {
   it('estää todellisenkin painoportaan, jos automaattinen lisäys ylittää kymmenen prosenttia', () => {
     const decision = decideInterSessionProgression({
       comparableSessions: [
-        ...Array.from({ length: 2 }, () => ({
-          exerciseCode: 'TEST_LIFT',
-          exerciseVersion: '1.0.0',
+        successfulSet({ sessionId: 'workout-1', loadKg: 5, repetitions: 10 }),
+        successfulSet({
+          sessionId: 'workout-2',
           loadKg: 5,
           repetitions: 10,
-          rir: 2,
-          pain: false,
-          techniqueOk: true,
-        })),
+          completedAt: '2026-08-24T10:00:00.000Z',
+        }),
       ],
       targetRir: [2, 3],
       loadIncrementKg: 1,
       targetExerciseCode: 'TEST_LIFT',
       targetExerciseVersion: '1.0.0',
+      targetLoadType: 'EXTERNAL_KG',
+      targetLoadContextId: externalLoadContext,
+      maximumRepetitions: 10,
+      generatedAt,
     })
     expect(decision).toMatchObject({
-      action: 'MAINTAIN_AND_COLLECT_MORE_DATA',
+      action: 'KEEP_LOAD',
       changedVariable: 'NONE',
     })
-    expect(decision.nextLoadKg).toBeUndefined()
+    expect(decision.nextLoadKg).toBe(5)
     expect(decision.reasonCodes).toContain('LOAD_INCREMENT_EXCEEDS_TEN_PERCENT')
+  })
+
+  it('laskee saman WorkoutRecordin monta sarjaa vain yhdeksi exposureksi', () => {
+    const decision = decideInterSessionProgression({
+      comparableSessions: [
+        successfulSet({ sessionId: 'same-workout' }),
+        successfulSet({ sessionId: 'same-workout', repetitions: 8 }),
+      ],
+      targetExerciseCode: 'TEST_LIFT',
+      targetExerciseVersion: '1.0.0',
+      targetLoadType: 'EXTERNAL_KG',
+      targetLoadContextId: externalLoadContext,
+      targetRir: [2, 3],
+      maximumRepetitions: 8,
+      loadIncrementKg: 2.5,
+      generatedAt,
+    })
+
+    expect(decision.action).toBe('KEEP_LOAD')
+    expect(decision.supportingSessionIds).toEqual(['same-workout'])
+  })
+
+  it('vaatii legacy-historialta sessionId:n ennen tarkkaa kilogrammapäätöstä', () => {
+    const decision = decideInterSessionProgression({
+      comparableSessions: [successfulSet({ sessionId: undefined })],
+      targetExerciseCode: 'TEST_LIFT',
+      targetExerciseVersion: '1.0.0',
+      targetLoadType: 'EXTERNAL_KG',
+      targetLoadContextId: externalLoadContext,
+      targetRir: [2, 3],
+      maximumRepetitions: 8,
+      loadIncrementKg: 2.5,
+      generatedAt,
+    })
+
+    expect(decision).toMatchObject({
+      action: 'RECALIBRATE_LOAD',
+      supportingSessionIds: [],
+    })
+    expect(decision.reasonCodes).toContain('SESSION_IDENTITY_REQUIRED')
+  })
+
+  it('ei anna koneelle täsmällistä kilogramma-arviota ilman laitekontekstia', () => {
+    const exercise = publishedExerciseCatalog.getExercise('LEG_PRESS')!
+    const estimate = estimateAdultResistanceCapability(
+      exercise,
+      [
+        successfulSet({
+          sessionId: 'machine-1',
+          exerciseCode: exercise.code,
+          exerciseVersion: exercise.version,
+          loadType: 'MACHINE_KG',
+          loadContextId: undefined,
+        }),
+        successfulSet({
+          sessionId: 'machine-2',
+          exerciseCode: exercise.code,
+          exerciseVersion: exercise.version,
+          loadType: 'MACHINE_KG',
+          loadContextId: undefined,
+        }),
+      ],
+      generatedAt,
+      'INTERMEDIATE',
+    )
+
+    expect(estimate.calibrationRequired).toBe(true)
+    expect(estimate.workingLoadRangeKg).toBeUndefined()
+    expect(estimate.reasons).toContain('COMPARABLE_LOAD_CONTEXT_REQUIRED')
+  })
+
+  it.each([
+    ['BEGINNER', [6, 10]],
+    ['INTERMEDIATE', [5, 8]],
+    ['ADVANCED', [4, 6]],
+  ] as const)(
+    'antaa MAX_STRENGTH-käyttäjälle cold start -säännön mukaisen alueen (%s)',
+    (experience, expected) => {
+      const exercise = publishedExerciseCatalog.getExercise('GOBLET_SQUAT')!
+      const athlete = context({ experience, goal: 'MAX_STRENGTH' })
+      const reliableHistory =
+        experience === 'BEGINNER'
+          ? []
+          : [
+              successfulSet({
+                sessionId: 'goblet-1',
+                exerciseCode: exercise.code,
+                exerciseVersion: exercise.version,
+                loadType: 'DUMBBELL_KG_EACH',
+                loadContextId: dumbbellLoadContext,
+              }),
+              successfulSet({
+                sessionId: 'goblet-2',
+                exerciseCode: exercise.code,
+                exerciseVersion: exercise.version,
+                loadType: 'DUMBBELL_KG_EACH',
+                loadContextId: dumbbellLoadContext,
+                completedAt: '2026-08-24T10:00:00.000Z',
+              }),
+            ]
+      const capability = estimateAdultResistanceCapability(
+        exercise,
+        reliableHistory,
+        generatedAt,
+        experience,
+      )
+      const dose = prescribeResistanceDose(
+        createResistanceSessionObjective(athlete),
+        exercise,
+        capability,
+        athlete,
+        { comparableSetsThisWeek: 0 },
+      )
+
+      expect(dose.repetitions).toEqual(expected)
+      if (experience === 'BEGINNER') expect(capability.calibrationRequired).toBe(true)
+      else expect(capability.supportingSessionCount).toBe(2)
+    },
+  )
+
+  it('lisää yhden toiston yhden onnistuneen erillisen harjoituksen jälkeen', () => {
+    const decision = decideInterSessionProgression({
+      comparableSessions: [successfulSet({ repetitions: 7 })],
+      targetExerciseCode: 'TEST_LIFT',
+      targetExerciseVersion: '1.0.0',
+      targetLoadType: 'EXTERNAL_KG',
+      targetLoadContextId: externalLoadContext,
+      targetRir: [2, 3],
+      maximumRepetitions: 8,
+      loadIncrementKg: 2.5,
+      generatedAt,
+    })
+
+    expect(decision).toMatchObject({
+      action: 'INCREASE_REPETITIONS',
+      nextLoadKg: 40,
+      nextRepetitions: 8,
+      supportingSessionIds: ['workout-1'],
+    })
+  })
+
+  it.each([
+    { patch: { pain: true }, label: 'kipu' },
+    { patch: { techniqueOk: false }, label: 'tekniikkavirhe' },
+    {
+      patch: { completionStatus: 'STOPPED' as const, doseCompleted: false },
+      label: 'keskeytys',
+    },
+  ])('katkaisee onnistumisjakson: $label', ({ patch }) => {
+    const decision = decideInterSessionProgression({
+      comparableSessions: [
+        successfulSet({ sessionId: 'workout-1' }),
+        successfulSet({
+          sessionId: 'workout-2',
+          completedAt: '2026-08-22T10:00:00.000Z',
+        }),
+        successfulSet({
+          sessionId: 'workout-3',
+          completedAt: '2026-08-24T10:00:00.000Z',
+          ...patch,
+        }),
+      ],
+      targetExerciseCode: 'TEST_LIFT',
+      targetExerciseVersion: '1.0.0',
+      targetLoadType: 'EXTERNAL_KG',
+      targetLoadContextId: externalLoadContext,
+      targetRir: [2, 3],
+      maximumRepetitions: 8,
+      loadIncrementKg: 2.5,
+      generatedAt,
+    })
+
+    expect(decision.action).toBe('KEEP_LOAD')
+    expect(decision.reasonCodes).toContain('SUCCESS_STREAK_BROKEN')
+    expect(decision.supportingSessionIds).toEqual(['workout-3'])
+  })
+
+  it.each(['BODYWEIGHT', 'BAND'] as const)(
+    'ei muodosta %s-liikkeelle kilogrammaprogressiota',
+    (targetLoadType) => {
+      const decision = decideInterSessionProgression({
+        comparableSessions: [
+          successfulSet({ loadKg: null, loadType: targetLoadType, repetitions: 7 }),
+        ],
+        targetExerciseCode: 'TEST_LIFT',
+        targetExerciseVersion: '1.0.0',
+        targetLoadType,
+        targetRir: [2, 3],
+        maximumRepetitions: 8,
+        generatedAt,
+      })
+      expect(decision.action).toBe('INCREASE_REPETITIONS')
+      expect(decision.nextLoadKg).toBeUndefined()
+    },
+  )
+
+  it('kytkee progression resolvePrescription- ja PlanGenerator-tuotantopolkuun', () => {
+    const profile = {
+      goal: 'MAX_STRENGTH' as const,
+      experience: 'INTERMEDIATE' as const,
+      equipment: ['Käsipainot'],
+      physicalLoad: 'MODERATE' as const,
+      minutesPerSession: 45,
+      age: 35,
+      generatedAt,
+      readiness: 'GREEN' as const,
+    }
+    const baseline = resolvePrescription({
+      sessionId: 'production-baseline',
+      title: 'Voima',
+      kind: 'STRENGTH',
+      durationMinutes: 45,
+      profile,
+    })
+    if (baseline.status !== 'SUPPORTED') throw new Error(baseline.reasonCode)
+    const exercise = baseline.prescription.exercises.find(
+      (item) => item.loadContextId !== undefined,
+    )!
+    const upper = Number(exercise.repetitions?.match(/\d+$/u)?.[0] ?? 10)
+    const history = [
+      successfulSet({
+        sessionId: 'production-workout-1',
+        exerciseCode: exercise.code,
+        exerciseVersion: exercise.contentVersion,
+        loadType: exercise.loadType,
+        loadContextId: exercise.loadContextId,
+        repetitions: upper - 1,
+        rir: exercise.targetRir,
+      }),
+    ]
+    const resolved = resolvePrescription({
+      sessionId: 'production-next',
+      title: 'Voima',
+      kind: 'STRENGTH',
+      durationMinutes: 45,
+      profile: { ...profile, strengthHistory: history },
+    })
+    if (resolved.status !== 'SUPPORTED') throw new Error(resolved.reasonCode)
+    const resolvedExercise = resolved.prescription.exercises.find(
+      (item) => item.code === exercise.code,
+    )!
+    expect(resolvedExercise.progressionDecision).toMatchObject({
+      action: 'INCREASE_REPETITIONS',
+      nextRepetitions: upper,
+      supportingSessionIds: ['production-workout-1'],
+    })
+    expect(resolvedExercise.loadGuidance).toContain('lisää yksi toisto')
+    expect(resolved.prescription.decisionTrace.adaptations).toContainEqual(
+      expect.objectContaining({
+        original: expect.objectContaining({
+          supportingSessionIds: ['production-workout-1'],
+        }),
+        reasonCodes: expect.arrayContaining(['ONE_SUCCESSFUL_DISTINCT_SESSION']),
+      }),
+    )
+
+    const plan = generatePlan({
+      goal: { primary: 'MAX_STRENGTH', secondary: [], inputs: {} },
+      experience: 'INTERMEDIATE',
+      availableDays: [1, 3, 5],
+      currentEnduranceMinutes: 0,
+      fixedSessions: [],
+      competitions: [],
+      equipment: ['Käsipainot'],
+      minutesPerSession: 45,
+      age: 35,
+      generatedAt,
+      strengthHistory: history,
+    })
+    const plannedExercise = plan.decision.sessions
+      .find((session) => session.kind === 'STRENGTH')
+      ?.prescriptionDetail?.exercises.find((item) => item.code === exercise.code)
+    expect(plannedExercise?.progressionDecision?.supportingSessionIds).toEqual([
+      'production-workout-1',
+    ])
+
+    const loadProgression = resolvePrescription({
+      sessionId: 'production-load-progression',
+      title: 'Voima',
+      kind: 'STRENGTH',
+      durationMinutes: 45,
+      profile: {
+        ...profile,
+        strengthHistory: [
+          successfulSet({
+            sessionId: 'production-workout-1',
+            exerciseCode: exercise.code,
+            exerciseVersion: exercise.contentVersion,
+            loadType: exercise.loadType,
+            loadContextId: exercise.loadContextId,
+            repetitions: upper,
+            rir: exercise.targetRir,
+          }),
+          successfulSet({
+            sessionId: 'production-workout-2',
+            exerciseCode: exercise.code,
+            exerciseVersion: exercise.contentVersion,
+            loadType: exercise.loadType,
+            loadContextId: exercise.loadContextId,
+            repetitions: upper,
+            rir: exercise.targetRir,
+            completedAt: '2026-08-24T10:00:00.000Z',
+          }),
+        ],
+      },
+    })
+    if (loadProgression.status !== 'SUPPORTED')
+      throw new Error(loadProgression.reasonCode)
+    const loadExercise = loadProgression.prescription.exercises.find(
+      (item) => item.code === exercise.code,
+    )!
+    expect(loadExercise.progressionDecision).toMatchObject({
+      action: 'INCREASE_LOAD',
+      nextLoadKg: 42.5,
+      supportingSessionIds: ['production-workout-1', 'production-workout-2'],
+    })
+    expect(loadExercise.loadGuidance).toContain(
+      'nosta kuorma vahvistettuun seuraavaan portaaseen',
+    )
   })
 })
 

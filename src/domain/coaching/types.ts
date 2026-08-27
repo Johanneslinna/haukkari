@@ -334,9 +334,23 @@ export type CapabilityEstimate = {
   workingLoadRangeKg?: [number, number]
   confidence: 'LOW' | 'MODERATE' | 'HIGH'
   supportingSetCount: number
+  /** Eri tallennettujen harjoituskertojen määrä; sarjojen määrä ei korvaa tätä. */
+  supportingSessionCount?: number
+  /** Päätöksessä käytetyt pseudonyymit WorkoutRecord-tunnisteet. */
+  supportingSessionIds?: string[]
   latestValidSetAt?: string
   calibrationRequired: boolean
   reasons: string[]
+}
+
+export type ExerciseProgressionDecision = {
+  action: 'RECALIBRATE_LOAD' | 'KEEP_LOAD' | 'INCREASE_REPETITIONS' | 'INCREASE_LOAD'
+  nextLoadKg?: number
+  nextRepetitions?: number
+  changedVariable: 'NONE' | 'LOAD' | 'REPETITIONS'
+  reasonCodes: string[]
+  /** Eri WorkoutRecord-tunnisteet, joihin progression päätös perustuu. */
+  supportingSessionIds: string[]
 }
 
 export type UnsupportedPrescription = {
@@ -386,6 +400,10 @@ export type ExercisePrescription = {
   loadOptions?: string[]
   /** Vain käyttäjän välineille vahvistettu todellinen kuormaporras. */
   loadIncrementKg?: number
+  /** Versionoitu konteksti, jonka sisällä kilogrammat ovat vertailukelpoisia. */
+  loadContextId?: string
+  /** Kanoninen liikekohtainen seuraavan harjoituskerran progressiopäätös. */
+  progressionDecision?: ExerciseProgressionDecision
   techniqueVideoUrl?: string
   /** Harjoitekirjaston v2-metatiedot; puuttuvat vanhoista snapshot-versioista. */
   difficulty?: 'BEGINNER' | 'INTERMEDIATE' | 'ADVANCED'
@@ -467,11 +485,16 @@ export type WorkoutExerciseResult = {
   exerciseVersion?: string
   exerciseName: string
   loadType: ExerciseLoadType
+  loadContextId?: string
+  loadIncrementKg?: number
   completedSets: number
   plannedSets: number
+  completed?: boolean[]
   repetitions: Array<number | null>
   loads: Array<string | null>
   rirs?: Array<number | null>
+  painResponses?: Array<SetPainResponse | null>
+  techniqueOk?: Array<boolean | null>
   targetRepetitions?: string
   targetRpe: number
   primaryMuscles?: string[]

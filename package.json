@@ -17,6 +17,7 @@
     "typecheck": "tsc -b",
     "unit": "vitest run --config vitest.unit.config.ts",
     "audit:p0": "vitest run --config vitest.unit.config.ts src/domain/coaching/P0SafetyAudit.unit.test.ts && node scripts/audits/p0-property-audit.mjs",
+    "audit:p1-strength": "vitest run --config vitest.unit.config.ts src/domain/coaching/AdultResistanceEngine.unit.test.ts src/features/workout/WorkoutPage.history.unit.test.ts && node scripts/audits/p1-cold-start-progression-audit.mjs",
     "audit:time": "vitest run --config vitest.unit.config.ts src/domain/coaching/TimeBudgetPolicy.unit.test.ts && node scripts/audits/time-budget-examples.mjs",
     "integration": "vitest run --config vitest.integration.config.ts",
     "privacy:test": "node scripts/verify-phase5-privacy.mjs",

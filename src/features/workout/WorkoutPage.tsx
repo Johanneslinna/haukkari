@@ -10,11 +10,9 @@ import {
   evaluateWorkoutFeedback,
   legacyDose,
   normalizePrescriptionV2,
-  nextAutomaticLoadKg,
   resolvePrescription,
   refreshStrengthPrescriptionTimeEstimate,
   type CompletedSet,
-  type AdultResistanceSetHistory,
   type ExercisePrescription,
   type PrescribedSession,
   type PrescriptionResult,
@@ -51,6 +49,7 @@ import {
   currentWorkoutSafetyContext,
   storedReadiness,
 } from './WorkoutPrescriptionAdapter'
+import { strengthHistoryFromLogs } from './WorkoutHistory'
 
 const variantLabels: Record<WorkoutVariant['kind'], string> = {
   FULL: 'Täysi',
@@ -102,7 +101,6 @@ function createSetRows(
   prescription: PrescribedSession | null,
   persistedSets: LocalRecord[] = [],
   previousResults: WorkoutFeedback['exerciseResults'] = [],
-  progressionAction: WorkoutProgressionDecision['action'] = 'MAINTAIN',
 ): EditableSet[] {
   if (!prescription) return []
   return prescription.exercises.flatMap((exercise) =>
@@ -134,15 +132,15 @@ function createSetRows(
             : String(loadKg)
       const suggestedLoad = persisted
         ? persistedLoad
-        : progressionAction === 'PROGRESS_LOAD' && previousLoad
-          ? progressedLoad(exercise, previousLoad)
+        : exercise.progressionDecision?.action === 'INCREASE_LOAD' &&
+            exercise.progressionDecision.nextLoadKg !== undefined
+          ? String(exercise.progressionDecision.nextLoadKg).replace('.', ',')
           : previousLoad
       const suggestedRepetitions =
         !persisted &&
-        progressionAction === 'PROGRESS_LOAD' &&
-        exercise.loadType === 'BODYWEIGHT' &&
-        repetitions !== null
-          ? repetitions + 1
+        exercise.progressionDecision?.action === 'INCREASE_REPETITIONS' &&
+        exercise.progressionDecision.nextRepetitions !== undefined
+          ? exercise.progressionDecision.nextRepetitions
           : repetitions
       const rir =
         typeof persisted?.data.rir === 'number'
@@ -177,21 +175,6 @@ function createSetRows(
   )
 }
 
-function progressedLoad(exercise: ExercisePrescription, value: string) {
-  if (
-    exercise.loadType !== 'EXTERNAL_KG' &&
-    exercise.loadType !== 'DUMBBELL_KG_EACH' &&
-    exercise.loadType !== 'MACHINE_KG'
-  ) {
-    return value
-  }
-  const numeric = Number(value.replace(',', '.'))
-  if (!Number.isFinite(numeric)) return value
-  if (exercise.loadIncrementKg === undefined) return value
-  const nextLoad = nextAutomaticLoadKg(numeric, exercise.loadIncrementKg)
-  return nextLoad === null ? value : String(nextLoad).replace('.', ',')
-}
-
 function numericLoad(exercise: ExercisePrescription, value: string) {
   if (
     exercise.loadType !== 'EXTERNAL_KG' &&
@@ -214,35 +197,6 @@ function savedFeedback(record: LocalRecord) {
   return typeof value.sessionRpe === 'number'
     ? (value as unknown as WorkoutFeedback)
     : null
-}
-
-function strengthHistoryFromLogs(records: LocalRecord[]): AdultResistanceSetHistory[] {
-  return records.flatMap((record) => {
-    const feedback = savedFeedback(record)
-    if (!feedback?.exerciseResults) return []
-    const completedAt = stringValue(record.data.performed_at, record.createdAt)
-    return feedback.exerciseResults.flatMap((result) =>
-      result.repetitions.flatMap((repetitions, index) => {
-        if (index >= result.completedSets) return []
-        const load = result.loads[index]
-        const loadKg = load ? Number(load.replace(',', '.')) : Number.NaN
-        return [
-          {
-            exerciseCode: result.exerciseCode,
-            exerciseVersion: result.exerciseVersion,
-            primaryMuscles: result.primaryMuscles,
-            secondaryMuscles: result.secondaryMuscles,
-            loadKg: Number.isFinite(loadKg) && loadKg > 0 ? loadKg : null,
-            repetitions: repetitions ?? 0,
-            rir: result.rirs?.[index] ?? null,
-            completedAt,
-            pain: feedback.pain !== 'NONE',
-            techniqueOk: feedback.stopReason !== 'TECHNIQUE',
-          },
-        ]
-      }),
-    )
-  })
 }
 
 export function WorkoutPage() {
@@ -484,7 +438,7 @@ export function WorkoutPage() {
   const [runningPrescription, setRunningPrescription] =
     useState<PrescribedSession | null>(resumedPrescription)
   const [sets, setSets] = useState<EditableSet[]>(() =>
-    createSetRows(resumedPrescription, resumedSetLogs),
+    createSetRows(resumedPrescription, resumedSetLogs, previousResults),
   )
   const [activeExerciseIndex, setActiveExerciseIndex] = useState(0)
   const resumedSessionLocked = resumedPrescription
@@ -689,9 +643,7 @@ export function WorkoutPage() {
       })
       setActiveWorkout(workout)
       setRunningPrescription(previewPrescription)
-      setSets(
-        createSetRows(previewPrescription, [], previousResults, feedbackDecision.action),
-      )
+      setSets(createSetRows(previewPrescription, [], previousResults))
       setActiveExerciseIndex(0)
       setStage('EXECUTION')
     } catch (reason) {
@@ -861,13 +813,20 @@ export function WorkoutPage() {
           exerciseVersion: exercise.contentVersion,
           exerciseName: exercise.nameFi,
           loadType: exercise.loadType,
+          loadContextId: exercise.loadContextId,
+          loadIncrementKg: exercise.loadIncrementKg,
           completedSets: exerciseSets.filter((item) => item.completed).length,
           plannedSets: doseUnitCount(exercise),
+          completed: exerciseSets.map((item) => item.completed),
           repetitions: exerciseSets.map((item) =>
             parseOptionalNumber(item.repetitionsInput),
           ),
           loads: exerciseSets.map((item) => item.loadInput.trim() || null),
           rirs: exerciseSets.map((item) => parseOptionalNumber(item.rirInput)),
+          painResponses: exerciseSets.map((item) => item.painInput || null),
+          techniqueOk: exerciseSets.map((item) =>
+            item.techniqueInput === '' ? null : item.techniqueInput === 'OK',
+          ),
           targetRepetitions: exercise.repetitions,
           targetRpe: exercise.targetRpe,
           primaryMuscles: exercise.primaryMuscles,
@@ -1116,7 +1075,6 @@ export function WorkoutPage() {
       { ...nextPrescription, exercises: [replacementPart] },
       [],
       previousResults,
-      feedbackDecision.action,
     )
     setSets((current) => [
       ...current.filter(

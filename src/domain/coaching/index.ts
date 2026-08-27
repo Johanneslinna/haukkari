@@ -4,10 +4,12 @@ export type { ExerciseCapabilityEstimate } from './CapabilityEstimator'
 export {
   AdultResistanceEngine,
   ADULT_RESISTANCE_ENGINE_VERSION,
+  ADULT_RESISTANCE_LOAD_CONTEXT_VERSION,
   ADULT_RESISTANCE_RULE_VERSION,
   adaptNextSet,
   createResistanceSessionObjective,
   decideInterSessionProgression,
+  defaultResistanceLoadContextId,
   estimateAdultResistanceCapability,
   filterEligibleExercises,
   nextAutomaticLoadKg,
