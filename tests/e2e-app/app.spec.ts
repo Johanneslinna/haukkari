@@ -1,4 +1,12 @@
-import { expect, test, type Page } from '@playwright/test'
+import { expect, test, type Locator, type Page } from '@playwright/test'
+
+async function completeSetSafely(setRow: Locator) {
+  await setRow.getByLabel('Kipu sarjan aikana').selectOption('NONE')
+  await setRow.getByLabel('Tekniikka').selectOption('OK')
+  const completed = setRow.getByLabel('Valmis')
+  await completed.check()
+  await expect(completed).toBeChecked()
+}
 
 async function completeOnboarding(page: Page) {
   await page.goto('/')
@@ -89,9 +97,8 @@ test('käynnissä oleva harjoitus säilyy offline-latauksessa', async ({
   await page.getByRole('link', { name: 'Avaa päivän harjoitus' }).click()
   await page.getByRole('button', { name: 'Aloita harjoitus' }).click()
   await expect(page.getByText('Harjoitus käynnissä')).toBeVisible()
-  const firstCompletedSet = page.getByLabel('Valmis').first()
-  await firstCompletedSet.check()
-  await expect(firstCompletedSet).toBeChecked()
+  const firstSetRow = page.locator('.active-exercise-card .set-row').first()
+  await completeSetSafely(firstSetRow)
   await page.waitForTimeout(250)
   await expect(page).toHaveURL(/\/harjoitus$/u)
   await page.evaluate(() => navigator.serviceWorker.ready)
@@ -129,10 +136,10 @@ test('kartoituksesta syntynyt harjoitus voidaan suorittaa ja avata palautteineen
   await page.getByRole('button', { name: 'Aloita harjoitus' }).click()
 
   for (;;) {
+    const visibleSetRows = page.locator('.active-exercise-card .set-row')
     const visibleSetChecks = page.locator('.active-exercise-card').getByLabel('Valmis')
-    for (let index = 0; index < (await visibleSetChecks.count()); index += 1) {
-      await visibleSetChecks.nth(index).check()
-      await expect(visibleSetChecks.nth(index)).toBeChecked()
+    for (let index = 0; index < (await visibleSetRows.count()); index += 1) {
+      await completeSetSafely(visibleSetRows.nth(index))
     }
     await expect
       .poll(() =>
@@ -185,7 +192,9 @@ test('voimakas kipu keskeyttää harjoituksen ja estää progression', async ({
   await page.getByRole('link', { name: 'Avaa päivän harjoitus' }).click()
   await page.getByRole('button', { name: 'Aloita harjoitus' }).click()
   await page.getByRole('button', { name: 'Keskeytä harjoitus' }).click()
-  await page.getByRole('button', { name: 'Kipu', exact: true }).click()
+  await page
+    .getByRole('button', { name: 'Voimakas tai terävä kipu', exact: true })
+    .click()
 
   await expect(
     page.getByRole('heading', { name: 'Miten harjoitus toteutui?' }),
@@ -196,10 +205,10 @@ test('voimakas kipu keskeyttää harjoituksen ja estää progression', async ({
   await page.getByRole('button', { name: 'Tallenna harjoitus ja palaute' }).click()
 
   await expect(
-    page.getByRole('heading', { name: 'Kova harjoittelu odottaa arviota' }),
+    page.getByRole('heading', { name: 'Harjoittelua ei jatketa vielä' }),
   ).toBeVisible()
   await expect(
-    page.getByText(/Kirjasit voimakasta kipua.*oire pitää arvioida/u),
+    page.getByText(/Voimakas kipupalaute estää kuorman nostamisen.*arvioon/u),
   ).toBeVisible()
 })
 

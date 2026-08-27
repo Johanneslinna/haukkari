@@ -58,6 +58,8 @@ export function DailyCheckInPage() {
   const [soreness, setSoreness] = useState<'LOW' | 'NORMAL' | 'HIGH'>('NORMAL')
   const [safetySymptoms, setSafetySymptoms] = useState<SafetySymptom[]>([])
   const [illnessSymptoms, setIllnessSymptoms] = useState(false)
+  const [unilateralCalfSwelling, setUnilateralCalfSwelling] = useState(false)
+  const [calfPainAtRest, setCalfPainAtRest] = useState(false)
   const [painLocation, setPainLocation] = useState('')
   const [painSeverity, setPainSeverity] = useState<'MILD' | 'MODERATE' | 'SEVERE'>('MILD')
   const [altersGait, setAltersGait] = useState(false)
@@ -109,6 +111,12 @@ export function DailyCheckInPage() {
         motivation: detailed ? motivation : 'NORMAL',
         soreness: detailed ? soreness : 'NORMAL',
         illnessSymptoms: detailed ? illnessSymptoms : false,
+        vascularSymptoms: detailed
+          ? {
+              rapidlyIncreasingUnilateralCalfSwelling: unilateralCalfSwelling,
+              painAtRest: calfPainAtRest,
+            }
+          : undefined,
         newPain:
           detailed && painLocation
             ? { location: painLocation, severity: painSeverity, altersGait }
@@ -386,6 +394,29 @@ export function DailyCheckInPage() {
             onChange={(event) => setAltersGait(event.target.checked)}
           />
           <span>Kipu muuttaa kävelyä tai askelta.</span>
+        </label>
+      </fieldset>
+      <fieldset className="surface-card form">
+        <legend>Pohkeen uusi turvotus</legend>
+        <p className="muted-copy">
+          Vastaa molempiin kohtiin. Yhdistelmä estää harjoittelun ja ohjaa arvioon; ilman
+          rinta- tai hengitysoiretta sovellus ei anna automaattista 112-ohjetta.
+        </p>
+        <label className="checkbox-field">
+          <input
+            type="checkbox"
+            checked={unilateralCalfSwelling}
+            onChange={(event) => setUnilateralCalfSwelling(event.target.checked)}
+          />
+          <span>Toisessa pohkeessa on uusi, nopeasti lisääntyvä turvotus.</span>
+        </label>
+        <label className="checkbox-field">
+          <input
+            type="checkbox"
+            checked={calfPainAtRest}
+            onChange={(event) => setCalfPainAtRest(event.target.checked)}
+          />
+          <span>Samassa pohkeessa tuntuu kipua myös levossa.</span>
         </label>
       </fieldset>
       {menstrualTrackingEnabled && (

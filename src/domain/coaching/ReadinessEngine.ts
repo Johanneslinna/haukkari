@@ -23,6 +23,9 @@ const safetyLabels: Record<SafetySymptom, string> = {
   JOINT_GIVING_WAY: 'nivelen pettäminen',
 }
 
+const calfAssessmentAction =
+  'Älä harjoittele. Hakeudu nopeasti terveydenhuollon arvioon toispuoleisen, lisääntyvän pohjeturvotuksen ja levossa tuntuvan kivun vuoksi.'
+
 function compactVariant(availableMinutes: number): 10 | 20 | 30 | null {
   if (availableMinutes < 10) return null
   if (availableMinutes < 20) return 10
@@ -36,8 +39,16 @@ export function evaluateReadiness(
 ): ExplainableDecision<ReadinessDecision> {
   const gaitAlteringPain = input.newPain?.altersGait === true
   const severeNewPain = input.newPain?.severity === 'SEVERE'
+  const unilateralCalfAssessment =
+    input.vascularSymptoms?.rapidlyIncreasingUnilateralCalfSwelling === true &&
+    input.vascularSymptoms?.painAtRest === true
 
-  if (input.safetySymptoms.length > 0 || gaitAlteringPain || severeNewPain) {
+  if (
+    input.safetySymptoms.length > 0 ||
+    gaitAlteringPain ||
+    severeNewPain ||
+    unilateralCalfAssessment
+  ) {
     const hasEmergencySymptom = input.safetySymptoms.some((symptom) =>
       emergencySymptoms.has(symptom),
     )
@@ -49,8 +60,10 @@ export function evaluateReadiness(
       : null
     const action = hasEmergencySymptom
       ? 'Älä harjoittele. Hakeudu heti päivystysarvioon; henkeä uhkaavassa tilanteessa soita 112.'
-      : (gaitInstruction ??
-        'Älä harjoittele. Hakeudu oireeseen sopivaan terveydenhuollon arvioon.')
+      : unilateralCalfAssessment
+        ? calfAssessmentAction
+        : (gaitInstruction ??
+          'Älä harjoittele. Hakeudu oireeseen sopivaan terveydenhuollon arvioon.')
     return {
       decision: {
         state: 'RED_STOP',
@@ -63,9 +76,16 @@ export function evaluateReadiness(
       },
       reasons: [
         {
-          code: gaitAlteringPain ? 'GAIT_ALTERING_PAIN' : 'SAFETY_STOP',
+          code: gaitAlteringPain
+            ? 'GAIT_ALTERING_PAIN'
+            : unilateralCalfAssessment
+              ? 'UNILATERAL_CALF_SWELLING_WITH_REST_PAIN'
+              : 'SAFETY_STOP',
           message:
-            gaitInstruction ?? `Turvallisuusoire pysäyttää harjoituksen: ${symptoms}.`,
+            gaitInstruction ??
+            (unilateralCalfAssessment
+              ? 'Nopeasti lisääntyvä toispuoleinen pohjeturvotus ja kipu levossa edellyttävät arviota ennen harjoittelua.'
+              : `Turvallisuusoire pysäyttää harjoituksen: ${symptoms}.`),
           priority: 'SAFETY',
         },
       ],

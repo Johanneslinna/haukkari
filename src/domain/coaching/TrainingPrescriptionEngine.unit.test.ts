@@ -21,6 +21,7 @@ function profile(patch: Partial<PrescriptionProfile> = {}): PrescriptionProfile 
     physicalLoad: 'MODERATE',
     minutesPerSession: 45,
     age: 30,
+    readiness: 'GREEN',
     generatedAt,
     ...patch,
   }

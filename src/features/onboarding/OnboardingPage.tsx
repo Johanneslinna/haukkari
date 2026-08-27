@@ -1,7 +1,7 @@
 import { useState, type FormEvent, type ReactNode } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { goalStrategies } from '../../domain/coaching'
-import type { GoalType } from '../../domain/coaching/types'
+import type { ConfirmedLimitationTag, GoalType } from '../../domain/coaching/types'
 import { useAppData } from '../app-data/appDataContextValue'
 import {
   completeOnboarding,
@@ -58,6 +58,18 @@ const metricOptions = [
   'Kipuvapaat harjoitukset',
 ]
 
+const limitationOptions: Array<{ value: ConfirmedLimitationTag; label: string }> = [
+  { value: 'ACUTE_KNEE_PAIN', label: 'Akuutti polvikipu' },
+  { value: 'ACUTE_BACK_PAIN', label: 'Akuutti selkäkipu' },
+  { value: 'ACUTE_SHOULDER_PAIN', label: 'Akuutti olkapääkipu' },
+  { value: 'ACUTE_WRIST_PAIN', label: 'Akuutti rannekipu' },
+  { value: 'GAIT_ALTERING_PAIN', label: 'Kipu muuttaa kävelyä tai askelta' },
+  { value: 'OVERHEAD_RESTRICTION', label: 'Vältä liikettä pään yläpuolelle' },
+  { value: 'ACHILLES_PAIN', label: 'Akillesjänteen kipu' },
+  { value: 'CALF_INJURY', label: 'Pohjevamma' },
+  { value: 'HAMSTRING_INJURY', label: 'Takareisivamma' },
+]
+
 const dataControllerName =
   import.meta.env.VITE_DATA_CONTROLLER_NAME?.trim() ||
   'Rekisterinpitäjän virallinen nimi puuttuu kehitysversiosta'
@@ -101,6 +113,7 @@ const initialForm: OnboardingForm = {
   pregnancyStatus: 'NOT_APPLICABLE',
   doctorRestrictions: '',
   currentInjuries: '',
+  confirmedLimitationTags: [],
   pelvicFloorSymptoms: '',
   exertionWarningSymptoms: false,
   eatingDisorderHistory: false,
@@ -134,6 +147,15 @@ export function OnboardingPage() {
         : current.secondaryGoals.length < 2
           ? [...current.secondaryGoals, goal]
           : current.secondaryGoals,
+    }))
+  }
+
+  const toggleLimitation = (tag: ConfirmedLimitationTag) => {
+    setForm((current) => ({
+      ...current,
+      confirmedLimitationTags: current.confirmedLimitationTags.includes(tag)
+        ? current.confirmedLimitationTags.filter((item) => item !== tag)
+        : [...current.confirmedLimitationTags, tag],
     }))
   }
 
@@ -796,6 +818,26 @@ export function OnboardingPage() {
                   käytännön rajoitus, jos tiedät sen.
                 </FieldHelp>
               </label>
+              <fieldset className="form embedded-fieldset">
+                <legend>Vahvistetut liikerajoitteet</legend>
+                <p className="muted-copy">
+                  Vain tässä vahvistetut tunnisteet vaikuttavat automaattiseen
+                  liikevalintaan. Alla olevia vapaita tekstejä ei tulkita diagnoosiksi tai
+                  automaattiseksi liikerajoitteeksi.
+                </p>
+                <div className="choice-grid">
+                  {limitationOptions.map((option) => (
+                    <label className="choice-card" key={option.value}>
+                      <input
+                        type="checkbox"
+                        checked={form.confirmedLimitationTags.includes(option.value)}
+                        onChange={() => toggleLimitation(option.value)}
+                      />
+                      {option.label}
+                    </label>
+                  ))}
+                </div>
+              </fieldset>
               <label className="field">
                 <span>Kivut, vammat, leikkaukset ja liikerajoitteet</span>
                 <textarea
@@ -806,9 +848,9 @@ export function OnboardingPage() {
                   }
                 />
                 <FieldHelp>
-                  Tieto välitetään liikevalinnan rajoitteeksi ja kovatehoinen aloitus
-                  poistetaan. Päivän kuntotarkistuksessa uusi kipu voi vielä keventää tai
-                  estää harjoituksen.
+                  Teksti tallennetaan lisätiedoksi ja voi johtaa vahvistuspyyntöön, mutta
+                  moottori ei tee siitä automaattista lääketieteellistä päätöstä. Päivän
+                  kuntotarkistuksessa uusi kipu voi keventää tai estää harjoituksen.
                 </FieldHelp>
               </label>
               <label className="field">

@@ -10,6 +10,7 @@ export {
   decideInterSessionProgression,
   estimateAdultResistanceCapability,
   filterEligibleExercises,
+  nextAutomaticLoadKg,
   prescribeAdultResistanceSession,
   prescribeResistanceDose,
   scoreExerciseCandidates,
@@ -85,7 +86,27 @@ export {
   withExerciseDose,
 } from './PrescriptionContract'
 export { ReadinessEngine, evaluateReadiness } from './ReadinessEngine'
+export {
+  evaluateStrengthSafetyGate,
+  strengthSafetyGateMessage,
+} from './StrengthSafetyGate'
+export type {
+  StrengthSafetyGateDecision,
+  StrengthSafetyGateInput,
+  StrengthSafetyGateReasonCode,
+} from './StrengthSafetyGate'
 export { ScheduleOptimizer, optimizeSchedule } from './ScheduleOptimizer'
+export {
+  MAX_ROLLING_MUSCLE_SETS,
+  MAX_SESSION_PRIMARY_MUSCLE_SETS,
+  PRIMARY_MUSCLE_SET_WEIGHT,
+  SECONDARY_MUSCLE_SET_WEIGHT,
+  STRENGTH_VOLUME_POLICY_VERSION,
+  addPlannedSets,
+  calculateRollingMuscleVolume,
+  maximumAdditionalSets,
+} from './StrengthVolumePolicy'
+export type { MuscleVolume, VersionedStrengthSet } from './StrengthVolumePolicy'
 export {
   SportAdapterRegistry,
   getSportAdapter,

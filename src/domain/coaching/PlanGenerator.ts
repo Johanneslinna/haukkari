@@ -9,6 +9,7 @@ import {
 } from './TrainingPrescriptionEngine'
 import type {
   CompetitionEvent,
+  ConfirmedLimitationTag,
   ExplainableDecision,
   ExperienceLevel,
   GoalProfile,
@@ -36,6 +37,7 @@ export type PlanGenerationInput = {
   likes?: string
   dislikes?: string
   limitations?: string
+  confirmedLimitationTags?: ConfirmedLimitationTag[]
   healthBlocked?: boolean
   enduranceBackgroundKnown?: boolean
   medicationAffectsHeartRate?: boolean
@@ -321,11 +323,15 @@ export function generatePlan(
     likes: input.likes,
     dislikes: input.dislikes,
     limitations: input.limitations,
+    confirmedLimitationTags: input.confirmedLimitationTags,
     healthBlocked: athleteState.acute.healthBlocked,
     enduranceBackgroundKnown: input.enduranceBackgroundKnown,
     medicationAffectsHeartRate: input.medicationAffectsHeartRate,
     age: input.age,
     generatedAt: input.generatedAt,
+    // Viikkosuunnitelma on esikatselu; aktiivinen harjoitus portitetaan uudelleen
+    // samana päivänä tallennetulla kuntotarkistuksella.
+    readiness: 'GREEN',
   }
   const prescribedSessions = hockeyAdjustment.sessions.map((session) => {
     if (session.source !== 'APP') return session

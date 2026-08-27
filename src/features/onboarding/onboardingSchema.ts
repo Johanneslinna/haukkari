@@ -67,6 +67,21 @@ export const onboardingSchema = z
     ]),
     doctorRestrictions: z.string(),
     currentInjuries: z.string(),
+    confirmedLimitationTags: z
+      .array(
+        z.enum([
+          'ACUTE_KNEE_PAIN',
+          'ACUTE_BACK_PAIN',
+          'ACUTE_SHOULDER_PAIN',
+          'ACUTE_WRIST_PAIN',
+          'GAIT_ALTERING_PAIN',
+          'OVERHEAD_RESTRICTION',
+          'ACHILLES_PAIN',
+          'CALF_INJURY',
+          'HAMSTRING_INJURY',
+        ]),
+      )
+      .default([]),
     pelvicFloorSymptoms: z.string(),
     exertionWarningSymptoms: z.boolean(),
     eatingDisorderHistory: z.boolean(),
@@ -98,6 +113,7 @@ export function hasSensitiveHealthData(
     | 'pregnancyStatus'
     | 'doctorRestrictions'
     | 'currentInjuries'
+    | 'confirmedLimitationTags'
     | 'pelvicFloorSymptoms'
     | 'exertionWarningSymptoms'
     | 'eatingDisorderHistory'
@@ -115,6 +131,7 @@ export function hasSensitiveHealthData(
     value.healthNotes.trim().length > 0 ||
     value.doctorRestrictions.trim().length > 0 ||
     value.currentInjuries.trim().length > 0 ||
+    (value.confirmedLimitationTags?.length ?? 0) > 0 ||
     value.pelvicFloorSymptoms.trim().length > 0
   )
 }

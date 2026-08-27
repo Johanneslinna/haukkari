@@ -8,6 +8,7 @@ import type {
   SessionKind,
   WorkoutVariant,
   ExerciseLoadType,
+  ConfirmedLimitationTag,
   PrescriptionDose,
 } from './types'
 import {
@@ -30,6 +31,16 @@ import {
   TRAINING_CONTENT_RELEASE,
 } from './content/TrainingContent'
 import type { PrescriptionResult, UnsupportedPrescription } from './types'
+import {
+  evaluateStrengthSafetyGate,
+  strengthSafetyGateMessage,
+} from './StrengthSafetyGate'
+import {
+  addPlannedSets,
+  calculateRollingMuscleVolume,
+  maximumAdditionalSets,
+  type MuscleVolume,
+} from './StrengthVolumePolicy'
 
 export const TRAINING_RULE_VERSION = '2026.08.25-v2'
 
@@ -42,6 +53,7 @@ export type PrescriptionProfile = {
   likes?: string
   dislikes?: string
   limitations?: string
+  confirmedLimitationTags?: ConfirmedLimitationTag[]
   healthBlocked?: boolean
   enduranceBackgroundKnown?: boolean
   medicationAffectsHeartRate?: boolean
@@ -55,6 +67,13 @@ export type PrescriptionProfile = {
   ruleVersion?: string
 }
 
+function strengthSafetyInformationComplete(profile: PrescriptionProfile) {
+  const hasLegacyLimitationText = (profile.limitations?.trim().length ?? 0) > 0
+  return !(
+    hasLegacyLimitationText && (profile.confirmedLimitationTags?.length ?? 0) === 0
+  )
+}
+
 function decisionTrace(
   profile: PrescriptionProfile,
   rules: DecisionTrace['rules'],
@@ -62,7 +81,7 @@ function decisionTrace(
 ): DecisionTrace {
   const healthModified =
     profile.healthBlocked ||
-    profile.limitations?.trim() ||
+    (profile.confirmedLimitationTags?.length ?? 0) > 0 ||
     profile.physicalLoad === 'HIGH'
   return DecisionRecorder.record({
     ruleVersion: TRAINING_RULE_VERSION,
@@ -88,6 +107,12 @@ function decisionTrace(
 export function exerciseSubstitutions(
   exercise: ExercisePrescription,
   availableEquipment: string[],
+  constraints?: {
+    confirmedLimitationTags?: readonly ConfirmedLimitationTag[]
+    history?: readonly AdultResistanceSetHistory[]
+    generatedAt?: string
+    plannedExercises?: readonly ExercisePrescription[]
+  },
 ): ExercisePrescription[] {
   return exercise.substitutions.flatMap((name) => {
     const template = publishedExerciseCatalog
@@ -95,9 +120,40 @@ export function exerciseSubstitutions(
       .find((candidate) => candidate.nameFi === name && candidate.status === 'PUBLISHED')
     if (
       !template ||
-      !template.equipment.some((item) => availableEquipment.includes(item))
+      !template.equipment.some((item) => availableEquipment.includes(item)) ||
+      template.contraindicationTags.some((tag) =>
+        constraints?.confirmedLimitationTags?.includes(tag as ConfirmedLimitationTag),
+      )
     )
       return []
+    if (constraints?.history && constraints.generatedAt) {
+      const rollingVolume = calculateRollingMuscleVolume({
+        sets: constraints.history,
+        at: constraints.generatedAt,
+        catalog: publishedExerciseCatalog,
+      })
+      const sessionPrimaryVolume: MuscleVolume = {}
+      for (const planned of constraints.plannedExercises ?? []) {
+        if (planned.id === exercise.id) continue
+        const definition = publishedExerciseCatalog.getExercise(planned.code)
+        if (!definition) continue
+        addPlannedSets({
+          exercise: definition,
+          sets: planned.sets,
+          rollingVolume,
+          sessionPrimaryVolume,
+        })
+      }
+      if (
+        maximumAdditionalSets({
+          exercise: template,
+          rollingVolume,
+          sessionPrimaryVolume,
+        }) < exercise.sets
+      ) {
+        return []
+      }
+    }
     const primaryLoadType = template.loadTypes[0]
     const loadType: ExerciseLoadType =
       primaryLoadType === 'BAND' ||
@@ -110,6 +166,7 @@ export function exerciseSubstitutions(
       {
         ...exercise,
         code: template.code,
+        contentVersion: template.version,
         nameFi: template.nameFi,
         category: template.movementPatterns[0] ?? exercise.category,
         equipment: [...template.equipment],
@@ -132,6 +189,8 @@ export function exerciseSubstitutions(
           loadType === 'BAND'
             ? ['Erittäin kevyt', 'Kevyt', 'Keskivahva', 'Vahva', 'Erittäin vahva']
             : undefined,
+        primaryMuscles: [...template.primaryMuscles],
+        secondaryMuscles: [...template.secondaryMuscles],
         id: `${exercise.id}-sub-${template.code.toLocaleLowerCase('en-US')}`,
       },
     ]
@@ -144,15 +203,7 @@ function prescribeStrength(
   durationMinutes: number,
   profile: PrescriptionProfile,
 ): PrescribedSession {
-  const limitationText = profile.limitations?.toLocaleLowerCase('fi-FI') ?? ''
-  const limitationTags = [
-    ...(limitationText.includes('polv') ? ['ACUTE_KNEE_PAIN'] : []),
-    ...(limitationText.includes('selk') ? ['ACUTE_BACK_PAIN'] : []),
-    ...(limitationText.includes('olkap') ? ['ACUTE_SHOULDER_PAIN'] : []),
-    ...(limitationText.includes('kävel') || limitationText.includes('askel')
-      ? ['GAIT_ALTERING_PAIN']
-      : []),
-  ]
+  const limitationTags = profile.confirmedLimitationTags ?? []
   const likes = profile.likes?.toLocaleLowerCase('fi-FI') ?? ''
   const dislikes = profile.dislikes?.toLocaleLowerCase('fi-FI') ?? ''
   const likedExerciseCodes = publishedExerciseCatalog
@@ -167,7 +218,7 @@ function prescribeStrength(
     sessionId,
     title,
     context: {
-      age: profile.age ?? 18,
+      age: profile.age!,
       contentReleaseId: profile.contentReleaseId ?? TRAINING_CONTENT_RELEASE.releaseId,
       ruleVersion: profile.ruleVersion ?? ADULT_RESISTANCE_RULE_VERSION,
       experience: profile.experience,
@@ -185,7 +236,8 @@ function prescribeStrength(
       ),
       generatedAt: profile.generatedAt ?? TRAINING_CONTENT_RELEASE.publishedAt,
       physicalLoad: profile.physicalLoad,
-      readiness: profile.readiness ?? 'GREEN',
+      readiness: profile.readiness!,
+      healthBlocked: profile.healthBlocked,
       limitationTags,
       dislikedExerciseCodes,
       likedExerciseCodes,
@@ -213,7 +265,8 @@ function prescribeAerobic(
 ): PrescribedSession {
   const total = Math.max(5, Math.min(durationMinutes, profile.minutesPerSession))
   const mode = aerobicMode(profile)
-  const hardAllowed = !profile.healthBlocked && !profile.limitations?.trim()
+  const hardAllowed =
+    !profile.healthBlocked && (profile.confirmedLimitationTags?.length ?? 0) === 0
   const interval = kind === 'INTERVAL' && hardAllowed
   const warmupMinutes = total <= 10 ? 2 : total <= 20 ? 3 : 5
   const cooldownMinutes = total <= 10 ? 1 : total <= 20 ? 2 : 5
@@ -520,11 +573,15 @@ export function prescribeSession(input: {
   durationMinutes: number
   profile: PrescriptionProfile
 }): PrescribedSession {
-  if (input.profile.healthBlocked) {
-    throw new Error('UNSUPPORTED_PRESCRIPTION:HEALTH_ENGINE_NOT_AVAILABLE')
-  }
-  if (input.profile.age === undefined || input.profile.age < 18) {
-    throw new Error('UNSUPPORTED_PRESCRIPTION:YOUTH_ENGINE_NOT_AVAILABLE')
+  const gate = evaluateStrengthSafetyGate({
+    sessionKind: input.kind,
+    age: input.profile.age,
+    readiness: input.profile.readiness,
+    healthBlocked: input.profile.healthBlocked,
+    safetyInformationComplete: strengthSafetyInformationComplete(input.profile),
+  })
+  if (!gate.allowed) {
+    throw new Error(`UNSUPPORTED_PRESCRIPTION:${gate.reasonCode}`)
   }
   if (input.kind === 'STRENGTH') {
     return prescribeStrength(
@@ -595,28 +652,41 @@ export function resolvePrescription(input: {
   durationMinutes: number
   profile: PrescriptionProfile
 }): PrescriptionResult {
-  if (input.profile.healthBlocked) {
+  const gate = evaluateStrengthSafetyGate({
+    sessionKind: input.kind,
+    age: input.profile.age,
+    readiness: input.profile.readiness,
+    healthBlocked: input.profile.healthBlocked,
+    safetyInformationComplete: strengthSafetyInformationComplete(input.profile),
+  })
+  if (!gate.allowed) {
     return {
       status: 'UNSUPPORTED',
       sessionKind: input.kind,
-      reasonCode: 'HEALTH_ENGINE_NOT_AVAILABLE',
-      userMessage:
-        'Automaattista prescriptionia ei muodosteta ilmoitetun terveysrajoitteen, raskauden tai selvittämättömän oireen perusteella. Noudata terveydenhuollon ammattilaisen yksilöllisiä ohjeita.',
-    }
-  }
-  if (input.profile.age === undefined || input.profile.age < 18) {
-    return {
-      status: 'UNSUPPORTED',
-      sessionKind: input.kind,
-      reasonCode: 'YOUTH_ENGINE_NOT_AVAILABLE',
-      userMessage:
-        'Haukkarin automaattinen harjoitusmoottori on tässä versiossa tarkoitettu vähintään 18-vuotiaille. Junioriohjelmointi ei ole vielä käytössä.',
+      reasonCode: gate.reasonCode,
+      userMessage: strengthSafetyGateMessage(gate.reasonCode),
     }
   }
   if (input.kind === 'SPEED_POWER' || input.kind === 'SPORT' || input.kind === 'MATCH') {
     return unsupportedPrescription(input.kind)
   }
-  return { status: 'SUPPORTED', prescription: prescribeSession(input) }
+  try {
+    return { status: 'SUPPORTED', prescription: prescribeSession(input) }
+  } catch (reason) {
+    if (
+      reason instanceof Error &&
+      reason.message === 'UNSUPPORTED_PRESCRIPTION:NO_SAFE_STRENGTH_DOSE_AVAILABLE'
+    ) {
+      return {
+        status: 'UNSUPPORTED',
+        sessionKind: input.kind,
+        reasonCode: 'NO_SAFE_STRENGTH_DOSE_AVAILABLE',
+        userMessage:
+          'Tälle päivälle ei muodosteta uutta voimaharjoitusannosta, koska turvallinen viikkovolyymi tai vahvistetut rajoitteet eivät jätä sopivaa annosta.',
+      }
+    }
+    throw reason
+  }
 }
 
 function compactExerciseLimit(minutes: number) {
@@ -714,6 +784,16 @@ export function adaptPrescription(
   variant: WorkoutVariant,
   readiness: ReadinessState,
 ): PrescribedSession {
+  const readinessGate = evaluateStrengthSafetyGate({
+    sessionKind: prescription.kind,
+    // Alkuperäinen prescription on jo ikäportitettu. Tässä portitetaan uusi
+    // päivän valmiustila ennen kuin snapshotista johdetaan suoritettava versio.
+    age: 18,
+    readiness,
+  })
+  if (!readinessGate.allowed && readinessGate.reasonCode !== 'READINESS_RECOVERY_ONLY') {
+    throw new Error(`UNSUPPORTED_PRESCRIPTION:${readinessGate.reasonCode}`)
+  }
   if (readiness === 'ORANGE_RECOVERY') {
     return prescribeMobility(
       `${prescription.id}-recovery`,

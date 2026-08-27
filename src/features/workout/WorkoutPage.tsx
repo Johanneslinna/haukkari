@@ -11,6 +11,7 @@ import {
   evaluateWorkoutFeedback,
   legacyDose,
   normalizePrescriptionV2,
+  nextAutomaticLoadKg,
   resolvePrescription,
   type CompletedSet,
   type AdultResistanceSetHistory,
@@ -22,6 +23,8 @@ import {
   type WorkoutFeedback,
   type WorkoutProgressionDecision,
   type WorkoutVariant,
+  type SetPainResponse,
+  type ConfirmedLimitationTag,
 } from '../../domain/coaching'
 import type { LocalRecord } from '../../domain/sync/types'
 import { useAppData } from '../app-data/appDataContextValue'
@@ -29,6 +32,7 @@ import {
   activeGoalRecord,
   activeTrainingPlan,
   completeWorkout,
+  saveWorkoutAdaptation,
   saveWorkoutSet,
   startWorkout,
 } from '../coaching/coachingActions'
@@ -39,9 +43,9 @@ import {
   readinessLabels,
   sessionLabels,
   stringValue,
-  toJsonObject,
   todayIso,
 } from '../coaching/coachingData'
+import { canResumeWorkout, isLockedSafetyOutcome } from './WorkoutSafetyState'
 
 const variantLabels: Record<WorkoutVariant['kind'], string> = {
   FULL: 'Täysi',
@@ -51,10 +55,34 @@ const variantLabels: Record<WorkoutVariant['kind'], string> = {
   COMPACT_30: '30 min',
 }
 
+const confirmedLimitationTagValues = new Set<ConfirmedLimitationTag>([
+  'ACUTE_KNEE_PAIN',
+  'ACUTE_BACK_PAIN',
+  'ACUTE_SHOULDER_PAIN',
+  'ACUTE_WRIST_PAIN',
+  'GAIT_ALTERING_PAIN',
+  'OVERHEAD_RESTRICTION',
+  'ACHILLES_PAIN',
+  'CALF_INJURY',
+  'HAMSTRING_INJURY',
+])
+
+function confirmedLimitationTags(value: unknown): ConfirmedLimitationTag[] {
+  return Array.isArray(value)
+    ? value.filter(
+        (item): item is ConfirmedLimitationTag =>
+          typeof item === 'string' &&
+          confirmedLimitationTagValues.has(item as ConfirmedLimitationTag),
+      )
+    : []
+}
+
 type EditableSet = CompletedSet & {
   repetitionsInput: string
   loadInput: string
   rirInput: string
+  painInput: SetPainResponse | ''
+  techniqueInput: 'OK' | 'DEGRADED' | ''
 }
 
 function savedPrescription(record: LocalRecord | null) {
@@ -103,7 +131,10 @@ function createSetRows(
       })
       const details = objectValue(persisted?.data.data)
       const previous = previousResults?.find(
-        (result) => result.exerciseCode === exercise.code,
+        (result) =>
+          result.exerciseCode === exercise.code &&
+          exercise.contentVersion !== undefined &&
+          result.exerciseVersion === exercise.contentVersion,
       )
       const repetitions =
         typeof persisted?.data.repetitions === 'number'
@@ -134,6 +165,16 @@ function createSetRows(
         typeof persisted?.data.rir === 'number'
           ? persisted.data.rir
           : (previous?.rirs?.[index] ?? null)
+      const persistedPain =
+        typeof details.pain_response === 'string'
+          ? (details.pain_response as SetPainResponse)
+          : ''
+      const persistedTechnique =
+        typeof details.technique_ok === 'boolean'
+          ? details.technique_ok
+            ? 'OK'
+            : 'DEGRADED'
+          : ''
       return {
         exerciseId: exercise.id,
         setNumber,
@@ -146,6 +187,8 @@ function createSetRows(
           suggestedRepetitions === null ? '' : String(suggestedRepetitions),
         loadInput: suggestedLoad ?? '',
         rirInput: rir === null ? '' : String(rir),
+        painInput: persistedPain,
+        techniqueInput: persistedTechnique,
       }
     }),
   )
@@ -161,9 +204,9 @@ function progressedLoad(exercise: ExercisePrescription, value: string) {
   }
   const numeric = Number(value.replace(',', '.'))
   if (!Number.isFinite(numeric)) return value
-  const increment = exercise.loadType === 'DUMBBELL_KG_EACH' ? 1 : 2.5
-  const cappedIncrement = Math.min(increment, numeric * 0.05)
-  return String(Math.round((numeric + cappedIncrement) * 10) / 10).replace('.', ',')
+  if (exercise.loadIncrementKg === undefined) return value
+  const nextLoad = nextAutomaticLoadKg(numeric, exercise.loadIncrementKg)
+  return nextLoad === null ? value : String(nextLoad).replace('.', ',')
 }
 
 function numericLoad(exercise: ExercisePrescription, value: string) {
@@ -205,14 +248,17 @@ function strengthHistoryFromLogs(records: LocalRecord[]): AdultResistanceSetHist
     const completedAt = stringValue(record.data.performed_at, record.createdAt)
     return feedback.exerciseResults.flatMap((result) =>
       result.repetitions.flatMap((repetitions, index) => {
+        if (index >= result.completedSets) return []
         const load = result.loads[index]
         const loadKg = load ? Number(load.replace(',', '.')) : Number.NaN
-        if (repetitions === null || !Number.isFinite(loadKg) || loadKg <= 0) return []
         return [
           {
             exerciseCode: result.exerciseCode,
-            loadKg,
-            repetitions,
+            exerciseVersion: result.exerciseVersion,
+            primaryMuscles: result.primaryMuscles,
+            secondaryMuscles: result.secondaryMuscles,
+            loadKg: Number.isFinite(loadKg) && loadKg > 0 ? loadKg : null,
+            repetitions: repetitions ?? 0,
             rir: result.rirs?.[index] ?? null,
             completedAt,
             pain: feedback.pain !== 'NONE',
@@ -316,6 +362,7 @@ export function WorkoutPage() {
     const preferences = objectValue(goalRecord?.data.preferences)
     const screening = onboardingScreening
     const answers = objectValue(screening?.data.answers)
+    const limitationTags = confirmedLimitationTags(answers.confirmed_limitation_tags)
     const equipment = Array.isArray(settings.equipment)
       ? settings.equipment.filter((item): item is string => typeof item === 'string')
       : ['Kehonpaino']
@@ -353,6 +400,7 @@ export function WorkoutPage() {
         ]
           .filter(Boolean)
           .join(' · '),
+        confirmedLimitationTags: limitationTags,
         healthBlocked:
           screening?.data.status === 'HIGH_INTENSITY_BLOCKED' ||
           screening?.data.status === 'NEEDS_REVIEW',
@@ -410,10 +458,23 @@ export function WorkoutPage() {
     createSetRows(resumedPrescription, resumedSetLogs),
   )
   const [activeExerciseIndex, setActiveExerciseIndex] = useState(0)
-  const [stage, setStage] = useState<'EXECUTION' | 'FEEDBACK'>('EXECUTION')
+  const resumedSessionLocked = resumedPrescription
+    ? isLockedSafetyOutcome(resumedPrescription.decisionTrace.safetyOutcome)
+    : false
+  const [stage, setStage] = useState<'EXECUTION' | 'FEEDBACK'>(
+    resumedSessionLocked ? 'FEEDBACK' : 'EXECUTION',
+  )
+  const [sessionLockReason, setSessionLockReason] = useState<string | null>(
+    resumedSessionLocked
+      ? (resumedPrescription?.decisionTrace.adaptations?.at(-1)?.reasonCodes[0] ??
+          'SESSION_STOP_LOCKED')
+      : null,
+  )
+  const [stoppedExerciseIds, setStoppedExerciseIds] = useState<string[]>([])
   const [restSeconds, setRestSeconds] = useState(0)
-  const [completionStatus, setCompletionStatus] =
-    useState<WorkoutCompletionStatus>('COMPLETED')
+  const [completionStatus, setCompletionStatus] = useState<WorkoutCompletionStatus>(
+    resumedSessionLocked ? 'STOPPED' : 'COMPLETED',
+  )
   const [rpe, setRpe] = useState(6)
   const [difficulty, setDifficulty] = useState<WorkoutFeedback['difficulty']>('RIGHT')
   const [pain, setPain] = useState<WorkoutFeedback['pain']>('NONE')
@@ -619,15 +680,85 @@ export function WorkoutPage() {
     window.requestAnimationFrame(() => window.scrollTo({ top: 0, left: 0 }))
   }
 
+  const recordAdaptation = (
+    original: Record<string, string | number | boolean | null>,
+    adjusted: Record<string, string | number | boolean | null>,
+    reasonCodes: string[],
+    safetyOutcome?: 'MODIFY' | 'STOP',
+  ) => {
+    if (!runningPrescription) return
+    const nextPrescription: PrescribedSession = {
+      ...runningPrescription,
+      decisionTrace: {
+        ...runningPrescription.decisionTrace,
+        safetyOutcome:
+          safetyOutcome === 'STOP'
+            ? 'STOP'
+            : safetyOutcome === 'MODIFY' &&
+                runningPrescription.decisionTrace.safetyOutcome === 'PROCEED'
+              ? 'MODIFY'
+              : runningPrescription.decisionTrace.safetyOutcome,
+        adaptations: [
+          ...(runningPrescription.decisionTrace.adaptations ?? []),
+          { original, adjusted, reasonCodes },
+        ],
+      },
+    }
+    setRunningPrescription(nextPrescription)
+    if (!activeWorkout) return
+    void saveWorkoutAdaptation(data, activeWorkout, nextPrescription).catch(
+      (reason: unknown) => {
+        setError(
+          reason instanceof Error
+            ? reason.message
+            : 'Harjoituksen muutosta ei voitu tallentaa.',
+        )
+      },
+    )
+  }
+
+  const lockSession = (
+    reasonCode: string,
+    original: Record<string, string | number | boolean | null> = {
+      sessionStatus: 'IN_PROGRESS',
+    },
+    action = 'LOCK_SESSION_STOP',
+  ) => {
+    recordAdaptation(original, { action, sessionStatus: 'STOPPED' }, [reasonCode], 'STOP')
+    setSessionLockReason(reasonCode)
+    setCompletionStatus('STOPPED')
+    setRestSeconds(0)
+    showStage('FEEDBACK')
+  }
+
   const stopForSymptoms = (reason: NonNullable<WorkoutFeedback['stopReason']>) => {
     setStopReason(reason)
     setCompletionStatus('STOPPED')
-    if (reason === 'PAIN') setPain('MODERATE')
-    if (reason === 'DIZZINESS' || reason === 'BREATHING' || reason === 'PAIN') {
+    if (reason === 'PAIN') setPain('SEVERE')
+    if (
+      reason === 'DIZZINESS' ||
+      reason === 'BREATHING' ||
+      reason === 'NEUROLOGICAL' ||
+      reason === 'PAIN'
+    ) {
       setFelt('WORSE')
     }
     setStopPanelOpen(false)
-    showStage('FEEDBACK')
+    const reasonCode =
+      reason === 'PAIN'
+        ? 'SEVERE_PAIN_REPORTED'
+        : reason === 'DIZZINESS'
+          ? 'DIZZINESS_SESSION_STOP'
+          : reason === 'BREATHING'
+            ? 'CARDIORESPIRATORY_SESSION_STOP'
+            : reason === 'NEUROLOGICAL'
+              ? 'NEUROLOGICAL_SESSION_STOP'
+              : null
+    if (reasonCode) {
+      lockSession(reasonCode)
+    } else {
+      showStage('FEEDBACK')
+    }
   }
 
   const goToFeedback = () => {
@@ -649,6 +780,9 @@ export function WorkoutPage() {
       loadText: set.loadInput.trim() || null,
       rir: parseOptionalNumber(set.rirInput),
       completed: set.completed,
+      painResponse: set.painInput || undefined,
+      techniqueOk: set.techniqueInput === '' ? undefined : set.techniqueInput === 'OK',
+      adaptationReasonCodes: set.adaptationReasonCodes,
     }).catch((reason: unknown) => {
       setError(reason instanceof Error ? reason.message : 'Sarjaa ei voitu tallentaa.')
     })
@@ -682,6 +816,7 @@ export function WorkoutPage() {
         const exerciseSets = sets.filter((item) => item.exerciseId === exercise.id)
         return {
           exerciseCode: exercise.code,
+          exerciseVersion: exercise.contentVersion,
           exerciseName: exercise.nameFi,
           loadType: exercise.loadType,
           completedSets: exerciseSets.filter((item) => item.completed).length,
@@ -693,6 +828,8 @@ export function WorkoutPage() {
           rirs: exerciseSets.map((item) => parseOptionalNumber(item.rirInput)),
           targetRepetitions: exercise.repetitions,
           targetRpe: exercise.targetRpe,
+          primaryMuscles: exercise.primaryMuscles,
+          secondaryMuscles: exercise.secondaryMuscles,
         }
       }),
     }
@@ -713,6 +850,10 @@ export function WorkoutPage() {
             loadText: item.loadInput.trim() || null,
             rir: parseOptionalNumber(item.rirInput),
             completed: item.completed,
+            painResponse: item.painInput || undefined,
+            techniqueOk:
+              item.techniqueInput === '' ? undefined : item.techniqueInput === 'OK',
+            adaptationReasonCodes: item.adaptationReasonCodes,
           }
         }),
       })
@@ -734,7 +875,14 @@ export function WorkoutPage() {
     ? profileSettings.equipment.filter((item): item is string => typeof item === 'string')
     : ['Kehonpaino']
   const alternatives = activeExercise
-    ? exerciseSubstitutions(activeExercise, availableEquipment)
+    ? exerciseSubstitutions(activeExercise, availableEquipment, {
+        confirmedLimitationTags: confirmedLimitationTags(
+          objectValue(onboardingScreening?.data.answers).confirmed_limitation_tags,
+        ),
+        history: strengthHistoryFromLogs(workoutLogs),
+        generatedAt: new Date().toISOString(),
+        plannedExercises: prescription.exercises,
+      })
     : []
   const capability = activeExercise
     ? estimateExerciseCapability(
@@ -753,23 +901,72 @@ export function WorkoutPage() {
     const repetitions = parseOptionalNumber(completed.repetitionsInput)
     const completedRir = parseOptionalNumber(completed.rirInput)
     const completedLoadKg = numericLoad(exercise, completed.loadInput)
-    if (repetitions === null || completedRir === null) return
+    if (
+      repetitions === null ||
+      completed.painInput === '' ||
+      completed.techniqueInput === ''
+    ) {
+      setError('Kirjaa sarjan toistot, RIR, kipu ja tekniikan onnistuminen.')
+      return
+    }
     const targetRepetitions = Number(
       exercise.repetitions?.match(/\d+/u)?.[0] ?? repetitions,
     )
-    const loadIncrementKg = exercise.loadType === 'DUMBBELL_KG_EACH' ? 1 : 2.5
+    const loadIncrementKg = exercise.loadIncrementKg ?? Number.POSITIVE_INFINITY
     const adaptation = adaptNextSet({
       prescribedLoadKg: completedLoadKg ?? undefined,
       prescribedRepetitions: targetRepetitions,
       targetRir: [exercise.targetRir, Math.min(5, exercise.targetRir + 1)],
       completedLoadKg: completedLoadKg ?? undefined,
       completedRepetitions: repetitions,
-      completedRir,
-      pain: 'NONE',
-      techniqueOk: true,
+      completedRir: completedRir ?? undefined,
+      pain: completed.painInput,
+      techniqueOk: completed.techniqueInput === 'OK',
       experience: currentExperience,
       loadIncrementKg,
     })
+    const original = {
+      exerciseCode: exercise.code,
+      exerciseVersion: exercise.contentVersion ?? 'legacy',
+      setNumber: completed.setNumber,
+      loadKg: completedLoadKg,
+      repetitions,
+      rir: completedRir,
+      pain: completed.painInput,
+      techniqueOk: completed.techniqueInput === 'OK',
+    }
+    if (adaptation.action === 'REFER_SAFETY') {
+      setPain('SEVERE')
+      setStopReason('PAIN')
+      persistSet({ ...completed, adaptationReasonCodes: adaptation.reasonCodes })
+      lockSession(
+        adaptation.reasonCodes[0] ?? 'SEVERE_PAIN_REPORTED',
+        original,
+        adaptation.action,
+      )
+      return
+    }
+    recordAdaptation(
+      original,
+      {
+        action: adaptation.action,
+        nextLoadKg: adaptation.adjustedLoadKg ?? null,
+        nextRepetitions: adaptation.adjustedRepetitions ?? null,
+      },
+      adaptation.reasonCodes,
+      adaptation.action === 'STOP_EXERCISE' ? 'MODIFY' : undefined,
+    )
+    persistSet({ ...completed, adaptationReasonCodes: adaptation.reasonCodes })
+    if (adaptation.action === 'STOP_EXERCISE') {
+      setStoppedExerciseIds((current) =>
+        current.includes(exercise.id) ? current : [...current, exercise.id],
+      )
+      setRestSeconds(0)
+      setError(
+        'Liike pysäytettiin ilmoitetun kivun tai tekniikan heikkenemisen vuoksi. Älä tee liikkeen jäljellä olevia sarjoja.',
+      )
+      return
+    }
     const nextSetNumber = completed.setNumber + 1
     setSets((current) =>
       current.map((candidate) => {
@@ -795,69 +992,99 @@ export function WorkoutPage() {
         return candidate
       }),
     )
-    setRunningPrescription((current) =>
-      current
-        ? {
-            ...current,
-            decisionTrace: {
-              ...current.decisionTrace,
-              adaptations: [
-                ...(current.decisionTrace.adaptations ?? []),
-                {
-                  original: {
-                    exerciseCode: exercise.code,
-                    setNumber: completed.setNumber,
-                    loadKg: completedLoadKg,
-                    repetitions,
-                    rir: completedRir,
-                  },
-                  adjusted: {
-                    action: adaptation.action,
-                    nextLoadKg: adaptation.adjustedLoadKg ?? null,
-                    nextRepetitions: adaptation.adjustedRepetitions ?? null,
-                  },
-                  reasonCodes: adaptation.reasonCodes,
-                },
-              ],
-            },
-          }
-        : current,
-    )
   }
 
   const switchExercise = (replacement: ExercisePrescription) => {
     if (!runningPrescription || !activeExercise) return
-    const completedForExercise = sets.some(
+    const completedForExercise = sets.filter(
       (item) => item.exerciseId === activeExercise.id && item.completed,
     )
-    if (completedForExercise) {
-      alert(
-        'Liikkeestä on jo kirjattu sarjoja. Palaa vaihtamaan liike ennen ensimmäistä sarjaa tai jatka nykyinen liike loppuun.',
+    const remainingUnits = doseUnitCount(activeExercise) - completedForExercise.length
+    if (remainingUnits <= 0) {
+      setError(
+        'Liikkeen kaikki osuudet on jo kirjattu, joten korvaavaa liikettä ei tarvita.',
       )
       return
     }
+    const resizeStrengthExercise = (
+      exercise: ExercisePrescription,
+      units: number,
+    ): ExercisePrescription => {
+      const dose = legacyDose(exercise)
+      if (dose.kind !== 'STRENGTH_SETS') return { ...exercise, sets: units }
+      return {
+        ...exercise,
+        sets: units,
+        dose: { ...dose, sets: units },
+      }
+    }
+    const completedPart = resizeStrengthExercise(
+      activeExercise,
+      completedForExercise.length,
+    )
+    const replacementPart = resizeStrengthExercise(replacement, remainingUnits)
+    const replaceInList = (exercise: ExercisePrescription) =>
+      exercise.id !== activeExercise.id
+        ? [exercise]
+        : completedForExercise.length > 0
+          ? [completedPart, replacementPart]
+          : [replacementPart]
     const nextPrescription: PrescribedSession = {
       ...runningPrescription,
-      exercises: runningPrescription.exercises.map((exercise) =>
-        exercise.id === activeExercise.id ? replacement : exercise,
-      ),
-      blocks: runningPrescription.blocks?.map((exercise) =>
-        exercise.id === activeExercise.id ? replacement : exercise,
-      ),
+      exercises: runningPrescription.exercises.flatMap(replaceInList),
+      blocks: runningPrescription.blocks?.flatMap(replaceInList),
+      decisionTrace: {
+        ...runningPrescription.decisionTrace,
+        safetyOutcome:
+          runningPrescription.decisionTrace.safetyOutcome === 'PROCEED'
+            ? 'MODIFY'
+            : runningPrescription.decisionTrace.safetyOutcome,
+        adaptations: [
+          ...(runningPrescription.decisionTrace.adaptations ?? []),
+          {
+            original: {
+              exerciseCode: activeExercise.code,
+              completedUnits: completedForExercise.length,
+              remainingUnits,
+            },
+            adjusted: {
+              action: 'SUBSTITUTE_REMAINING_UNITS',
+              replacementCode: replacement.code,
+              replacementUnits: remainingUnits,
+            },
+            reasonCodes: ['USER_SELECTED_SAFE_SUBSTITUTION'],
+          },
+        ],
+      },
     }
     const replacementRows = createSetRows(
-      { ...nextPrescription, exercises: [replacement] },
+      { ...nextPrescription, exercises: [replacementPart] },
       [],
       previousResults,
       feedbackDecision.action,
     )
     setSets((current) => [
-      ...current.filter((item) => item.exerciseId !== activeExercise.id),
+      ...current.filter(
+        (item) => item.exerciseId !== activeExercise.id || item.completed,
+      ),
       ...replacementRows,
     ])
     setRunningPrescription(nextPrescription)
+    if (completedForExercise.length > 0) {
+      setActiveExerciseIndex((index) => index + 1)
+    }
+    setStoppedExerciseIds((current) => current.filter((id) => id !== activeExercise.id))
+    setError('')
     if (activeWorkout) {
-      void data.update(activeWorkout, toJsonObject({ prescription: nextPrescription }))
+      void saveWorkoutAdaptation(data, activeWorkout, nextPrescription).catch(
+        (reason: unknown) => {
+          setError(
+            reason instanceof Error
+              ? reason.message
+              : 'Liikkeen vaihtoa ei voitu tallentaa.',
+          )
+        },
+      )
     }
   }
 
@@ -1115,12 +1342,74 @@ export function WorkoutPage() {
                       />
                     </label>
                   )}
+                  {usesStrengthLog(activeExercise) && (
+                    <label className="compact-field">
+                      <span>Kipu sarjan aikana</span>
+                      <select
+                        value={item.painInput}
+                        disabled={
+                          sessionLockReason !== null ||
+                          stoppedExerciseIds.includes(activeExercise.id)
+                        }
+                        onChange={(event) =>
+                          updateSet(activeExercise.id, item.setNumber, {
+                            painInput: event.target.value as EditableSet['painInput'],
+                          })
+                        }
+                      >
+                        <option value="">Valitse</option>
+                        <option value="NONE">Ei kipua</option>
+                        <option value="MILD">Lievä, ei pahene</option>
+                        <option value="WORSENING">Paheneva kipu</option>
+                        <option value="SHARP">Terävä tai repivä kipu</option>
+                        <option value="FUNCTION_ALTERING">Muuttaa liikettä</option>
+                        <option value="SEVERE">Voimakas kipu</option>
+                      </select>
+                    </label>
+                  )}
+                  {usesStrengthLog(activeExercise) && (
+                    <label className="compact-field">
+                      <span>Tekniikka</span>
+                      <select
+                        value={item.techniqueInput}
+                        disabled={
+                          sessionLockReason !== null ||
+                          stoppedExerciseIds.includes(activeExercise.id)
+                        }
+                        onChange={(event) =>
+                          updateSet(activeExercise.id, item.setNumber, {
+                            techniqueInput: event.target
+                              .value as EditableSet['techniqueInput'],
+                          })
+                        }
+                      >
+                        <option value="">Valitse</option>
+                        <option value="OK">Pysyi hallittuna</option>
+                        <option value="DEGRADED">Heikkeni</option>
+                      </select>
+                    </label>
+                  )}
                   <label className="set-complete">
                     <input
                       type="checkbox"
                       checked={item.completed}
+                      disabled={
+                        sessionLockReason !== null ||
+                        stoppedExerciseIds.includes(activeExercise.id)
+                      }
                       onChange={(event) => {
+                        if (
+                          event.target.checked &&
+                          usesStrengthLog(activeExercise) &&
+                          (item.painInput === '' || item.techniqueInput === '')
+                        ) {
+                          setError(
+                            'Valitse sarjan kiputieto ja tekniikan onnistuminen ennen valmiiksi merkitsemistä.',
+                          )
+                          return
+                        }
                         const nextSet = { ...item, completed: event.target.checked }
+                        setError('')
                         updateSet(activeExercise.id, item.setNumber, nextSet)
                         persistSet(nextSet)
                         if (nextSet.completed && activeExercise.restSeconds > 0) {
@@ -1176,13 +1465,16 @@ export function WorkoutPage() {
               <strong>Miksi keskeytät?</strong>
               <div className="button-row">
                 <button type="button" onClick={() => stopForSymptoms('PAIN')}>
-                  Kipu
+                  Voimakas tai terävä kipu
                 </button>
                 <button type="button" onClick={() => stopForSymptoms('DIZZINESS')}>
                   Huimaus tai pyörtymisen tunne
                 </button>
                 <button type="button" onClick={() => stopForSymptoms('BREATHING')}>
                   Hengitysvaikeus tai rintaoire
+                </button>
+                <button type="button" onClick={() => stopForSymptoms('NEUROLOGICAL')}>
+                  Uusi neurologinen oire
                 </button>
                 <button type="button" onClick={() => stopForSymptoms('TECHNIQUE')}>
                   Tekniikka ei pysy
@@ -1255,10 +1547,17 @@ export function WorkoutPage() {
               etenemispäätökseen, mutta ei muuta tavoitettasi automaattisesti.
             </p>
           </div>
+          {sessionLockReason && (
+            <div className="status-banner danger" role="alert">
+              <strong>Harjoitus on lukittu STOP-tilaan.</strong> Harjoitteluun ei voi
+              palata tästä näkymästä. Päätöstunnus: {sessionLockReason}.
+            </div>
+          )}
           <label className="field">
             <span>Toteuma</span>
             <select
               value={completionStatus}
+              disabled={sessionLockReason !== null}
               onChange={(event) =>
                 setCompletionStatus(event.target.value as WorkoutCompletionStatus)
               }
@@ -1348,13 +1647,15 @@ export function WorkoutPage() {
             />
           </label>
           <div className="button-row">
-            <button
-              className="button button-secondary"
-              type="button"
-              onClick={() => showStage('EXECUTION')}
-            >
-              Takaisin harjoitukseen
-            </button>
+            {canResumeWorkout(sessionLockReason) && (
+              <button
+                className="button button-secondary"
+                type="button"
+                onClick={() => showStage('EXECUTION')}
+              >
+                Takaisin harjoitukseen
+              </button>
+            )}
             <button className="button button-primary" disabled={pending}>
               {pending ? 'Tallennetaan…' : 'Tallenna harjoitus ja palaute'}
             </button>

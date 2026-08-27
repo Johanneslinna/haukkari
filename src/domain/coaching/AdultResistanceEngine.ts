@@ -3,7 +3,12 @@ import {
   type ExerciseCatalog,
   type ExerciseDefinition,
 } from './content/TrainingContent'
-import { prescriptionDurationSeconds, withV2Blocks } from './PrescriptionContract'
+import {
+  doseDurationSeconds,
+  legacyDose,
+  prescriptionDurationSeconds,
+  withV2Blocks,
+} from './PrescriptionContract'
 import type {
   CapabilityEstimate,
   ExerciseLoadType,
@@ -11,8 +16,17 @@ import type {
   ExperienceLevel,
   GoalType,
   PrescribedSession,
+  SetPainResponse,
   SessionObjective,
 } from './types'
+import { evaluateStrengthSafetyGate } from './StrengthSafetyGate'
+import {
+  STRENGTH_VOLUME_POLICY_VERSION,
+  addPlannedSets,
+  calculateRollingMuscleVolume,
+  maximumAdditionalSets,
+  type MuscleVolume,
+} from './StrengthVolumePolicy'
 
 export const ADULT_RESISTANCE_ENGINE_VERSION = 'adult-resistance-1.0.0'
 export const ADULT_RESISTANCE_RULE_VERSION = 'adult-resistance-rules-1.0.0'
@@ -25,7 +39,10 @@ const experienceRank: Record<ExperienceLevel, number> = {
 
 export type AdultResistanceSetHistory = {
   exerciseCode: string
+  exerciseVersion?: string
   movementPatterns?: readonly string[]
+  primaryMuscles?: readonly string[]
+  secondaryMuscles?: readonly string[]
   loadKg: number | null
   repetitions: number
   rir?: number | null
@@ -46,6 +63,7 @@ export type AdultResistanceAthleteContext = {
   generatedAt: string
   physicalLoad: 'LOW' | 'MODERATE' | 'HIGH'
   readiness: 'GREEN' | 'YELLOW' | 'ORANGE_RECOVERY' | 'RED_STOP'
+  healthBlocked?: boolean
   limitationTags: string[]
   dislikedExerciseCodes: string[]
   likedExerciseCodes: string[]
@@ -82,6 +100,7 @@ export type SetAdaptationAction =
   | 'MAINTAIN'
   | 'INCREASE_ONE_INCREMENT'
   | 'DECREASE_ONE_INCREMENT'
+  | 'INCREASE_REPETITIONS'
   | 'REDUCE_REPETITIONS'
   | 'REMOVE_REMAINING_SET'
   | 'STOP_EXERCISE'
@@ -92,6 +111,24 @@ export type SetAdaptationDecision = {
   adjustedLoadKg?: number
   adjustedRepetitions?: number
   reasonCodes: string[]
+}
+
+export const MAX_AUTOMATIC_LOAD_INCREASE_RATIO = 0.1
+
+export function nextAutomaticLoadKg(
+  currentLoadKg: number,
+  availableIncrementKg: number,
+): number | null {
+  if (
+    !Number.isFinite(currentLoadKg) ||
+    !Number.isFinite(availableIncrementKg) ||
+    currentLoadKg <= 0 ||
+    availableIncrementKg <= 0 ||
+    availableIncrementKg / currentLoadKg > MAX_AUTOMATIC_LOAD_INCREASE_RATIO
+  ) {
+    return null
+  }
+  return currentLoadKg + availableIncrementKg
 }
 
 export type InterSessionProgressionDecision = {
@@ -500,6 +537,15 @@ export function prescribeAdultResistanceSession(input: {
   history?: readonly AdultResistanceSetHistory[]
   catalog?: ExerciseCatalog
 }): PrescribedSession {
+  const safetyGate = evaluateStrengthSafetyGate({
+    sessionKind: 'STRENGTH',
+    age: input.context.age,
+    readiness: input.context.readiness,
+    healthBlocked: input.context.healthBlocked,
+  })
+  if (!safetyGate.allowed) {
+    throw new Error(`UNSUPPORTED_PRESCRIPTION:${safetyGate.reasonCode}`)
+  }
   const catalog = input.catalog ?? publishedExerciseCatalog
   if (catalog.getReleaseId() !== input.context.contentReleaseId) {
     throw new Error(
@@ -510,6 +556,12 @@ export function prescribeAdultResistanceSession(input: {
     ...item,
     movementPatterns:
       item.movementPatterns ?? catalog.getExercise(item.exerciseCode)?.movementPatterns,
+    exerciseVersion:
+      item.exerciseVersion ?? catalog.getExercise(item.exerciseCode)?.version,
+    primaryMuscles:
+      item.primaryMuscles ?? catalog.getExercise(item.exerciseCode)?.primaryMuscles,
+    secondaryMuscles:
+      item.secondaryMuscles ?? catalog.getExercise(item.exerciseCode)?.secondaryMuscles,
   }))
   const objective = createResistanceSessionObjective(input.context)
   const eligibility = filterEligibleExercises(catalog, input.context, objective)
@@ -556,10 +608,38 @@ export function prescribeAdultResistanceSession(input: {
       { comparableSetsThisWeek },
     )
   })
+  const rollingVolume = calculateRollingMuscleVolume({
+    sets: history,
+    at: input.context.generatedAt,
+    catalog,
+  })
+  const sessionPrimaryVolume: MuscleVolume = {}
+  chosen.forEach((item, index) => {
+    const dose = doses[index]!
+    dose.sets = Math.min(
+      dose.sets,
+      maximumAdditionalSets({
+        exercise: item.exercise,
+        rollingVolume,
+        sessionPrimaryVolume,
+      }),
+    )
+    if (dose.sets > 0) {
+      addPlannedSets({
+        exercise: item.exercise,
+        sets: dose.sets,
+        rollingVolume,
+        sessionPrimaryVolume,
+      })
+    } else {
+      dose.ruleIds.push('RT-WEEKLY-MUSCLE-CAP-001')
+    }
+  })
   const warmupMinutes = input.context.availableMinutes <= 20 ? 3 : 5
   const cooldownMinutes = input.context.availableMinutes <= 20 ? 1 : 3
-  let exercises: ExercisePrescription[] = chosen.map((item, index) => {
+  let exercises: ExercisePrescription[] = chosen.flatMap((item, index) => {
     const dose = doses[index]!
+    if (dose.sets <= 0) return []
     const repetitions = Array.isArray(dose.repetitions)
       ? `${dose.repetitions[0]}–${dose.repetitions[1]}`
       : String(dose.repetitions)
@@ -568,50 +648,55 @@ export function prescribeAdultResistanceSession(input: {
     const substitutions = item.exercise.substitutionCodes
       .map((code) => catalog.getExercise(code)?.nameFi)
       .filter((name): name is string => Boolean(name))
-    return {
-      id: `${input.sessionId}-${item.exercise.code.toLocaleLowerCase('en-US')}`,
-      code: item.exercise.code,
-      nameFi: item.exercise.nameFi,
-      category: item.exercise.movementPatterns[0] ?? 'Voima',
-      equipment: [...item.exercise.equipment],
-      instructionsFi: item.exercise.instructionsFi.join(' '),
-      sets: dose.sets,
-      repetitions,
-      restSeconds: dose.restSeconds,
-      targetRpe: Math.max(5, 10 - targetRir),
-      targetRir,
-      loadGuidance: dose.calibrationRequired
-        ? 'Aloita kevyellä kalibroivalla sarjalla. Valitse kuorma, jolla tavoitetoistot onnistuvat hallitusti ja toistoja jää tavoitealueen verran varastoon.'
-        : `Suositeltu työkuorma on arviolta ${dose.prescribedLoadRangeKg?.[0]}–${dose.prescribedLoadRangeKg?.[1]} kg. Arvio ei ole mitattu maksimi.`,
-      stopCondition:
-        'Keskeytä, jos liike provosoi kipua tai tekniikka ei pysy hallittuna.',
-      substitutions,
-      ...load,
-      difficulty: item.exercise.minimumExperience,
-      trainingEffects: [...item.exercise.adaptationTargets],
-      fatigueCost:
-        item.exercise.fatigue.systemic <= 2
-          ? 'LOW'
-          : item.exercise.fatigue.systemic <= 3
-            ? 'MODERATE'
-            : 'HIGH',
-      contraindications: [...item.exercise.contraindicationTags],
-      techniqueReviewStatus: 'PENDING_REVIEW',
-      keyExercise: index < 2,
-      dose: {
-        kind: 'STRENGTH_SETS',
+    return [
+      {
+        id: `${input.sessionId}-${item.exercise.code.toLocaleLowerCase('en-US')}`,
+        code: item.exercise.code,
+        contentVersion: item.exercise.version,
+        nameFi: item.exercise.nameFi,
+        category: item.exercise.movementPatterns[0] ?? 'Voima',
+        equipment: [...item.exercise.equipment],
+        instructionsFi: item.exercise.instructionsFi.join(' '),
         sets: dose.sets,
         repetitions,
         restSeconds: dose.restSeconds,
         targetRpe: Math.max(5, 10 - targetRir),
         targetRir,
+        loadGuidance: dose.calibrationRequired
+          ? 'Aloita kevyellä kalibroivalla sarjalla. Valitse kuorma, jolla tavoitetoistot onnistuvat hallitusti ja toistoja jää tavoitealueen verran varastoon.'
+          : `Suositeltu työkuorma on arviolta ${dose.prescribedLoadRangeKg?.[0]}–${dose.prescribedLoadRangeKg?.[1]} kg. Arvio ei ole mitattu maksimi.`,
+        stopCondition:
+          'Keskeytä, jos liike provosoi kipua tai tekniikka ei pysy hallittuna.',
+        substitutions,
+        ...load,
+        difficulty: item.exercise.minimumExperience,
+        trainingEffects: [...item.exercise.adaptationTargets],
+        fatigueCost:
+          item.exercise.fatigue.systemic <= 2
+            ? 'LOW'
+            : item.exercise.fatigue.systemic <= 3
+              ? 'MODERATE'
+              : 'HIGH',
+        contraindications: [...item.exercise.contraindicationTags],
+        primaryMuscles: [...item.exercise.primaryMuscles],
+        secondaryMuscles: [...item.exercise.secondaryMuscles],
+        techniqueReviewStatus: 'PENDING_REVIEW',
+        keyExercise: index < 2,
+        dose: {
+          kind: 'STRENGTH_SETS',
+          sets: dose.sets,
+          repetitions,
+          restSeconds: dose.restSeconds,
+          targetRpe: Math.max(5, 10 - targetRir),
+          targetRir,
+        },
       },
-    }
+    ]
   })
   const budgetSeconds = input.context.availableMinutes * 60
   const fixedSeconds = (warmupMinutes + cooldownMinutes) * 60
   const exerciseSeconds = (exercise: ExercisePrescription) =>
-    exercise.sets * 35 + Math.max(0, exercise.sets - 1) * exercise.restSeconds
+    doseDurationSeconds(legacyDose(exercise))
   while (
     fixedSeconds +
       exercises.reduce((total, exercise) => total + exerciseSeconds(exercise), 0) >
@@ -625,11 +710,15 @@ export function prescribeAdultResistanceSession(input: {
     } else if (exercises.length > 1) exercises = exercises.slice(0, -1)
     else break
   }
+  if (exercises.length === 0) {
+    throw new Error('UNSUPPORTED_PRESCRIPTION:NO_SAFE_STRENGTH_DOSE_AVAILABLE')
+  }
   const ruleIds = [
     'ADULT-ONLY-001',
     ...new Set(doses.flatMap((dose) => dose.ruleIds)),
     'RT-NO-FAILURE-001',
     'RT-PROGRESSION-001',
+    STRENGTH_VOLUME_POLICY_VERSION,
   ]
   const evidenceClaimIds = [...new Set(doses.flatMap((dose) => dose.evidenceClaimIds))]
   const result = withV2Blocks({
@@ -745,17 +834,33 @@ export function adaptNextSet(input: {
   completedLoadKg?: number
   completedRepetitions: number
   completedRir?: number
-  pain: 'NONE' | 'MILD' | 'MODERATE' | 'SEVERE'
+  pain: SetPainResponse | 'MODERATE'
   techniqueOk: boolean
   experience: ExperienceLevel
   loadIncrementKg: number
 }): SetAdaptationDecision {
   if (input.pain === 'SEVERE')
     return { action: 'REFER_SAFETY', reasonCodes: ['SEVERE_PAIN_REPORTED'] }
-  if (input.pain === 'MODERATE' || !input.techniqueOk)
+  if (
+    input.pain === 'MODERATE' ||
+    input.pain === 'WORSENING' ||
+    input.pain === 'SHARP' ||
+    input.pain === 'FUNCTION_ALTERING' ||
+    !input.techniqueOk
+  )
     return {
       action: 'STOP_EXERCISE',
-      reasonCodes: [input.pain === 'MODERATE' ? 'PAIN_REPORTED' : 'TECHNIQUE_DEGRADED'],
+      reasonCodes: [
+        input.pain === 'WORSENING'
+          ? 'PAIN_WORSENING'
+          : input.pain === 'SHARP'
+            ? 'SHARP_PAIN_REPORTED'
+            : input.pain === 'FUNCTION_ALTERING'
+              ? 'PAIN_ALTERS_FUNCTION'
+              : input.pain === 'MODERATE'
+                ? 'PAIN_REPORTED'
+                : 'TECHNIQUE_DEGRADED',
+      ],
     }
   if (input.completedRir === undefined)
     return { action: 'MAINTAIN', reasonCodes: ['RIR_MISSING'] }
@@ -779,20 +884,27 @@ export function adaptNextSet(input: {
     input.techniqueOk &&
     input.experience !== 'BEGINNER'
   ) {
-    const incrementExceedsFivePercent =
-      input.completedLoadKg !== undefined &&
-      input.completedLoadKg > 0 &&
-      input.loadIncrementKg / input.completedLoadKg > 0.05
+    const nextLoadKg =
+      input.completedLoadKg === undefined
+        ? null
+        : nextAutomaticLoadKg(input.completedLoadKg, input.loadIncrementKg)
+    if (nextLoadKg === null) {
+      return {
+        action:
+          input.completedRepetitions < input.prescribedRepetitions
+            ? 'INCREASE_REPETITIONS'
+            : 'MAINTAIN',
+        adjustedRepetitions:
+          input.completedRepetitions < input.prescribedRepetitions
+            ? input.completedRepetitions + 1
+            : undefined,
+        reasonCodes: ['LOAD_INCREMENT_EXCEEDS_TEN_PERCENT'],
+      }
+    }
     return {
       action: 'INCREASE_ONE_INCREMENT',
-      adjustedLoadKg:
-        input.completedLoadKg === undefined
-          ? undefined
-          : input.completedLoadKg + input.loadIncrementKg,
-      reasonCodes: [
-        'SET_EASIER_THAN_TARGET_RIR',
-        ...(incrementExceedsFivePercent ? ['MINIMUM_AVAILABLE_INCREMENT_EXCEPTION'] : []),
-      ],
+      adjustedLoadKg: nextLoadKg,
+      reasonCodes: ['SET_EASIER_THAN_TARGET_RIR', 'ONE_AVAILABLE_INCREMENT'],
     }
   }
   return { action: 'MAINTAIN', reasonCodes: ['SET_WITHIN_TARGET_RIR'] }
@@ -800,6 +912,8 @@ export function adaptNextSet(input: {
 
 export function decideInterSessionProgression(input: {
   comparableSessions: {
+    exerciseCode?: string
+    exerciseVersion?: string
     loadKg?: number
     repetitions: number
     rir: number
@@ -808,9 +922,23 @@ export function decideInterSessionProgression(input: {
   }[]
   targetRir: [number, number]
   loadIncrementKg: number
+  targetExerciseCode?: string
+  targetExerciseVersion?: string
+  maximumRepetitions?: number
 }): InterSessionProgressionDecision {
+  if (!input.targetExerciseCode || !input.targetExerciseVersion) {
+    return {
+      action: 'MAINTAIN_AND_COLLECT_MORE_DATA',
+      changedVariable: 'NONE',
+      reasonCodes: ['EXERCISE_IDENTITY_AND_VERSION_REQUIRED'],
+    }
+  }
   const comparable = input.comparableSessions.filter(
     (item) =>
+      (input.targetExerciseCode === undefined ||
+        item.exerciseCode === input.targetExerciseCode) &&
+      (input.targetExerciseVersion === undefined ||
+        item.exerciseVersion === input.targetExerciseVersion) &&
       !item.pain &&
       item.techniqueOk &&
       item.rir >= input.targetRir[0] &&
@@ -824,17 +952,30 @@ export function decideInterSessionProgression(input: {
     }
   const latest = comparable.at(-1)!
   if (latest.loadKg !== undefined) {
-    const incrementExceedsFivePercent =
-      latest.loadKg > 0 && input.loadIncrementKg / latest.loadKg > 0.05
+    const nextLoadKg = nextAutomaticLoadKg(latest.loadKg, input.loadIncrementKg)
+    if (nextLoadKg === null) {
+      if (
+        input.maximumRepetitions !== undefined &&
+        latest.repetitions < input.maximumRepetitions
+      ) {
+        return {
+          action: 'INCREASE_REPETITIONS',
+          nextRepetitions: latest.repetitions + 1,
+          changedVariable: 'REPETITIONS',
+          reasonCodes: ['TWO_COMPARABLE_SUCCESSES', 'LOAD_INCREMENT_EXCEEDS_TEN_PERCENT'],
+        }
+      }
+      return {
+        action: 'MAINTAIN_AND_COLLECT_MORE_DATA',
+        changedVariable: 'NONE',
+        reasonCodes: ['LOAD_INCREMENT_EXCEEDS_TEN_PERCENT'],
+      }
+    }
     return {
       action: 'INCREASE_LOAD',
-      nextLoadKg: latest.loadKg + input.loadIncrementKg,
+      nextLoadKg,
       changedVariable: 'LOAD',
-      reasonCodes: [
-        'TWO_COMPARABLE_SUCCESSES',
-        'ONE_AVAILABLE_INCREMENT',
-        ...(incrementExceedsFivePercent ? ['MINIMUM_AVAILABLE_INCREMENT_EXCEPTION'] : []),
-      ],
+      reasonCodes: ['TWO_COMPARABLE_SUCCESSES', 'ONE_AVAILABLE_INCREMENT'],
     }
   }
   return {

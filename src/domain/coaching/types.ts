@@ -88,6 +88,16 @@ export type SessionKind =
 export type LoadRegion = 'LOWER' | 'UPPER' | 'FULL_BODY' | 'CARDIO' | 'NONE'
 export type SessionIntensity = 'EASY' | 'MODERATE' | 'HARD'
 export type ExperienceLevel = 'BEGINNER' | 'INTERMEDIATE' | 'ADVANCED'
+export type ConfirmedLimitationTag =
+  | 'ACUTE_KNEE_PAIN'
+  | 'ACUTE_BACK_PAIN'
+  | 'ACUTE_SHOULDER_PAIN'
+  | 'ACUTE_WRIST_PAIN'
+  | 'GAIT_ALTERING_PAIN'
+  | 'OVERHEAD_RESTRICTION'
+  | 'ACHILLES_PAIN'
+  | 'CALF_INJURY'
+  | 'HAMSTRING_INJURY'
 export type EnergyFocus =
   | 'MAINTENANCE'
   | 'APPROVED_MODERATE_DEFICIT'
@@ -330,6 +340,11 @@ export type UnsupportedPrescription = {
   sessionKind: SessionKind
   reasonCode:
     | 'YOUTH_ENGINE_NOT_AVAILABLE'
+    | 'OLDER_ADULT_ENGINE_NOT_AVAILABLE'
+    | 'SAFETY_INFORMATION_INCOMPLETE'
+    | 'READINESS_RED_STOP'
+    | 'READINESS_RECOVERY_ONLY'
+    | 'NO_SAFE_STRENGTH_DOSE_AVAILABLE'
     | 'HEALTH_ENGINE_NOT_AVAILABLE'
     | 'SPEED_POWER_ENGINE_NOT_REVIEWED'
     | 'SPORT_ENGINE_NOT_REVIEWED'
@@ -343,6 +358,8 @@ export type PrescriptionResult =
 export type ExercisePrescription = {
   id: string
   code: string
+  /** Harjoitteen muuttumaton sisältöversio. */
+  contentVersion?: string
   nameFi: string
   category: string
   equipment: string[]
@@ -359,12 +376,17 @@ export type ExercisePrescription = {
   loadType: ExerciseLoadType
   loadLabelFi: string
   loadOptions?: string[]
+  /** Vain käyttäjän välineille vahvistettu todellinen kuormaporras. */
+  loadIncrementKg?: number
   techniqueVideoUrl?: string
   /** Harjoitekirjaston v2-metatiedot; puuttuvat vanhoista snapshot-versioista. */
   difficulty?: 'BEGINNER' | 'INTERMEDIATE' | 'ADVANCED'
   trainingEffects?: string[]
   fatigueCost?: 'LOW' | 'MODERATE' | 'HIGH'
   contraindications?: string[]
+  /** Lihasmetatiedot snapshotataan, jotta vanhaa historiaa ei tulkita uudelleen. */
+  primaryMuscles?: string[]
+  secondaryMuscles?: string[]
   techniqueReviewStatus?: 'VERIFIED' | 'PENDING_REVIEW'
   keyExercise: boolean
   /** V2:n yksikäsitteinen annos. Puuttuu vain ennen v2:ta tallennetuista snapshoteista. */
@@ -404,12 +426,20 @@ export type WorkoutFeedback = {
   painLocation: string
   felt: 'WORSE' | 'SAME' | 'BETTER'
   notes: string
-  stopReason?: 'PAIN' | 'DIZZINESS' | 'BREATHING' | 'TECHNIQUE' | 'EQUIPMENT' | 'OTHER'
+  stopReason?:
+    | 'PAIN'
+    | 'DIZZINESS'
+    | 'BREATHING'
+    | 'NEUROLOGICAL'
+    | 'TECHNIQUE'
+    | 'EQUIPMENT'
+    | 'OTHER'
   exerciseResults?: WorkoutExerciseResult[]
 }
 
 export type WorkoutExerciseResult = {
   exerciseCode: string
+  exerciseVersion?: string
   exerciseName: string
   loadType: ExerciseLoadType
   completedSets: number
@@ -419,6 +449,8 @@ export type WorkoutExerciseResult = {
   rirs?: Array<number | null>
   targetRepetitions?: string
   targetRpe: number
+  primaryMuscles?: string[]
+  secondaryMuscles?: string[]
 }
 
 export type WorkoutProgressionDecision = {
@@ -438,7 +470,13 @@ export type CompletedSet = {
   loadText?: string | null
   rir?: number | null
   completed: boolean
+  painResponse?: SetPainResponse
+  techniqueOk?: boolean
+  adaptationReasonCodes?: string[]
 }
+
+export type SetPainResponse =
+  'NONE' | 'MILD' | 'WORSENING' | 'SHARP' | 'FUNCTION_ALTERING' | 'SEVERE'
 
 export type CompetitionEvent = {
   id: string
@@ -478,6 +516,10 @@ export type ReadinessInput = {
   motivation: RelativeLevel
   soreness: RelativeLevel
   illnessSymptoms: boolean
+  vascularSymptoms?: {
+    rapidlyIncreasingUnilateralCalfSwelling: boolean
+    painAtRest: boolean
+  }
   newPain?: {
     location: string
     severity: 'MILD' | 'MODERATE' | 'SEVERE'

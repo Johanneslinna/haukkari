@@ -23,6 +23,7 @@ import type {
   PrescribedSession,
   PlannedSession,
   WorkoutFeedback,
+  ConfirmedLimitationTag,
 } from '../../domain/coaching/types'
 import type { LocalRecord } from '../../domain/sync/types'
 import { featureFlags } from '../../config/featureFlags'
@@ -68,6 +69,7 @@ export type OnboardingInput = {
     'NOT_APPLICABLE' | 'PREGNANT' | 'BREASTFEEDING' | 'POSTPARTUM' | 'PREFER_NOT_TO_SAY'
   doctorRestrictions: string
   currentInjuries: string
+  confirmedLimitationTags?: ConfirmedLimitationTag[]
   pelvicFloorSymptoms: string
   exertionWarningSymptoms: boolean
   eatingDisorderHistory: boolean
@@ -82,6 +84,48 @@ export function hasMeaningfulRestrictionText(value: string) {
   return !/^(?:-|ei|ei ole|ei mitään|ei rajoitteita|ei sairauksia|ei vammoja|terve|none)$/u.test(
     normalized,
   )
+}
+
+const confirmedLimitationTagValues = new Set<ConfirmedLimitationTag>([
+  'ACUTE_KNEE_PAIN',
+  'ACUTE_BACK_PAIN',
+  'ACUTE_SHOULDER_PAIN',
+  'ACUTE_WRIST_PAIN',
+  'GAIT_ALTERING_PAIN',
+  'OVERHEAD_RESTRICTION',
+  'ACHILLES_PAIN',
+  'CALF_INJURY',
+  'HAMSTRING_INJURY',
+])
+
+function confirmedLimitationTagsFrom(value: unknown): ConfirmedLimitationTag[] {
+  return Array.isArray(value)
+    ? value.filter(
+        (item): item is ConfirmedLimitationTag =>
+          typeof item === 'string' &&
+          confirmedLimitationTagValues.has(item as ConfirmedLimitationTag),
+      )
+    : []
+}
+
+function planningPreferencesWithScreening(
+  preferences: OnboardingInput | Record<string, unknown>,
+  screening: LocalRecord | null,
+) {
+  const answers = objectValue(screening?.data.answers)
+  const existing = preferences as Record<string, unknown>
+  return {
+    ...existing,
+    currentInjuries:
+      stringValue(answers.current_injuries_surgeries_and_mobility_limits) ||
+      existing.currentInjuries,
+    doctorRestrictions:
+      stringValue(answers.doctor_restrictions) || existing.doctorRestrictions,
+    confirmedLimitationTags:
+      confirmedLimitationTagsFrom(answers.confirmed_limitation_tags).length > 0
+        ? confirmedLimitationTagsFrom(answers.confirmed_limitation_tags)
+        : existing.confirmedLimitationTags,
+  }
 }
 
 export function classifyOnboardingHealth(
@@ -295,6 +339,9 @@ function planFromPreferences(
     ]
       .filter(Boolean)
       .join(' · '),
+    confirmedLimitationTags: confirmedLimitationTagsFrom(
+      preferences.confirmedLimitationTags,
+    ),
     healthBlocked,
     enduranceBackgroundKnown:
       typeof preferences.enduranceSportBackground === 'string' &&
@@ -409,6 +456,7 @@ export async function completeOnboarding(
           pregnancy_status: input.pregnancyStatus,
           doctor_restrictions: input.doctorRestrictions,
           current_injuries_surgeries_and_mobility_limits: input.currentInjuries,
+          confirmed_limitation_tags: input.confirmedLimitationTags ?? [],
           pelvic_floor_symptoms: input.pelvicFloorSymptoms,
           exertion_warning_symptoms: input.exertionWarningSymptoms,
           eating_disorder_history: input.eatingDisorderHistory,
@@ -516,10 +564,11 @@ export async function activateGoalDraft(
   })
   const profileRecord = data.latest('profiles')
   const settings = profileRecord ? objectValue(profileRecord.data.app_settings) : {}
-  const screeningStatus = stringValue(data.latest('health_screenings')?.data.status)
+  const screening = data.latest('health_screenings')
+  const screeningStatus = stringValue(screening?.data.status)
   const plan = planFromPreferences(
     draft.profile,
-    settings,
+    planningPreferencesWithScreening(settings, screening),
     screeningStatus === 'HIGH_INTENSITY_BLOCKED' || screeningStatus === 'NEEDS_REVIEW',
   )
   const previousPeriod = data
@@ -774,6 +823,12 @@ export async function saveWorkoutSet(
       load_text: set.loadText ?? null,
       load_type: prescribedExercise?.loadType ?? 'NONE',
       exercise_code: prescribedExercise?.code ?? '',
+      exercise_version: prescribedExercise?.contentVersion ?? null,
+      primary_muscles: prescribedExercise?.primaryMuscles ?? [],
+      secondary_muscles: prescribedExercise?.secondaryMuscles ?? [],
+      pain_response: set.painResponse ?? null,
+      technique_ok: set.techniqueOk ?? null,
+      adaptation_reason_codes: set.adaptationReasonCodes ?? [],
     },
   })
   const existing = data
@@ -785,6 +840,34 @@ export async function saveWorkoutSet(
   return existing
     ? data.update(existing, payload)
     : data.create('exercise_set_logs', payload)
+}
+
+export async function saveWorkoutAdaptation(
+  data: AppDataContextValue,
+  workout: LocalRecord,
+  prescription: PrescribedSession,
+) {
+  const updatedWorkout = await data.update(
+    workout,
+    toJsonObject({
+      prescription,
+      decision_trace: prescription.decisionTrace,
+    }),
+  )
+  const activeLog = data
+    .list('workout_logs')
+    .find(
+      (record) =>
+        record.data.workout_id === workout.id &&
+        record.data.completion_status === 'IN_PROGRESS',
+    )
+  if (activeLog) {
+    await data.update(
+      activeLog,
+      toJsonObject({ decision_trace: prescription.decisionTrace }),
+    )
+  }
+  return updatedWorkout
 }
 
 export async function completeWorkout(
@@ -820,7 +903,12 @@ export async function completeWorkout(
   const workoutLog = draft
     ? await data.update(draft, finalPayload)
     : await data.create('workout_logs', finalPayload)
-  await data.update(workout, toJsonObject({ status: 'COMPLETED' }))
+  await data.update(
+    workout,
+    toJsonObject({
+      status: input.feedback.completionStatus === 'STOPPED' ? 'CANCELLED' : 'COMPLETED',
+    }),
+  )
   return workoutLog
 }
 
@@ -983,6 +1071,10 @@ async function createCalendarPlanVersion(
     : []
   const basePreferences = objectValue(goalRecord.data.preferences)
   const profileSettings = objectValue(data.latest('profiles')?.data.app_settings)
+  const planningPreferences = planningPreferencesWithScreening(
+    { ...profileSettings, ...basePreferences },
+    data.latest('health_screenings'),
+  )
   const latestSportProfile = data.latest('sport_profiles')
   const sportCode =
     stringValue(objectValue(mutation?.upsert?.data.session_data).sport_code) ||
@@ -990,8 +1082,7 @@ async function createCalendarPlanVersion(
   const hockeyBetaEnabled =
     featureFlags.hockeyBeta && sportCode === 'ice-hockey-adult-amateur-skater'
   const preferences = {
-    ...profileSettings,
-    ...basePreferences,
+    ...planningPreferences,
     sportDiscipline: sportCode || basePreferences.sportDiscipline,
     hockeyBeta: hockeyBetaEnabled,
   }

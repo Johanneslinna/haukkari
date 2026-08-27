@@ -314,20 +314,39 @@ describe('AdultResistanceEngine', () => {
     expect(
       decideInterSessionProgression({
         comparableSessions: [
-          { loadKg: 40, repetitions: 8, rir: 2, pain: false, techniqueOk: true },
+          {
+            exerciseCode: 'TEST_LIFT',
+            exerciseVersion: '1.0.0',
+            loadKg: 40,
+            repetitions: 8,
+            rir: 2,
+            pain: false,
+            techniqueOk: true,
+          },
         ],
         targetRir: [2, 3],
         loadIncrementKg: 2.5,
+        targetExerciseCode: 'TEST_LIFT',
+        targetExerciseVersion: '1.0.0',
       }).action,
     ).toBe('MAINTAIN_AND_COLLECT_MORE_DATA')
     expect(
       decideInterSessionProgression({
         comparableSessions: [
-          { loadKg: 40, repetitions: 8, rir: 2, pain: false, techniqueOk: true },
-          { loadKg: 40, repetitions: 8, rir: 2, pain: false, techniqueOk: true },
+          ...Array.from({ length: 2 }, () => ({
+            exerciseCode: 'TEST_LIFT',
+            exerciseVersion: '1.0.0',
+            loadKg: 40,
+            repetitions: 8,
+            rir: 2,
+            pain: false,
+            techniqueOk: true,
+          })),
         ],
         targetRir: [2, 3],
         loadIncrementKg: 2.5,
+        targetExerciseCode: 'TEST_LIFT',
+        targetExerciseVersion: '1.0.0',
       }),
     ).toMatchObject({
       action: 'INCREASE_LOAD',
@@ -336,17 +355,30 @@ describe('AdultResistanceEngine', () => {
     })
   })
 
-  it('sallii pienimmän todellisen painoportaan yli viiden prosentin vain onnistuneen progression jälkeen', () => {
+  it('estää todellisenkin painoportaan, jos automaattinen lisäys ylittää kymmenen prosenttia', () => {
     const decision = decideInterSessionProgression({
       comparableSessions: [
-        { loadKg: 5, repetitions: 10, rir: 2, pain: false, techniqueOk: true },
-        { loadKg: 5, repetitions: 10, rir: 2, pain: false, techniqueOk: true },
+        ...Array.from({ length: 2 }, () => ({
+          exerciseCode: 'TEST_LIFT',
+          exerciseVersion: '1.0.0',
+          loadKg: 5,
+          repetitions: 10,
+          rir: 2,
+          pain: false,
+          techniqueOk: true,
+        })),
       ],
       targetRir: [2, 3],
       loadIncrementKg: 1,
+      targetExerciseCode: 'TEST_LIFT',
+      targetExerciseVersion: '1.0.0',
     })
-    expect(decision).toMatchObject({ action: 'INCREASE_LOAD', nextLoadKg: 6 })
-    expect(decision.reasonCodes).toContain('MINIMUM_AVAILABLE_INCREMENT_EXCEPTION')
+    expect(decision).toMatchObject({
+      action: 'MAINTAIN_AND_COLLECT_MORE_DATA',
+      changedVariable: 'NONE',
+    })
+    expect(decision.nextLoadKg).toBeUndefined()
+    expect(decision.reasonCodes).toContain('LOAD_INCREMENT_EXCEEDS_TEN_PERCENT')
   })
 })
 
@@ -358,6 +390,7 @@ describe('Prescription-tuen rajat', () => {
     physicalLoad: 'MODERATE' as const,
     minutesPerSession: 30,
     generatedAt,
+    readiness: 'GREEN' as const,
   }
 
   it('ei anna 17-vuotiaalle aikuisten prescriptionia', () => {
