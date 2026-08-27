@@ -3,12 +3,12 @@ import {
   type ExerciseCatalog,
   type ExerciseDefinition,
 } from './content/TrainingContent'
+import { withV2Blocks } from './PrescriptionContract'
 import {
-  doseDurationSeconds,
-  legacyDose,
-  prescriptionDurationSeconds,
-  withV2Blocks,
-} from './PrescriptionContract'
+  ADULT_STRENGTH_TIME_POLICY,
+  ADULT_STRENGTH_TIME_POLICY_VERSION,
+  fitStrengthPrescriptionToTimeBudget,
+} from './TimeBudgetPolicy'
 import type {
   CapabilityEstimate,
   ExerciseLoadType,
@@ -28,8 +28,8 @@ import {
   type MuscleVolume,
 } from './StrengthVolumePolicy'
 
-export const ADULT_RESISTANCE_ENGINE_VERSION = 'adult-resistance-1.0.0'
-export const ADULT_RESISTANCE_RULE_VERSION = 'adult-resistance-rules-1.0.0'
+export const ADULT_RESISTANCE_ENGINE_VERSION = 'adult-resistance-1.1.0'
+export const ADULT_RESISTANCE_RULE_VERSION = 'adult-resistance-rules-1.1.0'
 
 const experienceRank: Record<ExperienceLevel, number> = {
   BEGINNER: 1,
@@ -160,10 +160,7 @@ export function createResistanceSessionObjective(
     'HORIZONTAL_PULL',
     'ANTI_EXTENSION',
   ]
-  const lowBudget =
-    context.physicalLoad === 'HIGH' ||
-    context.readiness === 'YELLOW' ||
-    context.availableMinutes <= 20
+  const lowBudget = context.physicalLoad === 'HIGH' || context.readiness === 'YELLOW'
   return {
     primary: primaryAdaptation === 'HYPERTROPHY' ? 'Lihasmassa' : 'Kokovartalon voima',
     secondary: ['Liikehallinta'],
@@ -460,7 +457,11 @@ export function prescribeResistanceDose(
   let sets = athleteContext.experience === 'BEGINNER' ? 2 : 3
   if (athleteContext.experience === 'ADVANCED' && athleteContext.availableMinutes >= 60)
     sets = 4
-  if (objective.fatigueBudget === 'LOW' || weeklyVolumeState.comparableSetsThisWeek >= 12)
+  if (
+    (objective.fatigueBudget === 'LOW' ||
+      weeklyVolumeState.comparableSetsThisWeek >= 12) &&
+    sets > 2
+  )
     sets = Math.max(1, sets - 1)
   const repetitions: [number, number] = strengthGoal
     ? [4, 6]
@@ -635,9 +636,12 @@ export function prescribeAdultResistanceSession(input: {
       dose.ruleIds.push('RT-WEEKLY-MUSCLE-CAP-001')
     }
   })
-  const warmupMinutes = input.context.availableMinutes <= 20 ? 3 : 5
-  const cooldownMinutes = input.context.availableMinutes <= 20 ? 1 : 3
-  let exercises: ExercisePrescription[] = chosen.flatMap((item, index) => {
+  const warmupMinutes =
+    ADULT_STRENGTH_TIME_POLICY.warmupSecondsForBudget(input.context.availableMinutes) / 60
+  const cooldownMinutes =
+    ADULT_STRENGTH_TIME_POLICY.cooldownSecondsForBudget(input.context.availableMinutes) /
+    60
+  const exercises: ExercisePrescription[] = chosen.flatMap((item, index) => {
     const dose = doses[index]!
     if (dose.sets <= 0) return []
     const repetitions = Array.isArray(dose.repetitions)
@@ -662,6 +666,8 @@ export function prescribeAdultResistanceSession(input: {
         restSeconds: dose.restSeconds,
         targetRpe: Math.max(5, 10 - targetRir),
         targetRir,
+        warmupSets: index === 0 && dose.calibrationRequired ? 1 : 0,
+        estimatedWorkSetSeconds: ADULT_STRENGTH_TIME_POLICY.workSetSeconds,
         loadGuidance: dose.calibrationRequired
           ? 'Aloita kevyellä kalibroivalla sarjalla. Valitse kuorma, jolla tavoitetoistot onnistuvat hallitusti ja toistoja jää tavoitealueen verran varastoon.'
           : `Suositeltu työkuorma on arviolta ${dose.prescribedLoadRangeKg?.[0]}–${dose.prescribedLoadRangeKg?.[1]} kg. Arvio ei ole mitattu maksimi.`,
@@ -693,23 +699,6 @@ export function prescribeAdultResistanceSession(input: {
       },
     ]
   })
-  const budgetSeconds = input.context.availableMinutes * 60
-  const fixedSeconds = (warmupMinutes + cooldownMinutes) * 60
-  const exerciseSeconds = (exercise: ExercisePrescription) =>
-    doseDurationSeconds(legacyDose(exercise))
-  while (
-    fixedSeconds +
-      exercises.reduce((total, exercise) => total + exerciseSeconds(exercise), 0) >
-    budgetSeconds
-  ) {
-    const reducible = [...exercises].reverse().find((exercise) => exercise.sets > 1)
-    if (reducible) {
-      reducible.sets -= 1
-      if (reducible.dose?.kind === 'STRENGTH_SETS')
-        reducible.dose = { ...reducible.dose, sets: reducible.sets }
-    } else if (exercises.length > 1) exercises = exercises.slice(0, -1)
-    else break
-  }
   if (exercises.length === 0) {
     throw new Error('UNSUPPORTED_PRESCRIPTION:NO_SAFE_STRENGTH_DOSE_AVAILABLE')
   }
@@ -719,9 +708,10 @@ export function prescribeAdultResistanceSession(input: {
     'RT-NO-FAILURE-001',
     'RT-PROGRESSION-001',
     STRENGTH_VOLUME_POLICY_VERSION,
+    ADULT_STRENGTH_TIME_POLICY_VERSION,
   ]
   const evidenceClaimIds = [...new Set(doses.flatMap((dose) => dose.evidenceClaimIds))]
-  const result = withV2Blocks({
+  const unfitted = withV2Blocks({
     id: input.sessionId,
     title: input.title,
     kind: 'STRENGTH',
@@ -820,11 +810,14 @@ export function prescribeAdultResistanceSession(input: {
       adaptations: [],
     },
   })
-  result.durationMinutes = Math.min(
-    input.context.availableMinutes,
-    Math.max(1, Math.ceil(prescriptionDurationSeconds(result) / 60)),
-  )
-  return result
+  const fitted = fitStrengthPrescriptionToTimeBudget({
+    prescription: unfitted,
+    timeBudgetMinutes: input.context.availableMinutes,
+  })
+  if (fitted.status === 'UNSUPPORTED') {
+    throw new Error('UNSUPPORTED_PRESCRIPTION:NO_SAFE_STRENGTH_DOSE_AVAILABLE')
+  }
+  return fitted.prescription
 }
 
 export function adaptNextSet(input: {

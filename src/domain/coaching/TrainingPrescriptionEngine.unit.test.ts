@@ -84,7 +84,7 @@ describe('TrainingPrescriptionEngine – kultaiset käyttäjäprofiilit', () => 
           item.stopCondition.length > 0,
       ),
     ).toBe(true)
-    expect(result.decisionTrace.ruleVersion).toBe('adult-resistance-rules-1.0.0')
+    expect(result.decisionTrace.ruleVersion).toBe('adult-resistance-rules-1.1.0')
     expect(result.decisionTrace.contentReleaseId).toBe('adult-resistance-v1.0.0')
   })
 
@@ -144,7 +144,9 @@ describe('TrainingPrescriptionEngine – kultaiset käyttäjäprofiilit', () => 
     expect(compact.durationMinutes).toBeLessThanOrEqual(10)
     expect(compact.exercises).toHaveLength(2)
     expect(compact.exercises.every((item) => item.keyExercise)).toBe(true)
-    expect(compact.decisionTrace.rules.at(-1)?.ruleId).toBe('TIME-COMPACT-001')
+    expect(compact.decisionTrace.rules.map((rule) => rule.ruleId)).toContain(
+      'TIME-COMPACT-001',
+    )
   })
 
   it('kompakti kestävyysharjoitus mahduttaa lämmittelyn, työosuuden ja jäähdyttelyn aikarajaan', () => {
@@ -272,13 +274,26 @@ describe('TrainingPrescriptionEngine – kultaiset käyttäjäprofiilit', () => 
     })
 
     expect(result.schemaVersion).toBe(2)
-    expect(result.engineVersion).toBe('adult-resistance-1.0.0')
+    expect(result.engineVersion).toBe('adult-resistance-1.1.0')
     expect(result.blocks).toEqual(result.exercises)
     expect(result.objective?.primary).toBeTruthy()
     expect(prescriptionDurationSeconds(result)).toBeLessThanOrEqual(45 * 60)
     expect(result.durationMinutes).toBe(
       Math.ceil(prescriptionDurationSeconds(result) / 60),
     )
+    expect(result.timePolicyVersion).toBe('adult-strength-time-1.0.0')
+    expect(result.calculatedTotalSeconds).toBe(result.timeBreakdown?.totalSeconds)
+    expect(result.timeBreakdown).toMatchObject({
+      warmupSeconds: expect.any(Number),
+      exerciseWarmupSeconds: expect.any(Number),
+      workSeconds: expect.any(Number),
+      restSeconds: expect.any(Number),
+      transitionSeconds: expect.any(Number),
+      equipmentSetupSeconds: expect.any(Number),
+      cooldownSeconds: expect.any(Number),
+      bufferSeconds: expect.any(Number),
+      policyVersion: 'adult-strength-time-1.0.0',
+    })
   })
 
   it('mallintaa intervallin vetoina ja palautuksina eikä pitkänä toistona', () => {
@@ -335,6 +350,45 @@ describe('TrainingPrescriptionEngine – kultaiset käyttäjäprofiilit', () => 
     expect(normalized.schemaVersion).toBe(2)
     expect(normalized.durationMinutes).toBe(45)
     expect(normalized.exercises.every((exercise) => Boolean(exercise.dose))).toBe(true)
+    expect(normalized.timePolicyVersion).toBeUndefined()
+    expect(normalized.timeBreakdown).toBeUndefined()
+
+    const reauthorized = adaptPrescription(
+      legacy,
+      { kind: 'FULL', timeBudgetMinutes: 45, durationMinutes: 45, volumeMultiplier: 1 },
+      adaptationSafety,
+    )
+    expect(reauthorized.status).toBe('SUPPORTED')
+    if (reauthorized.status !== 'SUPPORTED') throw new Error(reauthorized.reasonCode)
+    expect(reauthorized.prescription.timePolicyVersion).toBe('adult-strength-time-1.0.0')
+    expect(reauthorized.prescription.timeAdjustmentReasonCodes).toContain(
+      'TIME_LEGACY_REAUTHORIZED',
+    )
+    expect(reauthorized.prescription.durationMinutes).toBe(
+      Math.ceil(reauthorized.prescription.timeBreakdown!.totalSeconds / 60),
+    )
+
+    const incompleteLegacy = {
+      ...legacy,
+      exercises: legacy.exercises.map((exercise, index) =>
+        index === 0 ? { ...exercise, restSeconds: Number.NaN } : exercise,
+      ),
+    }
+    expect(
+      adaptPrescription(
+        incompleteLegacy,
+        {
+          kind: 'FULL',
+          timeBudgetMinutes: 45,
+          durationMinutes: 45,
+          volumeMultiplier: 1,
+        },
+        adaptationSafety,
+      ),
+    ).toMatchObject({
+      status: 'UNSUPPORTED',
+      reasonCode: 'NO_SAFE_STRENGTH_DOSE_AVAILABLE',
+    })
   })
 })
 

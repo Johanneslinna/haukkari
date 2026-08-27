@@ -108,6 +108,17 @@ export {
 } from './StrengthVolumePolicy'
 export type { MuscleVolume, VersionedStrengthSet } from './StrengthVolumePolicy'
 export {
+  ADULT_STRENGTH_TIME_POLICY,
+  ADULT_STRENGTH_TIME_POLICY_VERSION,
+  STRENGTH_TIME_REASON_CODES,
+  STRENGTH_TIME_INVARIANT_CODES,
+  auditStrengthPrescriptionTime,
+  estimatePrescriptionTime,
+  fitStrengthPrescriptionToTimeBudget,
+  refreshStrengthPrescriptionTimeEstimate,
+} from './TimeBudgetPolicy'
+export type { StrengthTimeBudgetPolicy, StrengthTimeFitResult } from './TimeBudgetPolicy'
+export {
   SportAdapterRegistry,
   getSportAdapter,
   listFullySupportedDisciplines,

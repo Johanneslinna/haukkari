@@ -42,6 +42,11 @@ import {
   maximumAdditionalSets,
   type MuscleVolume,
 } from './StrengthVolumePolicy'
+import {
+  ADULT_STRENGTH_TIME_POLICY,
+  STRENGTH_TIME_REASON_CODES,
+  fitStrengthPrescriptionToTimeBudget,
+} from './TimeBudgetPolicy'
 
 export const TRAINING_RULE_VERSION = '2026.08.25-v2'
 
@@ -791,6 +796,18 @@ function fitDoseToSeconds(
   }
 }
 
+function lightenStrengthExercise(exercise: ExercisePrescription) {
+  const dose = legacyDose(exercise)
+  if (dose.kind !== 'STRENGTH_SETS') return exercise
+  return withExerciseDose(exercise, {
+    ...dose,
+    sets: Math.max(1, Math.ceil(dose.sets * 0.65)),
+    restSeconds: dose.restSeconds,
+    targetRpe: Math.min(6, dose.targetRpe),
+    targetRir: Math.min(5, (dose.targetRir ?? 2) + 1),
+  })
+}
+
 export function evaluatePrescriptionAdaptationSafety(
   prescription: PrescribedSession,
   safetyContext: PrescriptionAdaptationSafetyContext,
@@ -859,9 +876,88 @@ export function adaptPrescription(
     }
   }
 
+  const legacyStrengthSnapshot =
+    prescription.kind === 'STRENGTH' &&
+    (prescription.schemaVersion !== 2 ||
+      prescription.timePolicyVersion !== ADULT_STRENGTH_TIME_POLICY.version ||
+      !prescription.timeBreakdown)
   const normalized = normalizePrescriptionV2(prescription)
   const compact = variant.kind.startsWith('COMPACT')
   const light = variant.kind === 'LIGHT' || readiness === 'YELLOW'
+  const variantTimeBudgetMinutes = variant.timeBudgetMinutes ?? variant.durationMinutes
+  if (normalized.kind === 'STRENGTH') {
+    const adaptationRule = compact
+      ? {
+          ruleId: 'TIME-COMPACT-001',
+          outcome: 'MODIFY' as const,
+          message: `Aikaraja säilyttää avainliikkeet ensin ja rajaa harjoituksen enintään ${variantTimeBudgetMinutes} minuuttiin.`,
+          evidenceIds: ['APP-KEY-DOSE-RULE'],
+        }
+      : light
+        ? {
+            ruleId: 'READINESS-YELLOW-001',
+            outcome: 'MODIFY' as const,
+            message:
+              'Keltainen valmius vähentää sarjoja, säilyttää palautukset ja rajaa tavoite-RPE:n enintään kuuteen.',
+            evidenceIds: ['APP-CONSERVATIVE-LOAD-RULE'],
+          }
+        : {
+            ruleId: 'READINESS-GREEN-001',
+            outcome: 'PROCEED' as const,
+            message: 'Päivän valmius sallii suunnitellun version.',
+            evidenceIds: ['APP-READINESS-RULE'],
+          }
+    const exercises = prescriptionBlocks(normalized).map((exercise) =>
+      light ? lightenStrengthExercise(exercise) : { ...exercise },
+    )
+    const candidate: PrescribedSession = {
+      ...normalized,
+      title: compact
+        ? `${normalized.title} · enintään ${variantTimeBudgetMinutes} min`
+        : normalized.title,
+      timeBudgetMinutes: variantTimeBudgetMinutes,
+      warmupMinutes:
+        ADULT_STRENGTH_TIME_POLICY.warmupSecondsForBudget(variantTimeBudgetMinutes) / 60,
+      warmup: [
+        `${ADULT_STRENGTH_TIME_POLICY.warmupSecondsForBudget(variantTimeBudgetMinutes) / 60} min rauhallista yleislämmittelyä`,
+        'Tee päivän ensimmäisestä liikkeestä kevyt kalibroiva harjoitussarja.',
+      ],
+      exercises,
+      blocks: exercises,
+      cooldownMinutes:
+        ADULT_STRENGTH_TIME_POLICY.cooldownSecondsForBudget(variantTimeBudgetMinutes) /
+        60,
+      cooldown: [
+        `${ADULT_STRENGTH_TIME_POLICY.cooldownSecondsForBudget(variantTimeBudgetMinutes) / 60} min rauhallista liikettä ja hengityksen tasaus`,
+      ],
+      decisionTrace: {
+        ...normalized.decisionTrace,
+        safetyOutcome:
+          light || compact ? 'MODIFY' : normalized.decisionTrace.safetyOutcome,
+        rules: [...normalized.decisionTrace.rules, adaptationRule],
+      },
+    }
+    const fitted = fitStrengthPrescriptionToTimeBudget({
+      prescription: candidate,
+      timeBudgetMinutes: variantTimeBudgetMinutes,
+      initialReasonCodes: [
+        ...(compact ? [STRENGTH_TIME_REASON_CODES.COMPACT_VARIANT] : []),
+        ...(legacyStrengthSnapshot
+          ? [STRENGTH_TIME_REASON_CODES.LEGACY_REAUTHORIZED]
+          : []),
+      ],
+    })
+    if (fitted.status === 'UNSUPPORTED') {
+      return {
+        status: 'UNSUPPORTED',
+        sessionKind: normalized.kind,
+        reasonCode: 'NO_SAFE_STRENGTH_DOSE_AVAILABLE',
+        userMessage:
+          'Turvallinen voimaharjoituksen vähimmäisannos ei mahdu valittuun aikabudjettiin palautuksia tai turvallisuuspuskuria lyhentämättä.',
+      }
+    }
+    return { status: 'SUPPORTED', prescription: fitted.prescription }
+  }
   const limit = compact ? compactExerciseLimit(variant.durationMinutes) : Infinity
   const compactWarmupMinutes =
     variant.durationMinutes <= 10 ? 2 : variant.durationMinutes <= 20 ? 3 : 5

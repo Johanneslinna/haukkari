@@ -6,6 +6,7 @@ import {
 } from '../../domain/coaching'
 import type { JsonObject, LocalRecord, SyncableTable } from '../../domain/sync/types'
 import {
+  authorizeWorkoutPrescriptionForCurrentAthlete,
   adaptWorkoutPrescriptionForCurrentAthlete,
   currentWorkoutSafetyContext,
 } from './WorkoutPrescriptionAdapter'
@@ -152,6 +153,55 @@ describe('WorkoutPrescriptionAdapter – käyttöliittymän nykyhetken turvallis
     ).toMatchObject({
       status: 'UNSUPPORTED',
       reasonCode: 'SAFETY_INFORMATION_INCOMPLETE',
+    })
+  })
+
+  it('arvioi jatkettavan legacy-snapshotin nykyisellä aikapolitiikalla eikä keksi puuttuvaa annosta', () => {
+    const current = strengthPrescription()
+    const legacy = {
+      ...current,
+      schemaVersion: undefined,
+      timePolicyVersion: undefined,
+      timeBreakdown: undefined,
+      calculatedTotalSeconds: undefined,
+      blocks: undefined,
+      durationMinutes: 45,
+      exercises: current.exercises.map(({ dose: _dose, ...exercise }) => exercise),
+    }
+    const authorized = authorizeWorkoutPrescriptionForCurrentAthlete({
+      prescription: legacy,
+      profile: profile('1991-01-01'),
+      screening: screening(),
+      readiness: 'GREEN',
+      today,
+    })
+    expect(authorized.status).toBe('SUPPORTED')
+    if (authorized.status !== 'SUPPORTED') throw new Error(authorized.reasonCode)
+    expect(authorized.prescription.timePolicyVersion).toBe('adult-strength-time-1.0.0')
+    expect(authorized.prescription.timeAdjustmentReasonCodes).toContain(
+      'TIME_LEGACY_REAUTHORIZED',
+    )
+    expect(authorized.prescription.durationMinutes).toBe(
+      Math.ceil(authorized.prescription.timeBreakdown!.totalSeconds / 60),
+    )
+
+    const incompleteLegacy = {
+      ...legacy,
+      exercises: legacy.exercises.map((exercise, index) =>
+        index === 0 ? { ...exercise, loadType: undefined } : exercise,
+      ),
+    } as unknown as PrescribedSession
+    expect(
+      authorizeWorkoutPrescriptionForCurrentAthlete({
+        prescription: incompleteLegacy,
+        profile: profile('1991-01-01'),
+        screening: screening(),
+        readiness: 'GREEN',
+        today,
+      }),
+    ).toMatchObject({
+      status: 'UNSUPPORTED',
+      reasonCode: 'NO_SAFE_STRENGTH_DOSE_AVAILABLE',
     })
   })
 })

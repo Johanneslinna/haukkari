@@ -215,6 +215,8 @@ export type PlannedSession = {
   title?: string
   prescription?: string[]
   durationMinutes: number
+  /** Päiväkohtainen enimmäisaika; durationMinutes voi olla laskettu toteutusaika. */
+  timeBudgetMinutes?: number
   intensity: SessionIntensity
   loadRegion: LoadRegion
   fixed: boolean
@@ -228,6 +230,8 @@ export type PlannedSession = {
 
 export type WorkoutVariant = {
   kind: 'FULL' | 'LIGHT' | 'COMPACT_10' | 'COMPACT_20' | 'COMPACT_30'
+  /** Käyttäjän enimmäisaika. durationMinutes on käyttäjälle näytettävä laskettu kesto. */
+  timeBudgetMinutes?: number
   durationMinutes: number
   volumeMultiplier: number
 }
@@ -370,6 +374,10 @@ export type ExercisePrescription = {
   restSeconds: number
   targetRpe: number
   targetRir?: number
+  /** Liikekohtaiset lämmittely-/kalibrointisarjat ennen työsarjoja. */
+  warmupSets?: number
+  /** Versionoidun aikamallin käyttämä arvio yhden työsarjan kestosta. */
+  estimatedWorkSetSeconds?: number
   loadGuidance: string
   stopCondition: string
   substitutions: string[]
@@ -393,6 +401,19 @@ export type ExercisePrescription = {
   dose?: PrescriptionDose
 }
 
+export type PrescriptionTimeBreakdown = {
+  warmupSeconds: number
+  exerciseWarmupSeconds: number
+  workSeconds: number
+  restSeconds: number
+  transitionSeconds: number
+  equipmentSetupSeconds: number
+  cooldownSeconds: number
+  bufferSeconds: number
+  totalSeconds: number
+  policyVersion: string
+}
+
 export type PrescribedSession = {
   /** Puuttuva arvo tarkoittaa ennen v2:ta tallennettua legacy-snapshotia. */
   schemaVersion?: 1 | 2
@@ -403,6 +424,10 @@ export type PrescribedSession = {
   goal: GoalType
   durationMinutes: number
   timeBudgetMinutes?: number
+  calculatedTotalSeconds?: number
+  timePolicyVersion?: string
+  timeBreakdown?: PrescriptionTimeBreakdown
+  timeAdjustmentReasonCodes?: string[]
   objective?: SessionObjective
   confidence?: DecisionTrace['confidence']
   warmup: string[]

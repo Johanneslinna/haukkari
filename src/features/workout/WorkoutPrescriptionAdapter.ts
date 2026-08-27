@@ -1,4 +1,5 @@
 import {
+  ADULT_STRENGTH_TIME_POLICY_VERSION,
   adaptPrescription,
   evaluatePrescriptionAdaptationSafety,
   strengthSafetyGateMessage,
@@ -119,11 +120,27 @@ export function authorizeWorkoutPrescriptionForCurrentAthlete(input: {
   readiness: unknown
   today?: string
 }): PrescriptionResult {
-  const gate = evaluatePrescriptionAdaptationSafety(
-    input.prescription,
-    currentWorkoutSafetyContext(input),
-  )
+  const safetyContext = currentWorkoutSafetyContext(input)
+  const gate = evaluatePrescriptionAdaptationSafety(input.prescription, safetyContext)
   if (gate.allowed) {
+    if (
+      input.prescription.kind === 'STRENGTH' &&
+      (input.prescription.timePolicyVersion !== ADULT_STRENGTH_TIME_POLICY_VERSION ||
+        !input.prescription.timeBreakdown)
+    ) {
+      const timeBudgetMinutes =
+        input.prescription.timeBudgetMinutes ?? input.prescription.durationMinutes
+      return adaptPrescription(
+        input.prescription,
+        {
+          kind: 'FULL',
+          timeBudgetMinutes,
+          durationMinutes: timeBudgetMinutes,
+          volumeMultiplier: 1,
+        },
+        safetyContext,
+      )
+    }
     return { status: 'SUPPORTED', prescription: input.prescription }
   }
   return {

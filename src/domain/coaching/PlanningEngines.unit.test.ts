@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import { generatePlan } from './PlanGenerator'
+import { adaptPrescription } from './TrainingPrescriptionEngine'
 import { optimizeSchedule } from './ScheduleOptimizer'
 import { getSportAdapter, listFullySupportedDisciplines } from './SportAdapterRegistry'
 import { generalSportSupportWarning } from './sports/generalSportSupportAdapter'
@@ -215,6 +216,43 @@ describe('PlanGenerator, ScheduleOptimizer ja lajisovittimet', () => {
         'COMPACT_20',
         'COMPACT_30',
       ])
+    }
+  })
+
+  it('näyttää voimaharjoituksen ja varianttien kanonisesti lasketut kestot', () => {
+    const result = generatePlan({
+      goal: { primary: 'MAX_STRENGTH', secondary: [], inputs: {} },
+      experience: 'INTERMEDIATE',
+      availableDays: [1, 3, 5],
+      currentEnduranceMinutes: 0,
+      fixedSessions: [],
+      competitions: [],
+      age: 35,
+      healthBlocked: false,
+      equipment: ['Kehonpaino', 'Käsipainot', 'Kuntosalilaitteet'],
+      minutesPerSession: 60,
+      minutesByDay: { '1': 60, '3': 60, '5': 60 },
+      generatedAt: '2026-08-27T08:00:00.000Z',
+    })
+    const strength = result.decision.sessions.find(
+      (session) => session.source === 'APP' && session.kind === 'STRENGTH',
+    )
+    expect(strength?.prescriptionDetail).toBeDefined()
+    expect(strength?.durationMinutes).toBe(strength?.prescriptionDetail?.durationMinutes)
+    expect(strength?.timeBudgetMinutes).toBe(45)
+    for (const workoutVariant of strength?.variants ?? []) {
+      const adapted = adaptPrescription(strength!.prescriptionDetail!, workoutVariant, {
+        age: 35,
+        readiness: 'GREEN',
+        healthBlocked: false,
+        safetyInformationComplete: true,
+      })
+      expect(adapted.status).toBe('SUPPORTED')
+      if (adapted.status !== 'SUPPORTED') throw new Error(adapted.reasonCode)
+      expect(workoutVariant.durationMinutes).toBe(adapted.prescription.durationMinutes)
+      expect(workoutVariant.durationMinutes).toBeLessThanOrEqual(
+        workoutVariant.timeBudgetMinutes!,
+      )
     }
   })
 

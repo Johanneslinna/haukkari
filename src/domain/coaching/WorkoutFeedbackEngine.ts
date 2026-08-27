@@ -9,6 +9,7 @@ import {
   normalizePrescriptionV2,
   withExerciseDose,
 } from './PrescriptionContract'
+import { fitStrengthPrescriptionToTimeBudget } from './TimeBudgetPolicy'
 
 function isSuccessful(feedback: WorkoutFeedback) {
   const reportedRirs =
@@ -254,7 +255,7 @@ export function applyWorkoutProgression(
         })
     }
   })
-  return {
+  const adjusted: PrescribedSession = {
     ...normalized,
     exercises,
     blocks: exercises,
@@ -275,6 +276,12 @@ export function applyWorkoutProgression(
       ],
     },
   }
+  if (adjusted.kind !== 'STRENGTH') return adjusted
+  const fitted = fitStrengthPrescriptionToTimeBudget({
+    prescription: adjusted,
+    timeBudgetMinutes: adjusted.timeBudgetMinutes ?? adjusted.durationMinutes,
+  })
+  return fitted.status === 'SUPPORTED' ? fitted.prescription : adjusted
 }
 
 export const WorkoutFeedbackEngine = {

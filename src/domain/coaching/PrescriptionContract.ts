@@ -1,4 +1,5 @@
 import type { ExercisePrescription, PrescribedSession, PrescriptionDose } from './types'
+import { ADULT_STRENGTH_TIME_POLICY, estimatePrescriptionTime } from './TimeBudgetPolicy'
 
 export const PRESCRIPTION_SCHEMA_VERSION = 2 as const
 export const PRESCRIPTION_ENGINE_VERSION = 'training-engine-v2.0.0'
@@ -53,6 +54,9 @@ export function doseDurationSeconds(dose: PrescriptionDose) {
 }
 
 export function prescriptionDurationSeconds(prescription: PrescribedSession) {
+  if (prescription.kind === 'STRENGTH') {
+    return estimatePrescriptionTime(prescription, ADULT_STRENGTH_TIME_POLICY).totalSeconds
+  }
   const work = prescriptionBlocks(prescription).reduce(
     (total, exercise) => total + doseDurationSeconds(legacyDose(exercise)),
     0,
@@ -179,6 +183,25 @@ export function withV2Blocks(
     ...exercise,
     dose: legacyDose(exercise),
   }))
+  const base: PrescribedSession = {
+    ...prescription,
+    schemaVersion: PRESCRIPTION_SCHEMA_VERSION,
+    engineVersion:
+      prescription.decisionTrace.engineVersion ?? PRESCRIPTION_ENGINE_VERSION,
+    confidence: prescription.decisionTrace.confidence,
+    exercises,
+    blocks: exercises,
+  }
+  if (base.kind === 'STRENGTH') {
+    const timeBreakdown = estimatePrescriptionTime(base, ADULT_STRENGTH_TIME_POLICY)
+    return {
+      ...base,
+      durationMinutes: Math.max(1, Math.ceil(timeBreakdown.totalSeconds / 60)),
+      calculatedTotalSeconds: timeBreakdown.totalSeconds,
+      timePolicyVersion: timeBreakdown.policyVersion,
+      timeBreakdown,
+    }
+  }
   const calculatedDurationMinutes = Math.max(
     1,
     Math.ceil(
@@ -191,16 +214,7 @@ export function withV2Blocks(
         60,
     ),
   )
-  return {
-    ...prescription,
-    durationMinutes: calculatedDurationMinutes,
-    schemaVersion: PRESCRIPTION_SCHEMA_VERSION,
-    engineVersion:
-      prescription.decisionTrace.engineVersion ?? PRESCRIPTION_ENGINE_VERSION,
-    confidence: prescription.decisionTrace.confidence,
-    exercises,
-    blocks: exercises,
-  }
+  return { ...base, durationMinutes: calculatedDurationMinutes }
 }
 
 export function normalizePrescriptionV2(
@@ -224,8 +238,14 @@ export function normalizePrescriptionV2(
     warmupMinutes: prescription.warmupMinutes ?? 0,
     cooldownMinutes: prescription.cooldownMinutes ?? 0,
   })
+  const {
+    calculatedTotalSeconds: _calculatedTotalSeconds,
+    timePolicyVersion: _timePolicyVersion,
+    timeBreakdown: _timeBreakdown,
+    ...historicalSnapshot
+  } = normalized
   return {
-    ...normalized,
+    ...historicalSnapshot,
     // Historiallinen snapshot säilyttää käyttäjälle aiemmin näytetyn keston.
     durationMinutes: prescription.durationMinutes,
   }

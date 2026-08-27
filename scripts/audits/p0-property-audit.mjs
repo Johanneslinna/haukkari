@@ -37,6 +37,7 @@ try {
     MAX_SESSION_PRIMARY_MUSCLE_SETS,
     addPlannedSets,
     adaptPrescription,
+    auditStrengthPrescriptionTime,
     calculateRollingMuscleVolume,
     prescriptionDurationSeconds,
     publishedExerciseCatalog,
@@ -89,6 +90,23 @@ try {
   let unexpectedAdaptationBlockedCount = 0
   const expectedAdaptationBlockedCount = {}
   const actualAdaptationBlockedCount = {}
+  const supportedPrescriptionCountByBudget = Object.fromEntries(
+    budgets.map((budget) => [budget, 0]),
+  )
+  const supportedVariantCount = Object.fromEntries(
+    ['FULL', 'LIGHT', 'COMPACT_10', 'COMPACT_20', 'COMPACT_30'].map((kind) => [kind, 0]),
+  )
+  const maximumCalculatedSecondsByBudget = Object.fromEntries(
+    budgets.map((budget) => [budget, 0]),
+  )
+  const maximumUtilizationPercentByBudget = Object.fromEntries(
+    budgets.map((budget) => [budget, 0]),
+  )
+  let timeBudgetViolationCount = 0
+  let displayedDurationMismatchCount = 0
+  let missingTimeBreakdownCount = 0
+  let shortenedRestCount = 0
+  let emptySupportedPrescriptionCount = 0
   const coverage = {
     age: Object.fromEntries(supportedAges.map((age) => [age, 0])),
     goal: Object.fromEntries(goals.map((goal) => [goal, 0])),
@@ -313,6 +331,7 @@ try {
 
     const prescription = first.prescription
     if (prescription.exercises.length === 0) {
+      emptySupportedPrescriptionCount += 1
       violation('EMPTY_SUPPORTED_PRESCRIPTION', {
         index,
         age,
@@ -328,14 +347,131 @@ try {
       continue
     }
     allowedPrescriptionCount += 1
+    increment(supportedPrescriptionCountByBudget, budget)
     increment(coverage.age, age)
     increment(coverage.goal, goal)
     increment(coverage.experience, experience)
     increment(coverage.readiness, readiness)
     increment(coverage.equipment, equipmentProfile.id)
     const durationSeconds = prescriptionDurationSeconds(prescription)
+    const timeAudit = auditStrengthPrescriptionTime(prescription)
+    if (timeAudit.violations.includes('TIME_BUDGET_EXCEEDED')) {
+      timeBudgetViolationCount += 1
+    }
+    if (timeAudit.violations.includes('DISPLAYED_DURATION_MISMATCH')) {
+      displayedDurationMismatchCount += 1
+    }
+    if (
+      timeAudit.violations.includes('TIME_BREAKDOWN_MISSING') ||
+      timeAudit.violations.includes('TIME_BREAKDOWN_STALE')
+    ) {
+      missingTimeBreakdownCount += 1
+    }
+    if (timeAudit.violations.includes('REST_SHORTENED')) {
+      shortenedRestCount += 1
+    }
+    for (const timeViolation of timeAudit.violations) {
+      violation(timeViolation, { index, budget, durationSeconds })
+    }
+    maximumCalculatedSecondsByBudget[budget] = Math.max(
+      maximumCalculatedSecondsByBudget[budget],
+      durationSeconds,
+    )
+    maximumUtilizationPercentByBudget[budget] = Math.max(
+      maximumUtilizationPercentByBudget[budget],
+      Number(((durationSeconds / (budget * 60)) * 100).toFixed(2)),
+    )
     if (durationSeconds > budget * 60) {
       violation('TIME_BUDGET_EXCEEDED', { index, budget, durationSeconds })
+    }
+    const variants = [
+      {
+        kind: 'FULL',
+        timeBudgetMinutes: budget,
+        durationMinutes: budget,
+        volumeMultiplier: 1,
+      },
+      {
+        kind: 'LIGHT',
+        timeBudgetMinutes: budget,
+        durationMinutes: budget,
+        volumeMultiplier: 0.65,
+      },
+      {
+        kind: 'COMPACT_10',
+        timeBudgetMinutes: Math.min(budget, 10),
+        durationMinutes: Math.min(budget, 10),
+        volumeMultiplier: 0.35,
+      },
+      {
+        kind: 'COMPACT_20',
+        timeBudgetMinutes: Math.min(budget, 20),
+        durationMinutes: Math.min(budget, 20),
+        volumeMultiplier: 0.55,
+      },
+      {
+        kind: 'COMPACT_30',
+        timeBudgetMinutes: Math.min(budget, 30),
+        durationMinutes: Math.min(budget, 30),
+        volumeMultiplier: 0.75,
+      },
+    ]
+    for (const workoutVariant of variants) {
+      const adapted = adaptPrescription(prescription, workoutVariant, {
+        age,
+        readiness,
+        healthBlocked: false,
+        safetyInformationComplete: true,
+      })
+      if (adapted.status !== 'SUPPORTED') {
+        violation('UNEXPECTED_TIME_VARIANT_BLOCK', {
+          index,
+          budget,
+          variant: workoutVariant.kind,
+          reasonCode: adapted.reasonCode,
+        })
+        continue
+      }
+      increment(supportedVariantCount, workoutVariant.kind)
+      const variantAudit = auditStrengthPrescriptionTime(adapted.prescription)
+      const variantBudget = workoutVariant.timeBudgetMinutes
+      const variantSeconds = variantAudit.calculated.totalSeconds
+      if (variantAudit.violations.includes('TIME_BUDGET_EXCEEDED')) {
+        timeBudgetViolationCount += 1
+      }
+      if (variantAudit.violations.includes('DISPLAYED_DURATION_MISMATCH')) {
+        displayedDurationMismatchCount += 1
+      }
+      if (
+        variantAudit.violations.includes('TIME_BREAKDOWN_MISSING') ||
+        variantAudit.violations.includes('TIME_BREAKDOWN_STALE')
+      ) {
+        missingTimeBreakdownCount += 1
+      }
+      if (variantAudit.violations.includes('REST_SHORTENED')) {
+        shortenedRestCount += 1
+      }
+      for (const timeViolation of variantAudit.violations) {
+        violation(timeViolation, {
+          index,
+          budget: variantBudget,
+          variant: workoutVariant.kind,
+          durationSeconds: variantSeconds,
+        })
+      }
+      for (const exercise of adapted.prescription.exercises) {
+        const source = prescription.exercises.find((item) => item.code === exercise.code)
+        if (source && exercise.restSeconds < source.restSeconds) {
+          shortenedRestCount += 1
+          violation('REST_SHORTENED', {
+            index,
+            variant: workoutVariant.kind,
+            exercise: exercise.code,
+            sourceRestSeconds: source.restSeconds,
+            adaptedRestSeconds: exercise.restSeconds,
+          })
+        }
+      }
     }
     if (
       prescription.exercises.some(
@@ -428,6 +564,19 @@ try {
     expectedAdaptationBlockedCount,
     actualAdaptationBlockedCount,
     unexpectedAdaptationBlockedCount,
+    timeAudit: {
+      supportedPrescriptionCount: allowedPrescriptionCount,
+      unsupportedCount: actualBlockedCount,
+      supportedPrescriptionCountByBudget,
+      supportedVariantCount,
+      maximumCalculatedSecondsByBudget,
+      maximumUtilizationPercentByBudget,
+      timeBudgetViolationCount,
+      displayedDurationMismatchCount,
+      missingTimeBreakdownCount,
+      shortenedRestCount,
+      emptySupportedPrescriptionCount,
+    },
     supportedCoverage: coverage,
     violationCounts: violations,
     violationSamples: samples,

@@ -3,6 +3,7 @@ import { getSportAdapter } from './SportAdapterRegistry'
 import { getGoalStrategy } from './strategies'
 import { AthleteStateBuilder, ConstraintEngine, type AthleteState } from './engine'
 import {
+  adaptPrescription,
   resolvePrescription,
   TRAINING_RULE_VERSION,
   type PrescriptionProfile,
@@ -146,24 +147,33 @@ const sessionDefaults: Record<
 
 function createWorkoutVariants(durationMinutes: number): WorkoutVariant[] {
   return [
-    { kind: 'FULL', durationMinutes, volumeMultiplier: 1 },
+    {
+      kind: 'FULL',
+      timeBudgetMinutes: durationMinutes,
+      durationMinutes,
+      volumeMultiplier: 1,
+    },
     {
       kind: 'LIGHT',
-      durationMinutes: Math.max(1, Math.round(durationMinutes * 0.65)),
+      timeBudgetMinutes: durationMinutes,
+      durationMinutes,
       volumeMultiplier: 0.65,
     },
     {
       kind: 'COMPACT_10',
+      timeBudgetMinutes: Math.min(durationMinutes, 10),
       durationMinutes: Math.min(durationMinutes, 10),
       volumeMultiplier: 0.35,
     },
     {
       kind: 'COMPACT_20',
+      timeBudgetMinutes: Math.min(durationMinutes, 20),
       durationMinutes: Math.min(durationMinutes, 20),
       volumeMultiplier: 0.55,
     },
     {
       kind: 'COMPACT_30',
+      timeBudgetMinutes: Math.min(durationMinutes, 30),
       durationMinutes: Math.min(durationMinutes, 30),
       volumeMultiplier: 0.75,
     },
@@ -214,6 +224,7 @@ function createAppSessions(input: PlanGenerationInput, athleteState: AthleteStat
         title: defaults.title,
         prescription: defaults.prescription,
         durationMinutes: recommendedDuration,
+        ...(kind === 'STRENGTH' ? { timeBudgetMinutes: recommendedDuration } : {}),
         intensity: defaults.intensity,
         loadRegion: defaults.loadRegion,
         fixed: false,
@@ -339,16 +350,41 @@ export function generatePlan(
       sessionId: session.id,
       title: session.title ?? sessionDefaults[session.kind].title,
       kind: session.kind,
-      durationMinutes: session.durationMinutes,
+      durationMinutes: session.timeBudgetMinutes ?? session.durationMinutes,
       profile: {
         ...profile,
         minutesPerSession:
           input.minutesByDay?.[String(session.day)] ?? profile.minutesPerSession,
       },
     })
-    return resolved.status === 'SUPPORTED'
-      ? { ...session, prescriptionDetail: resolved.prescription }
-      : { ...session, unsupportedPrescription: resolved }
+    if (resolved.status !== 'SUPPORTED') {
+      return { ...session, unsupportedPrescription: resolved }
+    }
+    if (resolved.prescription.kind !== 'STRENGTH') {
+      return { ...session, prescriptionDetail: resolved.prescription }
+    }
+    const variants = (session.variants ?? []).flatMap((variant) => {
+      const adapted = adaptPrescription(resolved.prescription, variant, {
+        age: profile.age,
+        readiness: 'GREEN',
+        healthBlocked: Boolean(profile.healthBlocked),
+        safetyInformationComplete: true,
+      })
+      if (adapted.status !== 'SUPPORTED') return []
+      return [
+        {
+          ...variant,
+          timeBudgetMinutes: variant.timeBudgetMinutes ?? variant.durationMinutes,
+          durationMinutes: adapted.prescription.durationMinutes,
+        },
+      ]
+    })
+    return {
+      ...session,
+      durationMinutes: resolved.prescription.durationMinutes,
+      prescriptionDetail: resolved.prescription,
+      variants,
+    }
   })
 
   const assessments =

@@ -12,6 +12,7 @@ import {
   normalizePrescriptionV2,
   nextAutomaticLoadKg,
   resolvePrescription,
+  refreshStrengthPrescriptionTimeEstimate,
   type CompletedSet,
   type AdultResistanceSetHistory,
   type ExercisePrescription,
@@ -320,11 +321,6 @@ export function WorkoutPage() {
           ? 'LIGHT'
           : 'FULL'
   const [variantKind, setVariantKind] = useState<WorkoutVariant['kind']>(suggestedKind)
-  const selectedVariant = variants.find((variant) => variant.kind === variantKind) ?? {
-    kind: 'FULL' as const,
-    durationMinutes: session?.durationMinutes ?? 30,
-    volumeMultiplier: 1,
-  }
   const workoutLogs = data.list('workout_logs')
   const allFeedback = workoutLogs
     .map(savedFeedback)
@@ -356,7 +352,7 @@ export function WorkoutPage() {
           ? (session.title ?? sessionLabels[session.kind])
           : sessionLabels[effectiveSessionKind],
       kind: effectiveSessionKind,
-      durationMinutes: session.durationMinutes,
+      durationMinutes: session.timeBudgetMinutes ?? session.durationMinutes,
       profile: {
         goal: stringValue(
           goalRecord?.data.primary_goal,
@@ -376,7 +372,7 @@ export function WorkoutPage() {
         minutesPerSession:
           typeof profileSettings.minutesPerSession === 'number'
             ? profileSettings.minutesPerSession
-            : session.durationMinutes,
+            : (session.timeBudgetMinutes ?? session.durationMinutes),
         likes: stringValue(preferences.likes),
         dislikes: stringValue(preferences.dislikes),
         limitations: [
@@ -398,6 +394,34 @@ export function WorkoutPage() {
     prescriptionResolution?.status === 'SUPPORTED'
       ? prescriptionResolution.prescription
       : null
+  const materializedVariants = generatedPrescription
+    ? variants.flatMap((variant) => {
+        const adapted = adaptWorkoutPrescriptionForCurrentAthlete({
+          prescription: generatedPrescription,
+          variant,
+          profile: currentProfile,
+          screening: onboardingScreening,
+          readiness: todayCheckIn?.data.readiness,
+        })
+        if (adapted.status !== 'SUPPORTED') return []
+        return [
+          {
+            ...variant,
+            timeBudgetMinutes: variant.timeBudgetMinutes ?? variant.durationMinutes,
+            durationMinutes: adapted.prescription.durationMinutes,
+          },
+        ]
+      })
+    : variants
+  const selectedVariant = materializedVariants.find(
+    (variant) => variant.kind === variantKind,
+  ) ?? {
+    kind: 'FULL' as const,
+    timeBudgetMinutes: session?.timeBudgetMinutes ?? session?.durationMinutes ?? 30,
+    durationMinutes:
+      generatedPrescription?.durationMinutes ?? session?.durationMinutes ?? 30,
+    volumeMultiplier: 1,
+  }
   const resolutionUnsupportedPrescription =
     prescriptionResolution?.status === 'UNSUPPORTED' ? prescriptionResolution : null
   const feedbackDecision = evaluateWorkoutFeedback(
@@ -660,7 +684,7 @@ export function WorkoutPage() {
         title: previewPrescription.title,
         durationMinutes: previewPrescription.durationMinutes,
         intensity: readiness === 'ORANGE_RECOVERY' ? 'RECOVERY' : session.intensity,
-        variants,
+        variants: materializedVariants,
         prescription: previewPrescription,
       })
       setActiveWorkout(workout)
@@ -1046,7 +1070,7 @@ export function WorkoutPage() {
         : completedForExercise.length > 0
           ? [completedPart, replacementPart]
           : [replacementPart]
-    const nextPrescription: PrescribedSession = {
+    const replacementCandidate: PrescribedSession = {
       ...runningPrescription,
       exercises: runningPrescription.exercises.flatMap(replaceInList),
       blocks: runningPrescription.blocks?.flatMap(replaceInList),
@@ -1073,6 +1097,20 @@ export function WorkoutPage() {
           },
         ],
       },
+    }
+    const nextPrescription =
+      replacementCandidate.kind === 'STRENGTH'
+        ? refreshStrengthPrescriptionTimeEstimate(replacementCandidate)
+        : replacementCandidate
+    if (
+      nextPrescription.kind === 'STRENGTH' &&
+      nextPrescription.calculatedTotalSeconds! >
+        (nextPrescription.timeBudgetMinutes ?? nextPrescription.durationMinutes) * 60
+    ) {
+      setError(
+        'Korvaava liike ei mahdu jäljellä olevaan aikabudjettiin turvallisia palautuksia lyhentämättä.',
+      )
+      return
     }
     const replacementRows = createSetRows(
       { ...nextPrescription, exercises: [replacementPart] },
@@ -1128,7 +1166,7 @@ export function WorkoutPage() {
             <fieldset className="form">
               <legend>Harjoituksen versio</legend>
               <div className="variant-selector">
-                {variants.map((variant) => (
+                {materializedVariants.map((variant) => (
                   <label className="choice-card" key={variant.kind}>
                     <input
                       type="radio"
