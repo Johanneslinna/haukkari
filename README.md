@@ -49,6 +49,9 @@ Versionoitu harjoitussisältö ylläpidetään `training-content/v1`-paketissa.
 sekä generoi runtime-katalogin ja Supabase-seedin samasta lähteestä.
 `npm run content:seed` generoi artefaktit erikseen.
 
+GitHub Actionsin julkaisuportti ja `main`-haaran required check -ohje on kuvattu
+tiedostossa [`docs/github-release-gate.md`](docs/github-release-gate.md).
+
 ## Dokumentaatio
 
 - [Toteutussuunnitelma](docs/implementation-plan.md)

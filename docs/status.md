@@ -1,4 +1,8 @@
-# Toteutustila 24.8.2026
+# Toteutustila 27.8.2026
+
+Vaihekohtaisten osioiden testimäärät ovat kyseisen vaiheen hyväksyntähetken
+historiallisia lukuja. Nykyinen kokonaismäärä on kirjattu uusimpaan
+harjoittelumoottori v2 -osioon.
 
 ## Vaihe 0 – valmis
 
@@ -257,8 +261,8 @@ Turvallisuus- ja aikabudjettikorjaukset pysyvät aina käytössä. Harjoitekirja
 tarkistamattomia videolinkkejä ei näytetä; jokainen linkki julkaistaan vasta
 sisältöarvion jälkeen.
 
-Paikallinen `npm run check` läpäisi lintin, muotoilun, TypeScriptin, 117
-yksikkötestiä, 7 integraatiotestiä, tietosuojaskannauksen, tuotantobuildin ja
+Paikallinen `npm run check` läpäisi lintin, muotoilun, TypeScriptin, 138
+yksikkötestiä, 8 integraatiotestiä, tietosuojaskannauksen, tuotantobuildin ja
 PWA-portin. `npm run e2e:app` läpäisi 8 ajettua selainpolkua Android-, iPhone- ja
 työpöytäprofiileilla; 10 testiä ohitettiin tarkoituksella niissä laiteprofiileissa,
 joille kyseistä polkua ei ole määritetty.
