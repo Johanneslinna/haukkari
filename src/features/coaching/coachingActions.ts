@@ -7,8 +7,11 @@ import {
   doseUnitCount,
   generatePlan,
   getGoalStrategy,
+  upsertVerifiedNextLoad,
   previewGoalChange,
   previewPreviousGoalRestore,
+  verifiedNextLoadsFrom,
+  verifyNextLoad,
 } from '../../domain/coaching'
 import type {
   CompletedSet,
@@ -24,6 +27,7 @@ import type {
   PlannedSession,
   WorkoutFeedback,
   ConfirmedLimitationTag,
+  ExerciseLoadType,
 } from '../../domain/coaching/types'
 import type { LocalRecord } from '../../domain/sync/types'
 import { featureFlags } from '../../config/featureFlags'
@@ -350,6 +354,9 @@ function planFromPreferences(
     hockeyBeta: 'hockeyBeta' in preferences && preferences.hockeyBeta === true,
     age: typeof preferences.age === 'number' ? preferences.age : undefined,
     generatedAt: new Date().toISOString(),
+    verifiedNextLoads: verifiedNextLoadsFrom(
+      (preferences as Record<string, unknown>).verifiedNextLoads,
+    ),
   })
   if (healthBlocked) {
     generated.decision.sessions = generated.decision.sessions
@@ -641,6 +648,48 @@ export async function saveDailyCheckIn(data: AppDataContextValue, input: Readine
   })
   if (existing) await data.update(existing, payload)
   else await data.create('daily_checkins', payload)
+  return result
+}
+
+export async function confirmNextAvailableLoad(
+  data: AppDataContextValue,
+  input: {
+    exerciseCode: string
+    exerciseVersion: string
+    loadType: ExerciseLoadType
+    loadContextId: string | undefined
+    currentLoadKg: number
+    nextAvailableLoadKg: number
+  },
+) {
+  const result = verifyNextLoad({
+    identity: input,
+    nextAvailableLoadKg: input.nextAvailableLoadKg,
+    confirmedAt: new Date().toISOString(),
+  })
+  if (!result.ok) return result
+  const profile = data.latest('profiles')
+  if (!profile) {
+    return {
+      ok: false as const,
+      reasonCode: 'LOAD_CONTEXT_REQUIRED' as const,
+      messageFi: 'Profiilia ei löytynyt, joten vahvistusta ei voitu tallentaa.',
+    }
+  }
+  const appSettings = objectValue(profile.data.app_settings)
+  const verifiedNextLoads = upsertVerifiedNextLoad(
+    verifiedNextLoadsFrom(appSettings.verifiedNextLoads),
+    result.confirmation,
+  )
+  await data.update(
+    profile,
+    toJsonObject({
+      app_settings: {
+        ...appSettings,
+        verifiedNextLoads,
+      },
+    }),
+  )
   return result
 }
 

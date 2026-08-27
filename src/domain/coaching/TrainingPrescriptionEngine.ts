@@ -10,6 +10,7 @@ import type {
   ExerciseLoadType,
   ConfirmedLimitationTag,
   PrescriptionDose,
+  VerifiedNextLoad,
 } from './types'
 import {
   doseDurationSeconds,
@@ -70,6 +71,8 @@ export type PrescriptionProfile = {
   readiness?: ReadinessState
   supervisionAvailable?: boolean
   strengthHistory?: AdultResistanceSetHistory[]
+  /** Käyttäjän vahvistamat kuormakohtaiset seuraavat vaihtoehdot. */
+  verifiedNextLoads?: VerifiedNextLoad[]
   contentReleaseId?: string
   ruleVersion?: string
 }
@@ -268,6 +271,7 @@ function prescribeStrength(
       dislikedExerciseCodes,
       likedExerciseCodes,
       supervisionAvailable: profile.supervisionAvailable ?? false,
+      verifiedNextLoads: profile.verifiedNextLoads,
     },
     history: profile.strengthHistory,
   })

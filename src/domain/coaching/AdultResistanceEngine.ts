@@ -20,6 +20,7 @@ import type {
   SetPainResponse,
   SessionObjective,
   WorkoutCompletionStatus,
+  VerifiedNextLoad,
 } from './types'
 import { evaluateStrengthSafetyGate } from './StrengthSafetyGate'
 import {
@@ -29,9 +30,14 @@ import {
   maximumAdditionalSets,
   type MuscleVolume,
 } from './StrengthVolumePolicy'
+import {
+  findVerifiedNextLoad,
+  isAutomaticLoadIncreaseAllowed,
+  isKilogramLoadType,
+} from './VerifiedNextLoad'
 
-export const ADULT_RESISTANCE_ENGINE_VERSION = 'adult-resistance-1.2.0'
-export const ADULT_RESISTANCE_RULE_VERSION = 'adult-resistance-rules-1.2.0'
+export const ADULT_RESISTANCE_ENGINE_VERSION = 'adult-resistance-1.3.0'
+export const ADULT_RESISTANCE_RULE_VERSION = 'adult-resistance-rules-1.3.0'
 export const ADULT_RESISTANCE_LOAD_CONTEXT_VERSION = 'adult-resistance-load-context-1.0.0'
 
 const experienceRank: Record<ExperienceLevel, number> = {
@@ -80,6 +86,8 @@ export type AdultResistanceAthleteContext = {
   dislikedExerciseCodes: string[]
   likedExerciseCodes: string[]
   supervisionAvailable: boolean
+  /** Käyttäjän nimenomaisesti vahvistamat kuormakohtaiset seuraavat vaihtoehdot. */
+  verifiedNextLoads?: readonly VerifiedNextLoad[]
 }
 
 export type EligibilityDecision = {
@@ -145,6 +153,7 @@ export function nextAutomaticLoadKg(
 
 export type InterSessionProgressionDecision = {
   action: 'RECALIBRATE_LOAD' | 'KEEP_LOAD' | 'INCREASE_LOAD' | 'INCREASE_REPETITIONS'
+  currentLoadKg?: number
   nextLoadKg?: number
   nextRepetitions?: number
   changedVariable: 'NONE' | 'LOAD' | 'REPETITIONS'
@@ -337,14 +346,6 @@ export function scoreExerciseCandidates(
 
 function roundToIncrement(value: number, increment: number) {
   return Math.round(value / increment) * increment
-}
-
-function isKilogramLoadType(loadType: ExerciseLoadType) {
-  return (
-    loadType === 'EXTERNAL_KG' ||
-    loadType === 'DUMBBELL_KG_EACH' ||
-    loadType === 'MACHINE_KG'
-  )
 }
 
 export function defaultResistanceLoadContextId(
@@ -649,31 +650,6 @@ function selectedPatternOrder(minutes: number) {
   return ['SQUAT', 'HINGE', 'HORIZONTAL_PUSH', 'HORIZONTAL_PULL', 'ANTI_EXTENSION']
 }
 
-function verifiedLoadIncrementKg(
-  history: readonly AdultResistanceSetHistory[],
-  exercise: ExerciseDefinition,
-  loadContextId: string | undefined,
-) {
-  if (!loadContextId) return undefined
-  const increments = [
-    ...new Set(
-      history
-        .filter(
-          (item) =>
-            item.exerciseCode === exercise.code &&
-            item.exerciseVersion === exercise.version &&
-            item.sessionId &&
-            item.loadContextId === loadContextId &&
-            item.completionStatus === 'COMPLETED' &&
-            typeof item.loadIncrementKg === 'number' &&
-            item.loadIncrementKg > 0,
-        )
-        .map((item) => item.loadIncrementKg!),
-    ),
-  ]
-  return increments.length === 1 ? increments[0] : undefined
-}
-
 function progressionGuidanceFi(decision: InterSessionProgressionDecision) {
   switch (decision.action) {
     case 'INCREASE_REPETITIONS':
@@ -681,6 +657,12 @@ function progressionGuidanceFi(decision: InterSessionProgressionDecision) {
     case 'INCREASE_LOAD':
       return `Seuraava askel: nosta kuorma vahvistettuun seuraavaan portaaseen (${decision.nextLoadKg} kg).`
     case 'KEEP_LOAD':
+      if (decision.reasonCodes.includes('NEXT_AVAILABLE_LOAD_NOT_CONFIRMED')) {
+        return 'Seuraava askel: säilytä kuorma ja vahvista pienin seuraava käytettävissä oleva kuorma.'
+      }
+      if (decision.reasonCodes.includes('VERIFIED_NEXT_LOAD_EXCEEDS_TEN_PERCENT')) {
+        return 'Seuraava askel: säilytä kuorma. Vahvistettu kuormaporras ylittää 10 %, joten automaattista nostoa ei tehdä.'
+      }
       return 'Seuraava askel: säilytä nykyinen kuorma.'
     case 'RECALIBRATE_LOAD':
       return 'Seuraava askel: kalibroi kuorma uudelleen ennen tarkkaa kuormasuositusta.'
@@ -805,11 +787,6 @@ export function prescribeAdultResistanceSession(input: {
       : String(dose.repetitions)
     const targetRir = Array.isArray(dose.targetRir) ? dose.targetRir[0] : dose.targetRir
     const load = loadTracking(item.exercise)
-    const loadIncrementKg = verifiedLoadIncrementKg(
-      history,
-      item.exercise,
-      load.loadContextId,
-    )
     const maximumRepetitions = Array.isArray(dose.repetitions)
       ? dose.repetitions[1]
       : dose.repetitions
@@ -818,7 +795,7 @@ export function prescribeAdultResistanceSession(input: {
       targetRir: Array.isArray(dose.targetRir)
         ? dose.targetRir
         : [dose.targetRir, dose.targetRir],
-      loadIncrementKg,
+      verifiedNextLoads: input.context.verifiedNextLoads,
       targetExerciseCode: item.exercise.code,
       targetExerciseVersion: item.exercise.version,
       targetLoadType: load.loadType,
@@ -854,7 +831,6 @@ export function prescribeAdultResistanceSession(input: {
           'Keskeytä, jos liike provosoi kipua tai tekniikka ei pysy hallittuna.',
         substitutions,
         ...load,
-        loadIncrementKg,
         progressionDecision: progressionDecision as ExerciseProgressionDecision,
         difficulty: item.exercise.minimumExperience,
         trainingEffects: [...item.exercise.adaptationTargets],
@@ -1025,7 +1001,8 @@ export function adaptNextSet(input: {
   pain: SetPainResponse | 'MODERATE'
   techniqueOk: boolean
   experience: ExperienceLevel
-  loadIncrementKg: number
+  /** Vain kutsuhetkellä varmasti tunnettu välineporras; puuttuva arvo toimii fail closed. */
+  loadIncrementKg?: number
 }): SetAdaptationDecision {
   if (input.pain === 'SEVERE')
     return { action: 'REFER_SAFETY', reasonCodes: ['SEVERE_PAIN_REPORTED'] }
@@ -1053,9 +1030,13 @@ export function adaptNextSet(input: {
   if (input.completedRir === undefined)
     return { action: 'MAINTAIN', reasonCodes: ['RIR_MISSING'] }
   if (input.completedRir < input.targetRir[0]) {
-    const adjustedLoadKg = input.completedLoadKg
-      ? Math.max(0, input.completedLoadKg - input.loadIncrementKg)
-      : undefined
+    const adjustedLoadKg =
+      input.completedLoadKg &&
+      typeof input.loadIncrementKg === 'number' &&
+      Number.isFinite(input.loadIncrementKg) &&
+      input.loadIncrementKg > 0
+        ? Math.max(0, input.completedLoadKg - input.loadIncrementKg)
+        : undefined
     return {
       action:
         adjustedLoadKg === undefined ? 'REDUCE_REPETITIONS' : 'DECREASE_ONE_INCREMENT',
@@ -1073,7 +1054,10 @@ export function adaptNextSet(input: {
     input.experience !== 'BEGINNER'
   ) {
     const nextLoadKg =
-      input.completedLoadKg === undefined
+      input.completedLoadKg === undefined ||
+      typeof input.loadIncrementKg !== 'number' ||
+      !Number.isFinite(input.loadIncrementKg) ||
+      input.loadIncrementKg <= 0
         ? null
         : nextAutomaticLoadKg(input.completedLoadKg, input.loadIncrementKg)
     if (nextLoadKg === null) {
@@ -1086,7 +1070,11 @@ export function adaptNextSet(input: {
           input.completedRepetitions < input.prescribedRepetitions
             ? input.completedRepetitions + 1
             : undefined,
-        reasonCodes: ['LOAD_INCREMENT_EXCEEDS_TEN_PERCENT'],
+        reasonCodes: [
+          typeof input.loadIncrementKg === 'number'
+            ? 'LOAD_INCREMENT_EXCEEDS_TEN_PERCENT'
+            : 'LOAD_ADJUSTMENT_NOT_VERIFIED',
+        ],
       }
     }
     return {
@@ -1101,6 +1089,8 @@ export function adaptNextSet(input: {
 export function decideInterSessionProgression(input: {
   comparableSessions: readonly AdultResistanceSetHistory[]
   targetRir: [number, number]
+  verifiedNextLoads?: readonly VerifiedNextLoad[]
+  /** @deprecated Hyväksytään kutsusopimuksessa vain legacy-yhteensopivuutta varten; ei valtuuta progressiota. */
   loadIncrementKg?: number
   targetExerciseCode?: string
   targetExerciseVersion?: string
@@ -1237,32 +1227,51 @@ export function decideInterSessionProgression(input: {
     latestTwo.every((item) => item.loadKg === latest.loadKg) &&
     latest.loadKg !== undefined
   if (kilogramLoad && latestTwo.length >= 2 && sameLoad) {
-    if (!input.loadIncrementKg) {
+    const currentLoadKg = latest.loadKg!
+    const verifiedNextLoad = findVerifiedNextLoad(
+      input.verifiedNextLoads ?? [],
+      {
+        exerciseCode: input.targetExerciseCode,
+        exerciseVersion: input.targetExerciseVersion,
+        loadType: targetLoadType,
+        loadContextId: input.targetLoadContextId,
+        currentLoadKg,
+      },
+      {
+        evaluatedAt: input.generatedAt,
+        supportingEvidenceAt: latest.completedAt,
+      },
+    )
+    if (!verifiedNextLoad) {
       return {
         action: 'KEEP_LOAD',
-        nextLoadKg: latest.loadKg,
+        currentLoadKg,
+        nextLoadKg: currentLoadKg,
         changedVariable: 'NONE',
-        reasonCodes: ['ACTUAL_LOAD_INCREMENT_NOT_VERIFIED'],
+        reasonCodes: ['NEXT_AVAILABLE_LOAD_NOT_CONFIRMED'],
         supportingSessionIds: latestTwo.map((item) => item.sessionId),
       }
     }
-    const nextLoadKg = nextAutomaticLoadKg(latest.loadKg!, input.loadIncrementKg)
-    if (nextLoadKg === null) {
+    if (
+      !isAutomaticLoadIncreaseAllowed(currentLoadKg, verifiedNextLoad.nextAvailableLoadKg)
+    ) {
       return {
         action: 'KEEP_LOAD',
-        nextLoadKg: latest.loadKg,
+        currentLoadKg,
+        nextLoadKg: currentLoadKg,
         changedVariable: 'NONE',
-        reasonCodes: ['LOAD_INCREMENT_EXCEEDS_TEN_PERCENT'],
+        reasonCodes: ['VERIFIED_NEXT_LOAD_EXCEEDS_TEN_PERCENT'],
         supportingSessionIds: latestTwo.map((item) => item.sessionId),
       }
     }
     return {
       action: 'INCREASE_LOAD',
-      nextLoadKg,
+      currentLoadKg,
+      nextLoadKg: verifiedNextLoad.nextAvailableLoadKg,
       changedVariable: 'LOAD',
       reasonCodes: [
         'TWO_SUCCESSFUL_DISTINCT_SESSIONS_AT_REPETITION_MAXIMUM',
-        'ONE_VERIFIED_AVAILABLE_INCREMENT',
+        'USER_CONFIRMED_NEXT_AVAILABLE_LOAD',
       ],
       supportingSessionIds: latestTwo.map((item) => item.sessionId),
     }

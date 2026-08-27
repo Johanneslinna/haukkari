@@ -345,12 +345,31 @@ export type CapabilityEstimate = {
 
 export type ExerciseProgressionDecision = {
   action: 'RECALIBRATE_LOAD' | 'KEEP_LOAD' | 'INCREASE_REPETITIONS' | 'INCREASE_LOAD'
+  /** Viimeisimpien vertailukelpoisten harjoitusten toteutunut kuorma. */
+  currentLoadKg?: number
   nextLoadKg?: number
   nextRepetitions?: number
   changedVariable: 'NONE' | 'LOAD' | 'REPETITIONS'
   reasonCodes: string[]
   /** Eri WorkoutRecord-tunnisteet, joihin progression päätös perustuu. */
   supportingSessionIds: string[]
+}
+
+/**
+ * Käyttäjän vahvistama todellinen seuraava käytettävissä oleva kuorma.
+ *
+ * Vahvistus koskee aina yhtä liikeversiota, kuormakontekstia ja nykyistä
+ * kuormaa. Näin eri välineiden ja kuorman mukaan muuttuvia portaita ei
+ * typistetä yhdeksi pysyväksi increment-arvoksi.
+ */
+export type VerifiedNextLoad = {
+  exerciseCode: string
+  exerciseVersion: string
+  loadContextId: string
+  currentLoadKg: number
+  nextAvailableLoadKg: number
+  confirmedAt: string
+  policyVersion: string
 }
 
 export type UnsupportedPrescription = {
@@ -398,7 +417,7 @@ export type ExercisePrescription = {
   loadType: ExerciseLoadType
   loadLabelFi: string
   loadOptions?: string[]
-  /** Vain käyttäjän välineille vahvistettu todellinen kuormaporras. */
+  /** @deprecated Legacy-snapshotin lukutuki; uusi tuotantopolku käyttää VerifiedNextLoad-vahvistusta. */
   loadIncrementKg?: number
   /** Versionoitu konteksti, jonka sisällä kilogrammat ovat vertailukelpoisia. */
   loadContextId?: string
@@ -486,6 +505,7 @@ export type WorkoutExerciseResult = {
   exerciseName: string
   loadType: ExerciseLoadType
   loadContextId?: string
+  /** @deprecated Vanhan historian lukutuki; ei valtuuta uutta kilogrammaprogressiota. */
   loadIncrementKg?: number
   completedSets: number
   plannedSets: number

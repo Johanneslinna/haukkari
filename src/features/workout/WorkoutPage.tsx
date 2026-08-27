@@ -12,6 +12,7 @@ import {
   normalizePrescriptionV2,
   resolvePrescription,
   refreshStrengthPrescriptionTimeEstimate,
+  verifiedNextLoadsFrom,
   type CompletedSet,
   type ExercisePrescription,
   type PrescribedSession,
@@ -28,6 +29,7 @@ import {
   activeGoalRecord,
   activeTrainingPlan,
   completeWorkout,
+  confirmNextAvailableLoad,
   saveWorkoutAdaptation,
   saveWorkoutSet,
   startWorkout,
@@ -50,6 +52,7 @@ import {
   storedReadiness,
 } from './WorkoutPrescriptionAdapter'
 import { strengthHistoryFromLogs } from './WorkoutHistory'
+import { requestsNextLoadConfirmation } from './WorkoutProgressionUi'
 
 const variantLabels: Record<WorkoutVariant['kind'], string> = {
   FULL: 'Täysi',
@@ -341,6 +344,7 @@ export function WorkoutPage() {
         generatedAt: new Date().toISOString(),
         readiness: safetyContext.readiness,
         strengthHistory: strengthHistoryFromLogs(workoutLogs),
+        verifiedNextLoads: verifiedNextLoadsFrom(profileSettings.verifiedNextLoads),
       },
     })
   })()
@@ -468,6 +472,10 @@ export function WorkoutPage() {
   const [stopPanelOpen, setStopPanelOpen] = useState(false)
   const [pending, setPending] = useState(false)
   const [error, setError] = useState('')
+  const [nextLoadInputs, setNextLoadInputs] = useState<Record<string, string>>({})
+  const [nextLoadMessages, setNextLoadMessages] = useState<
+    Record<string, { kind: 'error' | 'success'; text: string }>
+  >({})
   const runningAuthorization = runningPrescription
     ? authorizeWorkoutPrescriptionForCurrentAthlete({
         prescription: runningPrescription,
@@ -630,6 +638,68 @@ export function WorkoutPage() {
     )
   }
 
+  const saveNextLoadConfirmation = async (exercise: ExercisePrescription) => {
+    const currentLoadKg = exercise.progressionDecision?.currentLoadKg
+    if (
+      currentLoadKg === undefined ||
+      !exercise.contentVersion ||
+      !exercise.loadContextId
+    ) {
+      setNextLoadMessages((current) => ({
+        ...current,
+        [exercise.id]: {
+          kind: 'error',
+          text: 'Liikeversio tai kuormakonteksti puuttuu, joten kuormaa ei tallennettu.',
+        },
+      }))
+      return
+    }
+    const nextAvailableLoadKg = parseOptionalNumber(nextLoadInputs[exercise.id] ?? '')
+    if (nextAvailableLoadKg === null) {
+      setNextLoadMessages((current) => ({
+        ...current,
+        [exercise.id]: {
+          kind: 'error',
+          text: 'Anna seuraava kuorma numeroina kilogrammoina.',
+        },
+      }))
+      return
+    }
+    setPending(true)
+    try {
+      const result = await confirmNextAvailableLoad(data, {
+        exerciseCode: exercise.code,
+        exerciseVersion: exercise.contentVersion,
+        loadType: exercise.loadType,
+        loadContextId: exercise.loadContextId,
+        currentLoadKg,
+        nextAvailableLoadKg,
+      })
+      setNextLoadMessages((current) => ({
+        ...current,
+        [exercise.id]: result.ok
+          ? {
+              kind: 'success',
+              text: `Seuraava käytettävissä oleva kuorma ${nextAvailableLoadKg} kg vahvistettiin.`,
+            }
+          : { kind: 'error', text: result.messageFi },
+      }))
+    } catch (reason) {
+      setNextLoadMessages((current) => ({
+        ...current,
+        [exercise.id]: {
+          kind: 'error',
+          text:
+            reason instanceof Error
+              ? reason.message
+              : 'Seuraavaa kuormaa ei voitu tallentaa.',
+        },
+      }))
+    } finally {
+      setPending(false)
+    }
+  }
+
   const begin = async () => {
     setPending(true)
     setError('')
@@ -679,6 +749,7 @@ export function WorkoutPage() {
     adjusted: Record<string, string | number | boolean | null>,
     reasonCodes: string[],
     safetyOutcome?: 'MODIFY' | 'STOP',
+    persistImmediately = false,
   ) => {
     if (!runningPrescription) return
     const nextPrescription: PrescribedSession = {
@@ -699,7 +770,7 @@ export function WorkoutPage() {
       },
     }
     setRunningPrescription(nextPrescription)
-    if (!activeWorkout) return
+    if (!activeWorkout || !persistImmediately) return
     void saveWorkoutAdaptation(data, activeWorkout, nextPrescription).catch(
       (reason: unknown) => {
         setError(
@@ -718,7 +789,13 @@ export function WorkoutPage() {
     },
     action = 'LOCK_SESSION_STOP',
   ) => {
-    recordAdaptation(original, { action, sessionStatus: 'STOPPED' }, [reasonCode], 'STOP')
+    recordAdaptation(
+      original,
+      { action, sessionStatus: 'STOPPED' },
+      [reasonCode],
+      'STOP',
+      true,
+    )
     setSessionLockReason(reasonCode)
     setCompletionStatus('STOPPED')
     setRestSeconds(0)
@@ -814,7 +891,6 @@ export function WorkoutPage() {
           exerciseName: exercise.nameFi,
           loadType: exercise.loadType,
           loadContextId: exercise.loadContextId,
-          loadIncrementKg: exercise.loadIncrementKg,
           completedSets: exerciseSets.filter((item) => item.completed).length,
           plannedSets: doseUnitCount(exercise),
           completed: exerciseSets.map((item) => item.completed),
@@ -897,7 +973,10 @@ export function WorkoutPage() {
       : 'BEGINNER'
 
   const applySetAdaptation = (exercise: ExercisePrescription, completed: EditableSet) => {
-    if (!usesStrengthLog(exercise) || exercise.targetRir === undefined) return
+    if (!usesStrengthLog(exercise) || exercise.targetRir === undefined) {
+      persistSet(completed)
+      return
+    }
     const repetitions = parseOptionalNumber(completed.repetitionsInput)
     const completedRir = parseOptionalNumber(completed.rirInput)
     const completedLoadKg = numericLoad(exercise, completed.loadInput)
@@ -907,12 +986,12 @@ export function WorkoutPage() {
       completed.techniqueInput === ''
     ) {
       setError('Kirjaa sarjan toistot, RIR, kipu ja tekniikan onnistuminen.')
+      persistSet(completed)
       return
     }
     const targetRepetitions = Number(
       exercise.repetitions?.match(/\d+/u)?.[0] ?? repetitions,
     )
-    const loadIncrementKg = exercise.loadIncrementKg ?? Number.POSITIVE_INFINITY
     const adaptation = adaptNextSet({
       prescribedLoadKg: completedLoadKg ?? undefined,
       prescribedRepetitions: targetRepetitions,
@@ -923,7 +1002,6 @@ export function WorkoutPage() {
       pain: completed.painInput,
       techniqueOk: completed.techniqueInput === 'OK',
       experience: currentExperience,
-      loadIncrementKg,
     })
     const original = {
       exerciseCode: exercise.code,
@@ -1169,6 +1247,57 @@ export function WorkoutPage() {
                       )}
                       <span>RPE {exercise.targetRpe}/10</span>
                     </div>
+                    <p className="progression-action">{exercise.loadGuidance}</p>
+                    {requestsNextLoadConfirmation(exercise) && (
+                      <div className="next-load-confirmation">
+                        <strong>Vahvista seuraava käytettävissä oleva kuorma</strong>
+                        <p>
+                          Nykyinen kuorma:{' '}
+                          <strong>
+                            {exercise.progressionDecision?.currentLoadKg} kg
+                          </strong>
+                        </p>
+                        <label className="field">
+                          <span>Mikä on pienin seuraava käytettävissä oleva kuorma?</span>
+                          <input
+                            type="text"
+                            inputMode="decimal"
+                            aria-label={`Seuraava kuorma liikkeelle ${exercise.nameFi}`}
+                            value={nextLoadInputs[exercise.id] ?? ''}
+                            onChange={(event) =>
+                              setNextLoadInputs((current) => ({
+                                ...current,
+                                [exercise.id]: event.target.value,
+                              }))
+                            }
+                          />
+                        </label>
+                        <button
+                          className="button button-secondary"
+                          type="button"
+                          disabled={pending}
+                          onClick={() => void saveNextLoadConfirmation(exercise)}
+                        >
+                          Vahvista kuorma
+                        </button>
+                        {nextLoadMessages[exercise.id] && (
+                          <p
+                            className={
+                              nextLoadMessages[exercise.id]?.kind === 'error'
+                                ? 'form-error'
+                                : 'form-note'
+                            }
+                            role={
+                              nextLoadMessages[exercise.id]?.kind === 'error'
+                                ? 'alert'
+                                : 'status'
+                            }
+                          >
+                            {nextLoadMessages[exercise.id]?.text}
+                          </p>
+                        )}
+                      </div>
+                    )}
                   </div>
                 </li>
               ))}
@@ -1283,9 +1412,6 @@ export function WorkoutPage() {
                             repetitionsInput: event.target.value,
                           })
                         }
-                        onBlur={(event) =>
-                          persistSet({ ...item, repetitionsInput: event.target.value })
-                        }
                       />
                     </label>
                   )}
@@ -1297,9 +1423,9 @@ export function WorkoutPage() {
                           <select
                             value={item.loadInput}
                             onChange={(event) => {
-                              const nextSet = { ...item, loadInput: event.target.value }
-                              updateSet(activeExercise.id, item.setNumber, nextSet)
-                              persistSet(nextSet)
+                              updateSet(activeExercise.id, item.setNumber, {
+                                loadInput: event.target.value,
+                              })
                             }}
                           >
                             <option value="">Valitse vastus</option>
@@ -1328,9 +1454,6 @@ export function WorkoutPage() {
                                 loadInput: event.target.value,
                               })
                             }
-                            onBlur={(event) =>
-                              persistSet({ ...item, loadInput: event.target.value })
-                            }
                           />
                         )}
                       </label>
@@ -1348,9 +1471,6 @@ export function WorkoutPage() {
                           updateSet(activeExercise.id, item.setNumber, {
                             rirInput: event.target.value,
                           })
-                        }
-                        onBlur={(event) =>
-                          persistSet({ ...item, rirInput: event.target.value })
                         }
                       />
                     </label>
@@ -1424,12 +1544,13 @@ export function WorkoutPage() {
                         const nextSet = { ...item, completed: event.target.checked }
                         setError('')
                         updateSet(activeExercise.id, item.setNumber, nextSet)
-                        persistSet(nextSet)
                         if (nextSet.completed && activeExercise.restSeconds > 0) {
                           setRestSeconds(activeExercise.restSeconds)
                         }
                         if (nextSet.completed) {
                           applySetAdaptation(activeExercise, nextSet)
+                        } else {
+                          persistSet(nextSet)
                         }
                       }}
                     />

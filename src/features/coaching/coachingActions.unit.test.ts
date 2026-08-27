@@ -5,6 +5,7 @@ import {
   addCompetition,
   calendarPlanningInputs,
   classifyOnboardingHealth,
+  confirmNextAvailableLoad,
 } from './coachingActions'
 
 const userId = '00000000-0000-4000-8000-000000000001'
@@ -64,17 +65,22 @@ function fakeData(records: LocalRecord[]): AppDataContextValue {
   }
 }
 
-function storedRecord(table: SyncableTable, id: string, data: JsonObject): LocalRecord {
+function storedRecord(
+  table: SyncableTable,
+  id: string,
+  data: JsonObject,
+  ownerUserId = userId,
+): LocalRecord {
   const timestamp = '2026-08-25T00:00:00.000Z'
   return {
     key: `${table}-${id}`,
     entityKey: `${table}-${id}`,
     id,
-    userId,
+    userId: ownerUserId,
     table,
     data: {
       id,
-      user_id: userId,
+      user_id: ownerUserId,
       created_at: timestamp,
       updated_at: timestamp,
       deleted_at: null,
@@ -188,6 +194,105 @@ describe('aloituskartoituksen terveysrajat', () => {
         doctorRestrictions: 'Vältä raskasta alavartalokuormaa',
       }).highIntensityBlocked,
     ).toBe(true)
+  })
+})
+
+describe('käyttäjän vahvistama seuraava kuorma', () => {
+  it('tallentaa vahvistuksen profiilin synkronoitavaan JSON-asetukseen', async () => {
+    const profile = storedRecord('profiles', crypto.randomUUID(), {
+      app_settings: {
+        equipment: ['Käsipainot'],
+        minutesPerSession: 45,
+        notificationPreferences: { workoutReminder: true },
+        verifiedNextLoads: [],
+      },
+    })
+    const data = mutableData([profile])
+    const result = await confirmNextAvailableLoad(data, {
+      exerciseCode: 'GOBLET_SQUAT',
+      exerciseVersion: '1.0.0',
+      loadType: 'DUMBBELL_KG_EACH',
+      loadContextId: 'adult-resistance-load-context-1.0.0:dumbbell-kg-each',
+      currentLoadKg: 20,
+      nextAvailableLoadKg: 21,
+    })
+
+    expect(result).toMatchObject({ ok: true })
+    expect(data.latest('profiles')?.data.app_settings).toMatchObject({
+      equipment: ['Käsipainot'],
+      minutesPerSession: 45,
+      notificationPreferences: { workoutReminder: true },
+      verifiedNextLoads: [
+        expect.objectContaining({
+          exerciseCode: 'GOBLET_SQUAT',
+          exerciseVersion: '1.0.0',
+          currentLoadKg: 20,
+          nextAvailableLoadKg: 21,
+          policyVersion: 'verified-next-load-1.0.0',
+        }),
+      ],
+    })
+  })
+
+  it('säilyttää vahvistuksen vain sen käyttäjän profiilissa, joka sen teki', async () => {
+    const userA = '00000000-0000-4000-8000-00000000000a'
+    const userB = '00000000-0000-4000-8000-00000000000b'
+    const dataA = mutableData([
+      storedRecord(
+        'profiles',
+        crypto.randomUUID(),
+        { app_settings: { verifiedNextLoads: [] } },
+        userA,
+      ),
+    ])
+    const dataB = mutableData([
+      storedRecord(
+        'profiles',
+        crypto.randomUUID(),
+        { app_settings: { verifiedNextLoads: [] } },
+        userB,
+      ),
+    ])
+
+    const result = await confirmNextAvailableLoad(dataA, {
+      exerciseCode: 'GOBLET_SQUAT',
+      exerciseVersion: '1.0.0',
+      loadType: 'DUMBBELL_KG_EACH',
+      loadContextId: 'adult-resistance-load-context-1.0.0:dumbbell-kg-each',
+      currentLoadKg: 20,
+      nextAvailableLoadKg: 21,
+    })
+
+    expect(result).toMatchObject({ ok: true })
+    expect(dataA.latest('profiles')?.userId).toBe(userA)
+    expect(dataA.latest('profiles')?.data.app_settings).toMatchObject({
+      verifiedNextLoads: [expect.objectContaining({ nextAvailableLoadKg: 21 })],
+    })
+    expect(dataB.latest('profiles')?.userId).toBe(userB)
+    expect(dataB.latest('profiles')?.data.app_settings).toEqual({
+      verifiedNextLoads: [],
+    })
+  })
+
+  it('estää 5 → 6 kg UI-palvelureitillä eikä muuta profiilia', async () => {
+    const profile = storedRecord('profiles', crypto.randomUUID(), {
+      app_settings: { equipment: ['Käsipainot'], verifiedNextLoads: [] },
+    })
+    const data = mutableData([profile])
+    const result = await confirmNextAvailableLoad(data, {
+      exerciseCode: 'GOBLET_SQUAT',
+      exerciseVersion: '1.0.0',
+      loadType: 'DUMBBELL_KG_EACH',
+      loadContextId: 'adult-resistance-load-context-1.0.0:dumbbell-kg-each',
+      currentLoadKg: 5,
+      nextAvailableLoadKg: 6,
+    })
+
+    expect(result).toMatchObject({
+      ok: false,
+      reasonCode: 'NEXT_LOAD_EXCEEDS_TEN_PERCENT',
+    })
+    expect(data.latest('profiles')?.data.app_settings).toEqual(profile.data.app_settings)
   })
 })
 

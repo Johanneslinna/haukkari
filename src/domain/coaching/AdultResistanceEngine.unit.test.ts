@@ -12,6 +12,7 @@ import {
   publishedExerciseCatalog,
   type AdultResistanceAthleteContext,
   type AdultResistanceSetHistory,
+  type VerifiedNextLoad,
 } from '.'
 
 const generatedAt = '2026-08-25T12:00:00.000Z'
@@ -36,6 +37,23 @@ function successfulSet(
     techniqueOk: true,
     completionStatus: 'COMPLETED',
     doseCompleted: true,
+    ...overrides,
+  }
+}
+
+function verifiedNextLoad(
+  currentLoadKg = 40,
+  nextAvailableLoadKg = 42.5,
+  overrides: Partial<VerifiedNextLoad> = {},
+): VerifiedNextLoad {
+  return {
+    exerciseCode: 'TEST_LIFT',
+    exerciseVersion: '1.0.0',
+    loadContextId: externalLoadContext,
+    currentLoadKg,
+    nextAvailableLoadKg,
+    confirmedAt: '2026-08-25T09:00:00.000Z',
+    policyVersion: 'verified-next-load-1.0.0',
     ...overrides,
   }
 }
@@ -352,7 +370,7 @@ describe('AdultResistanceEngine', () => {
       decideInterSessionProgression({
         comparableSessions: [successfulSet()],
         targetRir: [2, 3],
-        loadIncrementKg: 2.5,
+        verifiedNextLoads: [verifiedNextLoad()],
         targetExerciseCode: 'TEST_LIFT',
         targetExerciseVersion: '1.0.0',
         targetLoadType: 'EXTERNAL_KG',
@@ -371,7 +389,7 @@ describe('AdultResistanceEngine', () => {
           }),
         ],
         targetRir: [2, 3],
-        loadIncrementKg: 2.5,
+        verifiedNextLoads: [verifiedNextLoad()],
         targetExerciseCode: 'TEST_LIFT',
         targetExerciseVersion: '1.0.0',
         targetLoadType: 'EXTERNAL_KG',
@@ -398,7 +416,7 @@ describe('AdultResistanceEngine', () => {
         }),
       ],
       targetRir: [2, 3],
-      loadIncrementKg: 1,
+      verifiedNextLoads: [verifiedNextLoad(5, 6)],
       targetExerciseCode: 'TEST_LIFT',
       targetExerciseVersion: '1.0.0',
       targetLoadType: 'EXTERNAL_KG',
@@ -411,7 +429,139 @@ describe('AdultResistanceEngine', () => {
       changedVariable: 'NONE',
     })
     expect(decision.nextLoadKg).toBe(5)
-    expect(decision.reasonCodes).toContain('LOAD_INCREMENT_EXCEEDS_TEN_PERCENT')
+    expect(decision.reasonCodes).toContain('VERIFIED_NEXT_LOAD_EXCEEDS_TEN_PERCENT')
+  })
+
+  it('sallii täsmälleen kymmenen prosentin vahvistetun kuorman', () => {
+    const decision = decideInterSessionProgression({
+      comparableSessions: [
+        successfulSet({ sessionId: 'workout-1', loadKg: 20 }),
+        successfulSet({
+          sessionId: 'workout-2',
+          loadKg: 20,
+          completedAt: '2026-08-24T10:00:00.000Z',
+        }),
+      ],
+      targetRir: [2, 3],
+      verifiedNextLoads: [verifiedNextLoad(20, 22)],
+      targetExerciseCode: 'TEST_LIFT',
+      targetExerciseVersion: '1.0.0',
+      targetLoadType: 'EXTERNAL_KG',
+      targetLoadContextId: externalLoadContext,
+      maximumRepetitions: 8,
+      generatedAt,
+    })
+
+    expect(decision).toMatchObject({ action: 'INCREASE_LOAD', nextLoadKg: 22 })
+  })
+
+  it('ei valtuuta kuormannostoa legacy-historian loadIncrementKg-arvolla', () => {
+    const decision = decideInterSessionProgression({
+      comparableSessions: [
+        successfulSet({ sessionId: 'workout-1', loadIncrementKg: 2.5 }),
+        successfulSet({
+          sessionId: 'workout-2',
+          loadIncrementKg: 2.5,
+          completedAt: '2026-08-24T10:00:00.000Z',
+        }),
+      ],
+      targetRir: [2, 3],
+      targetExerciseCode: 'TEST_LIFT',
+      targetExerciseVersion: '1.0.0',
+      targetLoadType: 'EXTERNAL_KG',
+      targetLoadContextId: externalLoadContext,
+      maximumRepetitions: 8,
+      generatedAt,
+    })
+    expect(decision).toMatchObject({
+      action: 'KEEP_LOAD',
+      currentLoadKg: 40,
+      nextLoadKg: 40,
+    })
+    expect(decision.reasonCodes).toContain('NEXT_AVAILABLE_LOAD_NOT_CONFIRMED')
+  })
+
+  it.each([
+    { label: 'poistettu vahvistus', confirmations: [] },
+    {
+      label: 'uusinta tukiharjoitusta vanhempi vahvistus',
+      confirmations: [
+        verifiedNextLoad(40, 42.5, {
+          confirmedAt: '2026-08-24T09:59:59.000Z',
+        }),
+      ],
+    },
+    {
+      label: 'väärä politiikkaversio',
+      confirmations: [
+        verifiedNextLoad(40, 42.5, {
+          policyVersion: 'verified-next-load-0.9.0',
+        }),
+      ],
+    },
+  ])(
+    '$label ei valtuuta kuormannostoa mutta ei estä harjoittelua',
+    ({ confirmations }) => {
+      const decision = decideInterSessionProgression({
+        comparableSessions: [
+          successfulSet({ sessionId: 'workout-1' }),
+          successfulSet({
+            sessionId: 'workout-2',
+            completedAt: '2026-08-24T10:00:00.000Z',
+          }),
+        ],
+        targetRir: [2, 3],
+        verifiedNextLoads: confirmations,
+        targetExerciseCode: 'TEST_LIFT',
+        targetExerciseVersion: '1.0.0',
+        targetLoadType: 'EXTERNAL_KG',
+        targetLoadContextId: externalLoadContext,
+        maximumRepetitions: 8,
+        generatedAt,
+      })
+
+      expect(decision).toMatchObject({
+        action: 'KEEP_LOAD',
+        currentLoadKg: 40,
+        nextLoadKg: 40,
+        changedVariable: 'NONE',
+      })
+      expect(decision.reasonCodes).toContain('NEXT_AVAILABLE_LOAD_NOT_CONFIRMED')
+    },
+  )
+
+  it.each([
+    {
+      label: 'eri liikeversio',
+      confirmation: verifiedNextLoad(40, 42.5, { exerciseVersion: '2.0.0' }),
+    },
+    {
+      label: 'eri kuormakonteksti',
+      confirmation: verifiedNextLoad(40, 42.5, {
+        loadContextId: dumbbellLoadContext,
+      }),
+    },
+  ])('ei peri vahvistusta, kun $label vaihtuu', ({ confirmation }) => {
+    const decision = decideInterSessionProgression({
+      comparableSessions: [
+        successfulSet({ sessionId: 'workout-1' }),
+        successfulSet({
+          sessionId: 'workout-2',
+          completedAt: '2026-08-24T10:00:00.000Z',
+        }),
+      ],
+      targetRir: [2, 3],
+      verifiedNextLoads: [confirmation],
+      targetExerciseCode: 'TEST_LIFT',
+      targetExerciseVersion: '1.0.0',
+      targetLoadType: 'EXTERNAL_KG',
+      targetLoadContextId: externalLoadContext,
+      maximumRepetitions: 8,
+      generatedAt,
+    })
+
+    expect(decision.action).toBe('KEEP_LOAD')
+    expect(decision.reasonCodes).toContain('NEXT_AVAILABLE_LOAD_NOT_CONFIRMED')
   })
 
   it('laskee saman WorkoutRecordin monta sarjaa vain yhdeksi exposureksi', () => {
@@ -714,6 +864,13 @@ describe('AdultResistanceEngine', () => {
             repetitions: upper,
             rir: exercise.targetRir,
             completedAt: '2026-08-24T10:00:00.000Z',
+          }),
+        ],
+        verifiedNextLoads: [
+          verifiedNextLoad(40, 42.5, {
+            exerciseCode: exercise.code,
+            exerciseVersion: exercise.contentVersion,
+            loadContextId: exercise.loadContextId,
           }),
         ],
       },

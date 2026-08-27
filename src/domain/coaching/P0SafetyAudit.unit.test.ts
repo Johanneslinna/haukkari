@@ -483,7 +483,17 @@ describe('P0-3: enintään 10 prosentin kuormaprogressio', () => {
       targetExerciseCode: 'TEST_LIFT',
       targetExerciseVersion: '1.0.0',
       targetRir: [2, 3],
-      loadIncrementKg: 1,
+      verifiedNextLoads: [
+        {
+          exerciseCode: 'TEST_LIFT',
+          exerciseVersion: '1.0.0',
+          loadContextId: externalLoadContext,
+          currentLoadKg: 5,
+          nextAvailableLoadKg: 6,
+          confirmedAt: generatedAt,
+          policyVersion: 'verified-next-load-1.0.0',
+        },
+      ],
       targetLoadType: 'EXTERNAL_KG',
       targetLoadContextId: externalLoadContext,
       maximumRepetitions: 10,
@@ -491,7 +501,7 @@ describe('P0-3: enintään 10 prosentin kuormaprogressio', () => {
     })
     expect(decision.action).toBe('KEEP_LOAD')
     expect(decision.nextLoadKg).toBe(5)
-    expect(decision.reasonCodes).toContain('LOAD_INCREMENT_EXCEEDS_TEN_PERCENT')
+    expect(decision.reasonCodes).toContain('VERIFIED_NEXT_LOAD_EXCEEDS_TEN_PERCENT')
   })
 
   it('ei hyväksy toisen version historiaa', () => {

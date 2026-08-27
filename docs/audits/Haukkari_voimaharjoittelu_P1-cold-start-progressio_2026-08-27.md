@@ -13,6 +13,11 @@ Normatiivista hyväksyntäraporttia tai sisältöjulkaisua
 `adult-strength-time-1.0.0`-aikamalli säilyy ainoana voimaharjoituksen
 aikabudjettipolitiikkana.
 
+Käyttäjän vahvistaman seuraavan kuorman integraatiokorjaus tarkastettiin
+myöhemmin baselinea `59086658eeea59982e609205042c15f6ab6e1e07` vasten samalla
+haaralla. Tämä lisäys erottaa moottorin kyvyn käyttää valmista vahvistusta ja
+käyttäjän todellisen tavan muodostaa vahvistus käyttöliittymässä.
+
 ## 2. Juurisyy
 
 Baseline-versiossa `AdultResistanceSetHistory` kuvasi sarjoja, mutta ei
@@ -36,11 +41,36 @@ olennaiset kentät:
 - `sessionId`: tallennetun `WorkoutRecord`-rivin tunniste;
 - `exerciseCode` ja `exerciseVersion`;
 - `loadType`, `loadKg` ja versionoitu `loadContextId`;
-- mahdollinen käyttäjän välineille vahvistettu `loadIncrementKg`;
 - toteutuneet toistot ja RIR;
 - kipu ja tekniikan hyväksyntä;
 - koko harjoituksen `completionStatus`;
 - `doseCompleted`, joka kertoo toteutuiko kyseisen liikkeen määrätty annos.
+
+Vanhan historian mahdollinen `loadIncrementKg` säilyy luettavana
+legacy-kenttänä, mutta se ei enää valtuuta uutta kilogrammaprogressiota.
+Kuorman mukaan muuttuvia välineportaita ei mallinneta yhdeksi pysyväksi
+increment-arvoksi.
+
+Uusi `VerifiedNextLoad` tallentaa käyttäjän vahvistaman todellisen seuraavan
+kuorman seuraavalla versionoidulla avaimella:
+
+- `exerciseCode` ja `exerciseVersion`;
+- `loadContextId`;
+- `currentLoadKg` ja `nextAvailableLoadKg`;
+- `confirmedAt`;
+- `policyVersion` (`verified-next-load-1.0.0`).
+
+Vahvistus koskee vain täsmälleen samaa liikeversiota, kuormakontekstia ja
+nykyistä kuormaa. Kun nykyinen kuorma muuttuu, seuraava porras vahvistetaan
+tarvittaessa uudelleen. Näin esimerkiksi käsipainosarjan epätasaiset portaat
+säilyvät todellisina eikä moottori keksi väliin kilogrammoja.
+
+Vain nykyinen `verified-next-load-1.0.0`-politiikkaversio voi valtuuttaa
+kuormannoston. `confirmedAt` sitoo vahvistuksen sen avanneeseen
+harjoitusnäyttöön: aikaleiman on oltava uusimman päätöstä tukevan
+harjoituskerran jälkeen ja viimeistään uuden prescriptionin päätöshetkellä.
+Tämä estää vanhan harjoitusjakson vahvistuksen aktivoitumisen uudelleen ilman
+mielivaltaista kalenteriaikaan perustuvaa vanhenemisoletusta.
 
 `WorkoutPage.strengthHistoryFromLogs()` ottaa `sessionId`:n workout-logissa
 olevasta todellisesta `workout_id`-viitteestä. Se ei käytä workout-login omaa
@@ -119,9 +149,9 @@ Keskeiset reason codet ovat:
 - `BELOW_REPETITION_MAXIMUM`;
 - `FEWER_THAN_TWO_SUCCESSFUL_DISTINCT_SESSIONS_AT_REPETITION_MAXIMUM`;
 - `TWO_SUCCESSFUL_DISTINCT_SESSIONS_AT_REPETITION_MAXIMUM`;
-- `ACTUAL_LOAD_INCREMENT_NOT_VERIFIED`;
-- `ONE_VERIFIED_AVAILABLE_INCREMENT`;
-- `LOAD_INCREMENT_EXCEEDS_TEN_PERCENT`;
+- `NEXT_AVAILABLE_LOAD_NOT_CONFIRMED`;
+- `USER_CONFIRMED_NEXT_AVAILABLE_LOAD`;
+- `VERIFIED_NEXT_LOAD_EXCEEDS_TEN_PERCENT`;
 - `SUCCESS_STREAK_BROKEN`;
 - `NON_KILOGRAM_LOAD_HAS_NO_AUTOMATIC_KG_PROGRESSION`.
 
@@ -145,6 +175,33 @@ kalibroi kuorma uudelleen. Yleinen harjoituspalautepäätös voi edelleen kevent
 annosta turvallisuussyistä, mutta se ei tee rinnakkaista liikekohtaista
 kuormannostoa.
 
+### 7.1 Moottorin kyky käyttää vahvistusta
+
+Moottori hyväksyy `INCREASE_LOAD`-päätöksen vain, kun kaksi eri onnistunutta
+`WorkoutRecord`-harjoitusta ovat toistoalueen ylärajalla samalla kuormalla ja
+profiilista löytyy täsmälleen saman liikeversion, kuormakontekstin sekä nykyisen
+kuorman `VerifiedNextLoad`. Puuttuva tai eri liikkeeseen, versioon,
+kuormakontekstiin tai nykykuormaan kuuluva vahvistus tuottaa `KEEP_LOAD`-
+päätöksen. Enintään 10 prosentin raja tarkistetaan vahvistetusta nykyisen ja
+seuraavan kuorman erotuksesta.
+
+### 7.2 Käyttäjän todellinen vahvistuspolku
+
+Käyttöliittymä kysyy kuormaa vasta, kun kaksi onnistunutta eri harjoituskertaa
+on jo täyttänyt etenemisehdot mutta seuraavaa kuormaa ei tunneta. Käyttäjälle
+näytetään nykyinen kuorma ja kysymys ”Mikä on pienin seuraava käytettävissä
+oleva kuorma?”. Hyväksytty vastaus tallennetaan nykyisen profiilin
+synkronoitavaan `app_settings`-JSONiin. Päivitys yhdistää uuden vahvistuksen
+olemassa oleviin asetuksiin eikä poista esimerkiksi väline-, aika- tai
+muistutusasetuksia. Profiilirivit ladataan ja kirjoitetaan nykyisen käyttäjän
+tunnisteella, joten vahvistus ei siirry käyttäjältä toiselle. Onboardingia ei
+muutettu eikä oletusporrasta lisätty.
+
+Käyttöliittymä estää ei-numeerisen, nykyistä pienemmän tai yhtä suuren sekä yli
+10 prosentin vastauksen ennen tallennusta. `BODYWEIGHT`- ja `BAND`-liikkeille
+kilogrammakysymystä ei näytetä. `MACHINE_KG` vaatii ensin käyttäjän tunnistaman
+laitekontekstin; ilman sitä vahvistusta ei kysytä eikä kuormaa nosteta.
+
 Jatketun harjoituksen sarjarivit muodostetaan tallennetun prescriptionin lisäksi
 samasta aiemmasta liikehistoriasta kuin ensimmäisellä avauskerralla. Siksi
 päätösteksti, esitäytetty toistomäärä ja kuorma säilyvät samoina myös sivun
@@ -159,14 +216,15 @@ progressiopäätöksen vuoksi, joten kaikki versiot kulkevat edelleen kanonisen
 
 ## 8. Ennen ja jälkeen
 
-| Tapaus                                    | Baseline                                 | Uusi tulos                                 |
-| ----------------------------------------- | ---------------------------------------- | ------------------------------------------ |
-| 2 sarjaa yhdessä harjoituksessa           | saattoi näyttää 2 exposurelta            | 1 exposure, kuorma säilyy                  |
-| 2 eri harjoitusta samalla 40 kg kuormalla | sarja- ja sessiokäsitteet sekoittuivat   | 2 exposurea, vahvistettu 42,5 kg sallitaan |
-| 1 onnistuminen, 7/8 toistoa               | odotti kahta onnistumista                | 8 toistoa samalla 40 kg kuormalla          |
-| 5 kg, todellinen seuraava porras 1 kg     | erillinen apufunktio esti osan reiteistä | 5 kg säilyy, 6 kg estetään                 |
-| Aloittelija + `MAX_STRENGTH`              | 4–6                                      | 6–10 ja kalibrointi                        |
-| Legacy ilman workout-tunnistetta          | saattoi osallistua tarkkaan arvioon      | ei tarkkaa kg:ta, turvallinen kalibrointi  |
+| Tapaus                                    | Baseline                                   | Uusi tulos                                |
+| ----------------------------------------- | ------------------------------------------ | ----------------------------------------- |
+| 2 sarjaa yhdessä harjoituksessa           | saattoi näyttää 2 exposurelta              | 1 exposure, kuorma säilyy                 |
+| 2 eri harjoitusta samalla 40 kg kuormalla | sarja- ja sessiokäsitteet sekoittuivat     | ilman vahvistusta 40 kg säilyy            |
+| Käyttäjä vahvistaa 40 → 42,5 kg           | käyttöliittymässä ei ollut vahvistuspolkua | täsmällinen vahvistus voi avata nousun    |
+| 1 onnistuminen, 7/8 toistoa               | odotti kahta onnistumista                  | 8 toistoa samalla 40 kg kuormalla         |
+| 5 kg, todellinen seuraava porras 1 kg     | erillinen apufunktio esti osan reiteistä   | 5 kg säilyy, 6 kg estetään                |
+| Aloittelija + `MAX_STRENGTH`              | 4–6                                        | 6–10 ja kalibrointi                       |
+| Legacy ilman workout-tunnistetta          | saattoi osallistua tarkkaan arvioon        | ei tarkkaa kg:ta, turvallinen kalibrointi |
 
 ## 9. Testit ja auditoinnit
 
@@ -181,24 +239,29 @@ Lisätyt regressiot todistavat vähintään seuraavat invariantit:
   kuormaportaan;
 - kipu, tekniikkavirhe ja keskeytys katkaisevat jakson;
 - kehonpainolle ja nauhalle ei synny kilogrammaprogressiota;
+- 20 → 21 kg vahvistus ei valtuuta myöhempää 21 → 22 kg siirtymää;
+- poistettu, vanhentunut tai väärän politiikkaversion vahvistus säilyttää
+  kuorman mutta ei estä harjoittelua;
+- `app_settings`-tallennus säilyttää muut asetukset ja vahvistus pysyy
+  käyttäjäkohtaisessa profiilissa;
 - `resolvePrescription`, `PlanGenerator`, päätösloki ja WorkoutPage käyttävät
   samaa sessioidentiteettiin perustuvaa päätöstä.
 
-Erillinen Playwright-tuotantopolun E2E-testi tallentaa selaimen oikeaan
-IndexedDB-rakenteeseen ensin yhden kahden sarjan WorkoutRecordin ja sitten kaksi
-eri WorkoutRecordia. Se avaa varsinaisen `/harjoitus`-reitin, muodostaa historian
-`WorkoutHistory`-adapterilla ja tarkistaa käyttäjälle näkyvän toiminnan sekä
-esitäytetyt kentät ennen ja jälkeen sivun uudelleenlatauksen. Ensimmäinen
-harjoitus tuottaa `INCREASE_REPETITIONS`-toiminnan samalla 20 kg kuormalla;
-saman harjoituksen kaksi sarjaa eivät avaa kuormannostoa. Kaksi eri onnistunutta
-harjoitusta ylärajalla tuottavat vahvistetulla 1 kg portaalla
-`INCREASE_LOAD`-toiminnan ja käyttäjälle näkyvän 21 kg ehdotuksen.
+Playwright-tuotantopolun E2E-testi ei syötä `loadIncrementKg`- tai
+`nextAvailableLoadKg`-arvoa IndexedDB:hen. Se tekee oikeassa käyttöliittymässä
+neljä valmista harjoitusta ja tallentaa siten erilliset `WorkoutRecord`-rivit.
+Kaksi 5 kg harjoitusta avaavat kuormakysymyksen, mutta käyttäjän 6 kg vastaus
+estetään 20 prosentin nousuna. Kaksi myöhempää 20 kg harjoitusta avaavat uuden,
+nykykuormaan sidotun kysymyksen. Käyttäjä vahvistaa käyttöliittymässä 21 kg,
+jonka jälkeen seuraava tuotantoreitin prescription ja esitäytetyt sarjakentät
+käyttävät 21 kg kuormaa. Sama päätös ja kenttäarvo säilyvät sivun
+uudelleenlatauksessa.
 
-Deterministinen `audit:p1-strength` sisältää 12 tapausta. Tulos:
+Deterministinen `audit:p1-strength` sisältää 14 tapausta. Tulos:
 
-- hyväksytty 12;
+- hyväksytty 14;
 - hylätty 0;
-- jakauma: `KEEP_LOAD` 5, `INCREASE_LOAD` 1, `RECALIBRATE_LOAD` 1,
+- jakauma: `KEEP_LOAD` 6, `INCREASE_LOAD` 2, `RECALIBRATE_LOAD` 1,
   `INCREASE_REPETITIONS` 2 ja cold start -annokset 3.
 
 Nykyinen `audit:p0` säilyi ei-tyhjänä:
@@ -215,10 +278,10 @@ Nykyinen `audit:p0` säilyi ei-tyhjänä:
 Lopulliset paikalliset portit:
 
 - `git diff --check`: hyväksytty;
-- `npm run check`: hyväksytty (179 yksikkötestiä ja 8 integraatiotestiä sekä
+- `npm run check`: hyväksytty (203 yksikkötestiä ja 8 integraatiotestiä sekä
   sisältö-, skip-, lint-, formatointi-, tyyppi-, aika-, P0-, tietosuoja-, build-
   ja PWA-portit);
-- `npm run audit:p1-strength`: 32 kohdennettua testiä ja 12/12 auditointitapausta
+- `npm run audit:p1-strength`: 62 kohdennettua testiä ja 14/14 auditointitapausta
   hyväksytty;
 - `npm run e2e`: 6/6 hyväksytty;
 - `npm run e2e:app`: 11 hyväksytty, 10 projektin ennalta sallittua
@@ -240,9 +303,9 @@ kuormannosto vaatii kaksi eri onnistunutta harjoitusta ylärajalla.
 
 ## 11. Avoimet rajat ja oletukset
 
-- Käyttöliittymä ei vielä tarjoa erillistä laitekohtaisen konekontekstin tai
-  todellisen kuormaportaan asetusta. Niiden puuttuessa tarkka konekuorma ja
-  automaattinen kilogrammanosto estetään tarkoituksella.
+- Käyttöliittymä ei vielä tarjoa erillistä laitekohtaisen konekontekstin
+  tunnistusta. Sen puuttuessa tarkka konekuorma, kuormakysymys ja automaattinen
+  kilogrammanosto estetään tarkoituksella.
 - `RETURNING`-luokka ja kaikki tauon pituuteen perustuvat P1-säännöt kuuluvat
   myöhempään työpakettiin.
 - Käyttäjän toteutuneita progression onnistumis-, hyväksyttävyys- ja

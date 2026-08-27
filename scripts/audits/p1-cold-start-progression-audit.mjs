@@ -25,6 +25,20 @@ try {
 
   const cases = []
   const record = (id, pass, observed) => cases.push({ id, pass, observed })
+  const verifiedNextLoad = (
+    currentLoadKg = 40,
+    nextAvailableLoadKg = 42.5,
+    patch = {},
+  ) => ({
+    exerciseCode: 'TEST_LIFT',
+    exerciseVersion: '1.0.0',
+    loadContextId: externalLoadContext,
+    currentLoadKg,
+    nextAvailableLoadKg,
+    confirmedAt: generatedAt,
+    policyVersion: 'verified-next-load-1.0.0',
+    ...patch,
+  })
   const historySet = (patch = {}) => ({
     sessionId: 'workout-1',
     exerciseCode: 'TEST_LIFT',
@@ -32,7 +46,6 @@ try {
     loadKg: 40,
     loadType: 'EXTERNAL_KG',
     loadContextId: externalLoadContext,
-    loadIncrementKg: 2.5,
     repetitions: 8,
     rir: 2,
     completedAt: '2026-08-20T08:00:00.000Z',
@@ -51,7 +64,7 @@ try {
       targetLoadContextId: externalLoadContext,
       targetRir: [2, 3],
       maximumRepetitions: 8,
-      loadIncrementKg: 2.5,
+      verifiedNextLoads: [verifiedNextLoad()],
       generatedAt,
       ...patch,
     })
@@ -76,6 +89,21 @@ try {
     twoWorkouts,
   )
 
+  const unconfirmedNextLoad = progression(
+    [
+      historySet({ sessionId: 'one' }),
+      historySet({ sessionId: 'two', completedAt: '2026-08-24T08:00:00.000Z' }),
+    ],
+    { verifiedNextLoads: [] },
+  )
+  record(
+    'unconfirmed-next-load-keeps-current-load',
+    unconfirmedNextLoad.action === 'KEEP_LOAD' &&
+      unconfirmedNextLoad.nextLoadKg === 40 &&
+      unconfirmedNextLoad.reasonCodes.includes('NEXT_AVAILABLE_LOAD_NOT_CONFIRMED'),
+    unconfirmedNextLoad,
+  )
+
   const legacy = progression([historySet({ sessionId: undefined })])
   record(
     'legacy-fail-closed',
@@ -95,21 +123,20 @@ try {
 
   const tooLargeIncrement = progression(
     [
-      historySet({ sessionId: 'one', loadKg: 5, loadIncrementKg: 1 }),
+      historySet({ sessionId: 'one', loadKg: 5 }),
       historySet({
         sessionId: 'two',
         loadKg: 5,
-        loadIncrementKg: 1,
         completedAt: '2026-08-24T08:00:00.000Z',
       }),
     ],
-    { loadIncrementKg: 1 },
+    { verifiedNextLoads: [verifiedNextLoad(5, 6)] },
   )
   record(
     'five-to-six-blocked',
     tooLargeIncrement.action === 'KEEP_LOAD' &&
       tooLargeIncrement.nextLoadKg === 5 &&
-      tooLargeIncrement.reasonCodes.includes('LOAD_INCREMENT_EXCEEDS_TEN_PERCENT'),
+      tooLargeIncrement.reasonCodes.includes('VERIFIED_NEXT_LOAD_EXCEEDS_TEN_PERCENT'),
     tooLargeIncrement,
   )
 
@@ -260,6 +287,60 @@ try {
         item.reasonCodes.includes('ONE_SUCCESSFUL_DISTINCT_SESSION'),
       ),
     productionExercise?.progressionDecision ?? production,
+  )
+
+  const productionLoad =
+    exercise && Number.isFinite(maximumRepetitions)
+      ? resolvePrescription({
+          sessionId: 'audit-confirmed-load',
+          title: 'Voima',
+          kind: 'STRENGTH',
+          durationMinutes: 45,
+          profile: {
+            ...profile,
+            strengthHistory: [
+              historySet({
+                sessionId: 'audit-load-one',
+                exerciseCode: exercise.code,
+                exerciseVersion: exercise.contentVersion,
+                loadType: exercise.loadType,
+                loadContextId: exercise.loadContextId,
+                loadKg: 20,
+                repetitions: maximumRepetitions,
+                rir: exercise.targetRir,
+              }),
+              historySet({
+                sessionId: 'audit-load-two',
+                exerciseCode: exercise.code,
+                exerciseVersion: exercise.contentVersion,
+                loadType: exercise.loadType,
+                loadContextId: exercise.loadContextId,
+                loadKg: 20,
+                repetitions: maximumRepetitions,
+                rir: exercise.targetRir,
+                completedAt: '2026-08-24T08:00:00.000Z',
+              }),
+            ],
+            verifiedNextLoads: [
+              verifiedNextLoad(20, 21, {
+                exerciseCode: exercise.code,
+                exerciseVersion: exercise.contentVersion,
+                loadContextId: exercise.loadContextId,
+              }),
+            ],
+          },
+        })
+      : null
+  const productionLoadExercise =
+    productionLoad?.status === 'SUPPORTED'
+      ? productionLoad.prescription.exercises.find((item) => item.code === exercise?.code)
+      : null
+  record(
+    'production-confirmed-next-load-route',
+    productionLoadExercise?.progressionDecision?.action === 'INCREASE_LOAD' &&
+      productionLoadExercise.progressionDecision.nextLoadKg === 21 &&
+      productionLoadExercise.loadGuidance.includes('vahvistettuun seuraavaan'),
+    productionLoadExercise?.progressionDecision ?? productionLoad,
   )
 
   const actionDistribution = cases.reduce((summary, item) => {

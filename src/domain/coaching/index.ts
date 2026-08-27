@@ -121,6 +121,22 @@ export {
 } from './TimeBudgetPolicy'
 export type { StrengthTimeBudgetPolicy, StrengthTimeFitResult } from './TimeBudgetPolicy'
 export {
+  VERIFIED_NEXT_LOAD_POLICY_VERSION,
+  automaticLoadIncreaseRatio,
+  findVerifiedNextLoad,
+  isAutomaticLoadIncreaseAllowed,
+  isKilogramLoadType,
+  isVerifiedNextLoadContext,
+  upsertVerifiedNextLoad,
+  verifiedNextLoadsFrom,
+  verifyNextLoad,
+} from './VerifiedNextLoad'
+export type {
+  VerifiedNextLoadAuthorizationContext,
+  VerifiedNextLoadIdentity,
+  VerifyNextLoadResult,
+} from './VerifiedNextLoad'
+export {
   SportAdapterRegistry,
   getSportAdapter,
   listFullySupportedDisciplines,

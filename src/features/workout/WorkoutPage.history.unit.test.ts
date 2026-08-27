@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest'
 import type { LocalRecord } from '../../domain/sync/types'
 import { strengthHistoryFromLogs } from './WorkoutHistory'
+import { requestsNextLoadConfirmation } from './WorkoutProgressionUi'
+import type { ExercisePrescription } from '../../domain/coaching'
 
 function workoutLog(
   workoutId?: string,
@@ -91,5 +93,64 @@ describe('WorkoutPage.strengthHistoryFromLogs', () => {
         doseCompleted: false,
       }),
     ])
+  })
+})
+
+describe('WorkoutPage.next load confirmation visibility', () => {
+  const exercise = {
+    id: 'goblet',
+    code: 'GOBLET_SQUAT',
+    contentVersion: '1.0.0',
+    nameFi: 'Maljakyykky',
+    category: 'SQUAT',
+    equipment: ['Käsipainot'],
+    instructionsFi: 'Ohje',
+    sets: 2,
+    repetitions: '8–12',
+    restSeconds: 60,
+    targetRpe: 7,
+    loadGuidance: 'Säilytä kuorma.',
+    stopCondition: 'Lopeta tarvittaessa.',
+    substitutions: [],
+    loadType: 'DUMBBELL_KG_EACH',
+    loadLabelFi: 'Kuorma kg / käsipaino',
+    loadContextId: 'adult-resistance-load-context-1.0.0:dumbbell-kg-each',
+    keyExercise: true,
+    progressionDecision: {
+      action: 'KEEP_LOAD',
+      currentLoadKg: 20,
+      nextLoadKg: 20,
+      changedVariable: 'NONE',
+      reasonCodes: ['NEXT_AVAILABLE_LOAD_NOT_CONFIRMED'],
+      supportingSessionIds: ['one', 'two'],
+    },
+  } satisfies ExercisePrescription
+
+  it('näyttää kysymyksen vain vertailukelpoiselle kilogrammakuormalle', () => {
+    expect(requestsNextLoadConfirmation(exercise)).toBe(true)
+    expect(
+      requestsNextLoadConfirmation({
+        ...exercise,
+        loadType: 'BODYWEIGHT',
+        loadContextId: undefined,
+      }),
+    ).toBe(false)
+    expect(
+      requestsNextLoadConfirmation({
+        ...exercise,
+        loadType: 'BAND',
+        loadContextId: undefined,
+      }),
+    ).toBe(false)
+  })
+
+  it('ei näytä kysymystä koneelle ilman käyttäjän tunnistamaa laitekontekstia', () => {
+    expect(
+      requestsNextLoadConfirmation({
+        ...exercise,
+        loadType: 'MACHINE_KG',
+        loadContextId: 'legacy-generic-machine-context',
+      }),
+    ).toBe(false)
   })
 })
