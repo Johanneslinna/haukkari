@@ -36,6 +36,7 @@ try {
     MAX_ROLLING_MUSCLE_SETS,
     MAX_SESSION_PRIMARY_MUSCLE_SETS,
     addPlannedSets,
+    adaptPrescription,
     calculateRollingMuscleVolume,
     prescriptionDurationSeconds,
     publishedExerciseCatalog,
@@ -83,6 +84,11 @@ try {
   let unexpectedBlockedCount = 0
   const expectedBlockedCount = {}
   const actualBlockedCount = {}
+  let allowedAdaptationCount = 0
+  let recoveryAdaptationCount = 0
+  let unexpectedAdaptationBlockedCount = 0
+  const expectedAdaptationBlockedCount = {}
+  const actualAdaptationBlockedCount = {}
   const coverage = {
     age: Object.fromEntries(supportedAges.map((age) => [age, 0])),
     goal: Object.fromEntries(goals.map((goal) => [goal, 0])),
@@ -108,6 +114,32 @@ try {
     if (age >= 65) return 'OLDER_ADULT_ENGINE_NOT_AVAILABLE'
     if (readiness === 'ORANGE_RECOVERY') return 'READINESS_RECOVERY_ONLY'
     return null
+  }
+
+  const adaptationBaseline = resolvePrescription({
+    sessionId: 'p0-adaptation-baseline',
+    title: 'P0 adaptation baseline',
+    kind: 'STRENGTH',
+    durationMinutes: 45,
+    profile: {
+      goal: 'GENERAL_FITNESS',
+      experience: 'BEGINNER',
+      equipment: ['Kehonpaino'],
+      physicalLoad: 'MODERATE',
+      minutesPerSession: 45,
+      age: 35,
+      readiness: 'GREEN',
+      healthBlocked: false,
+      generatedAt,
+    },
+  })
+  let legacyAdaptationPrescription = null
+  if (adaptationBaseline.status !== 'SUPPORTED') {
+    violation('ADAPTATION_BASELINE_BLOCKED', adaptationBaseline)
+  } else {
+    legacyAdaptationPrescription = { ...adaptationBaseline.prescription }
+    delete legacyAdaptationPrescription.schemaVersion
+    delete legacyAdaptationPrescription.engineVersion
   }
 
   for (let index = 0; index < generatedCases; index += 1) {
@@ -163,12 +195,13 @@ try {
       violation('NON_DETERMINISTIC', { index })
     }
 
-    let expectedReasonCode = expectedBlockReason({
+    const safetyGateReasonCode = expectedBlockReason({
       age,
       readiness,
       healthBlocked,
       legacyLimitationsUnconfirmed,
     })
+    let expectedReasonCode = safetyGateReasonCode
     if (
       !expectedReasonCode &&
       first.status === 'UNSUPPORTED' &&
@@ -207,6 +240,74 @@ try {
         legacyLimitationsUnconfirmed,
         expectedReasonCode,
       })
+    }
+
+    if (legacyAdaptationPrescription) {
+      const adaptation = adaptPrescription(
+        legacyAdaptationPrescription,
+        {
+          kind: 'FULL',
+          durationMinutes: budget,
+          volumeMultiplier: 1,
+        },
+        {
+          age,
+          readiness,
+          healthBlocked,
+          safetyInformationComplete: !legacyLimitationsUnconfirmed,
+        },
+      )
+      const expectedAdaptationBlock =
+        safetyGateReasonCode === 'READINESS_RECOVERY_ONLY' ? null : safetyGateReasonCode
+      if (expectedAdaptationBlock) {
+        increment(expectedAdaptationBlockedCount, expectedAdaptationBlock)
+      }
+      if (adaptation.status === 'UNSUPPORTED') {
+        increment(actualAdaptationBlockedCount, adaptation.reasonCode)
+        if (!expectedAdaptationBlock) {
+          unexpectedAdaptationBlockedCount += 1
+          violation('UNEXPECTED_ADAPTATION_BLOCK', {
+            index,
+            reasonCode: adaptation.reasonCode,
+            age,
+            readiness,
+            healthBlocked,
+            legacyLimitationsUnconfirmed,
+          })
+        } else if (adaptation.reasonCode !== expectedAdaptationBlock) {
+          violation('UNEXPECTED_ADAPTATION_BLOCK_REASON', {
+            index,
+            expectedReasonCode: expectedAdaptationBlock,
+            actualReasonCode: adaptation.reasonCode,
+          })
+        }
+      } else if (expectedAdaptationBlock) {
+        violation('ADAPTATION_SAFETY_GATE_BYPASSED', {
+          index,
+          age,
+          readiness,
+          healthBlocked,
+          legacyLimitationsUnconfirmed,
+          expectedReasonCode: expectedAdaptationBlock,
+          adaptedKind: adaptation.prescription.kind,
+        })
+      } else if (readiness === 'ORANGE_RECOVERY') {
+        if (adaptation.prescription.kind !== 'RECOVERY') {
+          violation('ORANGE_STRENGTH_ADAPTATION_BYPASSED', {
+            index,
+            adaptedKind: adaptation.prescription.kind,
+          })
+        } else {
+          recoveryAdaptationCount += 1
+        }
+      } else if (adaptation.prescription.kind !== 'STRENGTH') {
+        violation('UNEXPECTED_ADAPTATION_KIND', {
+          index,
+          adaptedKind: adaptation.prescription.kind,
+        })
+      } else {
+        allowedAdaptationCount += 1
+      }
     }
     if (first.status !== 'SUPPORTED') continue
 
@@ -308,6 +409,12 @@ try {
   if (allowedPrescriptionCount === 0) {
     violation('NO_ALLOWED_PRESCRIPTIONS', {})
   }
+  if (allowedAdaptationCount === 0) {
+    violation('NO_ALLOWED_ADAPTATIONS', {})
+  }
+  if (recoveryAdaptationCount === 0) {
+    violation('NO_APPROVED_RECOVERY_ADAPTATIONS', {})
+  }
 
   const result = {
     seedHex,
@@ -316,6 +423,11 @@ try {
     expectedBlockedCount,
     actualBlockedCount,
     unexpectedBlockedCount,
+    allowedAdaptationCount,
+    recoveryAdaptationCount,
+    expectedAdaptationBlockedCount,
+    actualAdaptationBlockedCount,
+    unexpectedAdaptationBlockedCount,
     supportedCoverage: coverage,
     violationCounts: violations,
     violationSamples: samples,

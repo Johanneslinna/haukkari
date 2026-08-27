@@ -8,7 +8,10 @@ import {
   prescribeSession,
   resolvePrescription,
 } from './index'
-import type { PrescriptionProfile } from './TrainingPrescriptionEngine'
+import type {
+  PrescriptionAdaptationSafetyContext,
+  PrescriptionProfile,
+} from './TrainingPrescriptionEngine'
 import type { WorkoutFeedback, WorkoutVariant } from './types'
 
 const generatedAt = '2026-08-25T08:00:00.000Z'
@@ -44,6 +47,13 @@ const compact10: WorkoutVariant = {
   kind: 'COMPACT_10',
   durationMinutes: 10,
   volumeMultiplier: 0.35,
+}
+
+const adaptationSafety: PrescriptionAdaptationSafetyContext = {
+  age: 30,
+  readiness: 'GREEN',
+  healthBlocked: false,
+  safetyInformationComplete: true,
 }
 
 describe('TrainingPrescriptionEngine – kultaiset käyttäjäprofiilit', () => {
@@ -126,7 +136,10 @@ describe('TrainingPrescriptionEngine – kultaiset käyttäjäprofiilit', () => 
       durationMinutes: 45,
       profile: profile(),
     })
-    const compact = adaptPrescription(full, compact10, 'GREEN')
+    const adaptation = adaptPrescription(full, compact10, adaptationSafety)
+    expect(adaptation.status).toBe('SUPPORTED')
+    if (adaptation.status !== 'SUPPORTED') throw new Error(adaptation.reasonCode)
+    const compact = adaptation.prescription
 
     expect(compact.durationMinutes).toBeLessThanOrEqual(10)
     expect(compact.exercises).toHaveLength(2)
@@ -142,11 +155,14 @@ describe('TrainingPrescriptionEngine – kultaiset käyttäjäprofiilit', () => 
       durationMinutes: 40,
       profile: profile(),
     })
-    const compact = adaptPrescription(
+    const adaptation = adaptPrescription(
       full,
       { kind: 'COMPACT_30', durationMinutes: 30, volumeMultiplier: 0.75 },
-      'GREEN',
+      adaptationSafety,
     )
+    expect(adaptation.status).toBe('SUPPORTED')
+    if (adaptation.status !== 'SUPPORTED') throw new Error(adaptation.reasonCode)
+    const compact = adaptation.prescription
 
     expect(compact.warmup[0]).toContain('5 min')
     expect(compact.exercises[0]?.durationSeconds).toBe(20 * 60)

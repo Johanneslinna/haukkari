@@ -116,10 +116,15 @@ export { getGoalStrategy, goalStrategies } from './strategies'
 export {
   TrainingPrescriptionEngine,
   adaptPrescription,
+  evaluatePrescriptionAdaptationSafety,
   exerciseSubstitutions,
   prescribeSession,
   resolvePrescription,
   TRAINING_RULE_VERSION,
+} from './TrainingPrescriptionEngine'
+export type {
+  PrescriptionAdaptationSafetyContext,
+  PrescriptionProfile,
 } from './TrainingPrescriptionEngine'
 export {
   WorkoutFeedbackEngine,

@@ -1,7 +1,6 @@
 import { useEffect, useState, type FormEvent } from 'react'
 import { Link, useNavigate, useSearchParams } from 'react-router-dom'
 import {
-  adaptPrescription,
   adaptNextSet,
   applyWorkoutProgression,
   doseLabelFi,
@@ -18,13 +17,11 @@ import {
   type ExercisePrescription,
   type PrescribedSession,
   type PrescriptionResult,
-  type ReadinessState,
   type WorkoutCompletionStatus,
   type WorkoutFeedback,
   type WorkoutProgressionDecision,
   type WorkoutVariant,
   type SetPainResponse,
-  type ConfirmedLimitationTag,
 } from '../../domain/coaching'
 import type { LocalRecord } from '../../domain/sync/types'
 import { useAppData } from '../app-data/appDataContextValue'
@@ -46,6 +43,13 @@ import {
   todayIso,
 } from '../coaching/coachingData'
 import { canResumeWorkout, isLockedSafetyOutcome } from './WorkoutSafetyState'
+import {
+  adaptWorkoutPrescriptionForCurrentAthlete,
+  authorizeWorkoutPrescriptionForCurrentAthlete,
+  confirmedLimitationTags,
+  currentWorkoutSafetyContext,
+  storedReadiness,
+} from './WorkoutPrescriptionAdapter'
 
 const variantLabels: Record<WorkoutVariant['kind'], string> = {
   FULL: 'Täysi',
@@ -53,28 +57,6 @@ const variantLabels: Record<WorkoutVariant['kind'], string> = {
   COMPACT_10: '10 min',
   COMPACT_20: '20 min',
   COMPACT_30: '30 min',
-}
-
-const confirmedLimitationTagValues = new Set<ConfirmedLimitationTag>([
-  'ACUTE_KNEE_PAIN',
-  'ACUTE_BACK_PAIN',
-  'ACUTE_SHOULDER_PAIN',
-  'ACUTE_WRIST_PAIN',
-  'GAIT_ALTERING_PAIN',
-  'OVERHEAD_RESTRICTION',
-  'ACHILLES_PAIN',
-  'CALF_INJURY',
-  'HAMSTRING_INJURY',
-])
-
-function confirmedLimitationTags(value: unknown): ConfirmedLimitationTag[] {
-  return Array.isArray(value)
-    ? value.filter(
-        (item): item is ConfirmedLimitationTag =>
-          typeof item === 'string' &&
-          confirmedLimitationTagValues.has(item as ConfirmedLimitationTag),
-      )
-    : []
 }
 
 type EditableSet = CompletedSet & {
@@ -226,14 +208,6 @@ function parseOptionalNumber(value: string) {
   return Number.isFinite(parsed) && parsed >= 0 ? parsed : null
 }
 
-function ageFromBirthDate(value: unknown) {
-  if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}$/u.test(value)) return undefined
-  const today = todayIso()
-  const years = Number(today.slice(0, 4)) - Number(value.slice(0, 4))
-  const birthdayPassed = today.slice(5) >= value.slice(5)
-  return years - (birthdayPassed ? 0 : 1)
-}
-
 function savedFeedback(record: LocalRecord) {
   const value = objectValue(record.data.feedback)
   return typeof value.sessionRpe === 'number'
@@ -281,9 +255,18 @@ export function WorkoutPage() {
   const todayCheckIn = data
     .list('daily_checkins')
     .find((record) => record.data.checkin_date === todayIso())
+  const currentProfile = data.latest('profiles')
+  const profileSettings = objectValue(currentProfile?.data.app_settings)
   const onboardingScreening = data.latest('health_screenings')
+  const screeningAnswers = objectValue(onboardingScreening?.data.answers)
   const screeningReviewRequired = onboardingScreening?.data.status === 'NEEDS_REVIEW'
-  const readiness = stringValue(todayCheckIn?.data.readiness, 'GREEN') as ReadinessState
+  const currentReadiness = storedReadiness(todayCheckIn?.data.readiness)
+  const readiness = currentReadiness ?? 'GREEN'
+  const safetyContext = currentWorkoutSafetyContext({
+    profile: currentProfile,
+    screening: onboardingScreening,
+    readiness: todayCheckIn?.data.readiness,
+  })
   const persistedWorkout = data
     .list('workouts')
     .find(
@@ -356,15 +339,15 @@ export function WorkoutPage() {
     ) {
       return { status: 'SUPPORTED', prescription: session.prescriptionDetail }
     }
-    const profile = data.latest('profiles')
-    const settings = objectValue(profile?.data.app_settings)
     const goalRecord = activeGoalRecord(data)
     const preferences = objectValue(goalRecord?.data.preferences)
-    const screening = onboardingScreening
-    const answers = objectValue(screening?.data.answers)
-    const limitationTags = confirmedLimitationTags(answers.confirmed_limitation_tags)
-    const equipment = Array.isArray(settings.equipment)
-      ? settings.equipment.filter((item): item is string => typeof item === 'string')
+    const limitationTags = confirmedLimitationTags(
+      screeningAnswers.confirmed_limitation_tags,
+    )
+    const equipment = Array.isArray(profileSettings.equipment)
+      ? profileSettings.equipment.filter(
+          (item): item is string => typeof item === 'string',
+        )
       : ['Kehonpaino']
     return resolvePrescription({
       sessionId: session.id,
@@ -380,33 +363,33 @@ export function WorkoutPage() {
           'GENERAL_FITNESS',
         ) as PrescribedSession['goal'],
         experience:
-          settings.experience === 'INTERMEDIATE' || settings.experience === 'ADVANCED'
-            ? settings.experience
+          profileSettings.experience === 'INTERMEDIATE' ||
+          profileSettings.experience === 'ADVANCED'
+            ? profileSettings.experience
             : 'BEGINNER',
         equipment,
         physicalLoad:
-          settings.physicalLoad === 'LOW' || settings.physicalLoad === 'HIGH'
-            ? settings.physicalLoad
+          profileSettings.physicalLoad === 'LOW' ||
+          profileSettings.physicalLoad === 'HIGH'
+            ? profileSettings.physicalLoad
             : 'MODERATE',
         minutesPerSession:
-          typeof settings.minutesPerSession === 'number'
-            ? settings.minutesPerSession
+          typeof profileSettings.minutesPerSession === 'number'
+            ? profileSettings.minutesPerSession
             : session.durationMinutes,
         likes: stringValue(preferences.likes),
         dislikes: stringValue(preferences.dislikes),
         limitations: [
-          stringValue(answers.current_injuries_surgeries_and_mobility_limits),
-          stringValue(answers.doctor_restrictions),
+          stringValue(screeningAnswers.current_injuries_surgeries_and_mobility_limits),
+          stringValue(screeningAnswers.doctor_restrictions),
         ]
           .filter(Boolean)
           .join(' · '),
         confirmedLimitationTags: limitationTags,
-        healthBlocked:
-          screening?.data.status === 'HIGH_INTENSITY_BLOCKED' ||
-          screening?.data.status === 'NEEDS_REVIEW',
-        age: ageFromBirthDate(profile?.data.birth_date),
+        healthBlocked: safetyContext.healthBlocked,
+        age: safetyContext.age,
         generatedAt: new Date().toISOString(),
-        readiness,
+        readiness: safetyContext.readiness,
         strengthHistory: strengthHistoryFromLogs(workoutLogs),
       },
     })
@@ -415,7 +398,7 @@ export function WorkoutPage() {
     prescriptionResolution?.status === 'SUPPORTED'
       ? prescriptionResolution.prescription
       : null
-  const unsupportedPrescription =
+  const resolutionUnsupportedPrescription =
     prescriptionResolution?.status === 'UNSUPPORTED' ? prescriptionResolution : null
   const feedbackDecision = evaluateWorkoutFeedback(
     allFeedback,
@@ -431,17 +414,39 @@ export function WorkoutPage() {
         item.exerciseResults?.some((result) => codes.has(result.exerciseCode)),
       )?.exerciseResults
   })()
-  const previewPrescription = (() => {
+  const previewAdaptation = (() => {
     if (!generatedPrescription) return null
     const priorResponseRequiresRecovery = feedbackDecision.action === 'RECOVERY'
-    const readinessAdjusted = adaptPrescription(
-      generatedPrescription,
-      selectedVariant,
-      priorResponseRequiresRecovery ? 'ORANGE_RECOVERY' : readiness,
-    )
-    return applyWorkoutProgression(readinessAdjusted, feedbackDecision)
+    return adaptWorkoutPrescriptionForCurrentAthlete({
+      prescription: generatedPrescription,
+      variant: selectedVariant,
+      profile: currentProfile,
+      screening: onboardingScreening,
+      readiness: priorResponseRequiresRecovery
+        ? 'ORANGE_RECOVERY'
+        : todayCheckIn?.data.readiness,
+    })
   })()
-  const resumedPrescription = savedPrescription(persistedWorkout ?? null)
+  const previewPrescription =
+    previewAdaptation?.status === 'SUPPORTED'
+      ? applyWorkoutProgression(previewAdaptation.prescription, feedbackDecision)
+      : null
+  const storedResumedPrescription = savedPrescription(persistedWorkout ?? null)
+  const resumedAuthorization = storedResumedPrescription
+    ? authorizeWorkoutPrescriptionForCurrentAthlete({
+        prescription: storedResumedPrescription,
+        profile: currentProfile,
+        screening: onboardingScreening,
+        readiness: todayCheckIn?.data.readiness,
+      })
+    : null
+  const resumedPrescription =
+    resumedAuthorization?.status === 'SUPPORTED' &&
+    prescriptionResolution?.status === 'SUPPORTED' &&
+    (storedResumedPrescription?.kind !== 'STRENGTH' ||
+      prescriptionResolution.prescription.kind === 'STRENGTH')
+      ? resumedAuthorization.prescription
+      : null
   const resumedWorkoutLog = data
     .list('workout_logs')
     .find(
@@ -485,6 +490,19 @@ export function WorkoutPage() {
   const [stopPanelOpen, setStopPanelOpen] = useState(false)
   const [pending, setPending] = useState(false)
   const [error, setError] = useState('')
+  const runningAuthorization = runningPrescription
+    ? authorizeWorkoutPrescriptionForCurrentAthlete({
+        prescription: runningPrescription,
+        profile: currentProfile,
+        screening: onboardingScreening,
+        readiness: todayCheckIn?.data.readiness,
+      })
+    : null
+  const unsupportedPrescription =
+    resolutionUnsupportedPrescription ??
+    (previewAdaptation?.status === 'UNSUPPORTED' ? previewAdaptation : null) ??
+    (resumedAuthorization?.status === 'UNSUPPORTED' ? resumedAuthorization : null) ??
+    (runningAuthorization?.status === 'UNSUPPORTED' ? runningAuthorization : null)
 
   useEffect(() => {
     if (restSeconds <= 0) return
@@ -870,7 +888,6 @@ export function WorkoutPage() {
   const prescription = runningPrescription ?? previewPrescription
   const activeExercise = prescription.exercises[activeExerciseIndex]
   const completedSets = sets.filter((item) => item.completed).length
-  const profileSettings = objectValue(data.latest('profiles')?.data.app_settings)
   const availableEquipment = Array.isArray(profileSettings.equipment)
     ? profileSettings.equipment.filter((item): item is string => typeof item === 'string')
     : ['Kehonpaino']

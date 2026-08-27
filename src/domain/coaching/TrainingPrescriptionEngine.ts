@@ -34,6 +34,7 @@ import type { PrescriptionResult, UnsupportedPrescription } from './types'
 import {
   evaluateStrengthSafetyGate,
   strengthSafetyGateMessage,
+  type StrengthSafetyGateReasonCode,
 } from './StrengthSafetyGate'
 import {
   addPlannedSets,
@@ -65,6 +66,17 @@ export type PrescriptionProfile = {
   strengthHistory?: AdultResistanceSetHistory[]
   contentReleaseId?: string
   ruleVersion?: string
+}
+
+export type PrescriptionAdaptationSafetyContext = {
+  /** Nykyisestä profiilista laskettu ikä; ei prescription-snapshotista. */
+  age: number | undefined
+  /** Nykyisen päivän tallennettu kuntotarkistustulos. */
+  readiness: ReadinessState | undefined
+  /** Nykyisen terveysseulonnan nimenomainen estotila. */
+  healthBlocked: boolean | undefined
+  /** True vain, kun nykyiset turvallisuus- ja legacy-rajoitetiedot on vahvistettu. */
+  safetyInformationComplete: boolean | undefined
 }
 
 function strengthSafetyInformationComplete(profile: PrescriptionProfile) {
@@ -779,36 +791,72 @@ function fitDoseToSeconds(
   }
 }
 
+export function evaluatePrescriptionAdaptationSafety(
+  prescription: PrescribedSession,
+  safetyContext: PrescriptionAdaptationSafetyContext,
+) {
+  const mandatoryStrengthSafetyInformationComplete =
+    prescription.kind !== 'STRENGTH' ||
+    (Number.isInteger(safetyContext.age) &&
+      safetyContext.readiness !== undefined &&
+      typeof safetyContext.healthBlocked === 'boolean' &&
+      safetyContext.safetyInformationComplete === true)
+  return evaluateStrengthSafetyGate({
+    sessionKind: prescription.kind,
+    age: safetyContext.age,
+    readiness: safetyContext.readiness,
+    healthBlocked: safetyContext.healthBlocked,
+    safetyInformationComplete: mandatoryStrengthSafetyInformationComplete,
+  })
+}
+
+function unsupportedAdaptation(
+  prescription: PrescribedSession,
+  reasonCode: StrengthSafetyGateReasonCode,
+): UnsupportedPrescription {
+  return {
+    status: 'UNSUPPORTED',
+    sessionKind: prescription.kind,
+    reasonCode,
+    userMessage: strengthSafetyGateMessage(reasonCode),
+  }
+}
+
 export function adaptPrescription(
   prescription: PrescribedSession,
   variant: WorkoutVariant,
-  readiness: ReadinessState,
-): PrescribedSession {
-  const readinessGate = evaluateStrengthSafetyGate({
-    sessionKind: prescription.kind,
-    // Alkuperäinen prescription on jo ikäportitettu. Tässä portitetaan uusi
-    // päivän valmiustila ennen kuin snapshotista johdetaan suoritettava versio.
-    age: 18,
-    readiness,
-  })
-  if (!readinessGate.allowed && readinessGate.reasonCode !== 'READINESS_RECOVERY_ONLY') {
-    throw new Error(`UNSUPPORTED_PRESCRIPTION:${readinessGate.reasonCode}`)
+  safetyContext: PrescriptionAdaptationSafetyContext,
+): PrescriptionResult {
+  const readiness = safetyContext.readiness
+  const adaptationGate = evaluatePrescriptionAdaptationSafety(prescription, safetyContext)
+  if (
+    !adaptationGate.allowed &&
+    adaptationGate.reasonCode !== 'READINESS_RECOVERY_ONLY'
+  ) {
+    return unsupportedAdaptation(prescription, adaptationGate.reasonCode)
   }
-  if (readiness === 'ORANGE_RECOVERY') {
-    return prescribeMobility(
-      `${prescription.id}-recovery`,
-      'Palauttava vaihtoehto',
-      'RECOVERY',
-      Math.min(20, variant.durationMinutes),
-      {
-        goal: prescription.goal,
-        experience: 'BEGINNER',
-        equipment: ['Kehonpaino'],
-        physicalLoad: 'HIGH',
-        minutesPerSession: Math.min(20, variant.durationMinutes),
-        limitations: 'Päivän kuntotarkistus ohjaa palauttavaan harjoitukseen.',
-      },
-    )
+  if (
+    (!adaptationGate.allowed &&
+      adaptationGate.reasonCode === 'READINESS_RECOVERY_ONLY') ||
+    readiness === 'ORANGE_RECOVERY'
+  ) {
+    return {
+      status: 'SUPPORTED',
+      prescription: prescribeMobility(
+        `${prescription.id}-recovery`,
+        'Palauttava vaihtoehto',
+        'RECOVERY',
+        Math.min(20, variant.durationMinutes),
+        {
+          goal: prescription.goal,
+          experience: 'BEGINNER',
+          equipment: ['Kehonpaino'],
+          physicalLoad: 'HIGH',
+          minutesPerSession: Math.min(20, variant.durationMinutes),
+          limitations: 'Päivän kuntotarkistus ohjaa palauttavaan harjoitukseen.',
+        },
+      ),
+    }
   }
 
   const normalized = normalizePrescriptionV2(prescription)
@@ -893,7 +941,7 @@ export function adaptPrescription(
     variant.durationMinutes,
     Math.max(1, Math.ceil(prescriptionDurationSeconds(adapted) / 60)),
   )
-  return adapted
+  return { status: 'SUPPORTED', prescription: adapted }
 }
 
 export const TrainingPrescriptionEngine = {

@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   MAX_ROLLING_MUSCLE_SETS,
+  adaptPrescription,
   adaptNextSet,
   addPlannedSets,
   calculateRollingMuscleVolume,
@@ -15,7 +16,9 @@ import {
   resolvePrescription,
   type AdultResistanceAthleteContext,
   type AdultResistanceSetHistory,
+  type PrescriptionAdaptationSafetyContext,
   type PrescribedSession,
+  type WorkoutVariant,
 } from '.'
 import type { JsonObject, LocalRecord, SyncableTable } from '../sync/types'
 import type { AppDataContextValue } from '../../features/app-data/appDataContextValue'
@@ -153,6 +156,46 @@ function context(
   }
 }
 
+const fullVariant: WorkoutVariant = {
+  kind: 'FULL',
+  durationMinutes: 45,
+  volumeMultiplier: 1,
+}
+
+function adaptationSafety(
+  patch: Partial<PrescriptionAdaptationSafetyContext> = {},
+): PrescriptionAdaptationSafetyContext {
+  return {
+    age: 35,
+    readiness: 'GREEN',
+    healthBlocked: false,
+    safetyInformationComplete: true,
+    ...patch,
+  }
+}
+
+function strengthPrescription() {
+  const result = resolvePrescription({
+    sessionId: 'adaptation-safety-base',
+    title: 'Mukautuksen turvallisuusportti',
+    kind: 'STRENGTH',
+    durationMinutes: 45,
+    profile: {
+      goal: 'GENERAL_FITNESS',
+      experience: 'BEGINNER',
+      equipment: ['Kehonpaino'],
+      physicalLoad: 'MODERATE',
+      minutesPerSession: 45,
+      age: 35,
+      readiness: 'GREEN',
+      healthBlocked: false,
+      generatedAt,
+    },
+  })
+  if (result.status !== 'SUPPORTED') throw new Error(result.reasonCode)
+  return result.prescription
+}
+
 describe('P0-1: keskitetty fail-closed beta- ja turvallisuusportti', () => {
   it('estää ikä-, valmius-, terveys- ja puuttuvan tiedon negatiivikontrollit', () => {
     const legacyMinimumAgeOnly = (age: number) => age >= 18
@@ -251,6 +294,108 @@ describe('P0-1: keskitetty fail-closed beta- ja turvallisuusportti', () => {
         (session) => session.source === 'APP' && session.kind === 'STRENGTH',
       )?.prescriptionDetail?.exercises.length,
     ).toBeGreaterThan(0)
+  })
+
+  it('portittaa myös julkisen adaptPrescription-tuotantoreitin nykyhetken tiedoilla', () => {
+    const prescription = strengthPrescription()
+    const cases = [
+      {
+        label: 'alaikäinen',
+        safety: adaptationSafety({ age: 17 }),
+        reasonCode: 'YOUTH_ENGINE_NOT_AVAILABLE',
+      },
+      {
+        label: '65-vuotias',
+        safety: adaptationSafety({ age: 65 }),
+        reasonCode: 'OLDER_ADULT_ENGINE_NOT_AVAILABLE',
+      },
+      {
+        label: 'terveysesto',
+        safety: adaptationSafety({ healthBlocked: true }),
+        reasonCode: 'HEALTH_ENGINE_NOT_AVAILABLE',
+      },
+      {
+        label: 'punainen valmius',
+        safety: adaptationSafety({ readiness: 'RED_STOP' }),
+        reasonCode: 'READINESS_RED_STOP',
+      },
+    ] as const
+
+    for (const testCase of cases) {
+      expect(
+        adaptPrescription(prescription, fullVariant, testCase.safety),
+        testCase.label,
+      ).toMatchObject({ status: 'UNSUPPORTED', reasonCode: testCase.reasonCode })
+    }
+
+    expect(
+      adaptPrescription(prescription, fullVariant, adaptationSafety({ age: 64 })),
+    ).toMatchObject({
+      status: 'SUPPORTED',
+      prescription: { kind: 'STRENGTH' },
+    })
+  })
+
+  it('estää puutteellisen ja ennen P0-porttia tallennetun legacy-snapshotin', () => {
+    const current = strengthPrescription()
+    const legacyPrescription: PrescribedSession = { ...current }
+    delete legacyPrescription.schemaVersion
+    delete legacyPrescription.engineVersion
+
+    expect(
+      adaptPrescription(
+        legacyPrescription,
+        fullVariant,
+        adaptationSafety({
+          age: undefined,
+          readiness: undefined,
+          healthBlocked: undefined,
+          safetyInformationComplete: undefined,
+        }),
+      ),
+    ).toMatchObject({
+      status: 'UNSUPPORTED',
+      reasonCode: 'SAFETY_INFORMATION_INCOMPLETE',
+    })
+    expect(
+      adaptPrescription(legacyPrescription, fullVariant, adaptationSafety({ age: 65 })),
+    ).toMatchObject({
+      status: 'UNSUPPORTED',
+      reasonCode: 'OLDER_ADULT_ENGINE_NOT_AVAILABLE',
+    })
+  })
+
+  it('arvioi aiemman prescriptionin uudelleen, kun käyttäjä täyttää 65 vuotta', () => {
+    const prescription = strengthPrescription()
+    expect(
+      adaptPrescription(prescription, fullVariant, adaptationSafety({ age: 64 })),
+    ).toMatchObject({ status: 'SUPPORTED', prescription: { kind: 'STRENGTH' } })
+    expect(
+      adaptPrescription(prescription, fullVariant, adaptationSafety({ age: 65 })),
+    ).toMatchObject({
+      status: 'UNSUPPORTED',
+      reasonCode: 'OLDER_ADULT_ENGINE_NOT_AVAILABLE',
+    })
+  })
+
+  it('korvaa ORANGE-tilassa voiman vain hyväksytyllä palauttavalla reitillä', () => {
+    const result = adaptPrescription(
+      strengthPrescription(),
+      fullVariant,
+      adaptationSafety({ readiness: 'ORANGE_RECOVERY' }),
+    )
+    expect(result).toMatchObject({
+      status: 'SUPPORTED',
+      prescription: { kind: 'RECOVERY', title: 'Palauttava vaihtoehto' },
+    })
+    if (result.status !== 'SUPPORTED') throw new Error(result.reasonCode)
+    expect(result.prescription.exercises).not.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          dose: expect.objectContaining({ kind: 'STRENGTH_SETS' }),
+        }),
+      ]),
+    )
   })
 })
 

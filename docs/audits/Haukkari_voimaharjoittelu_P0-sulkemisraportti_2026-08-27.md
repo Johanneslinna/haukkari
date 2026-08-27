@@ -246,3 +246,128 @@ lupa aloittaa ihmisillä tehtävää vaihe 0:aa. Alkuperäisen hyväksyntärapor
 mukaan vaihe 0 edellyttää lisäksi kaikkien P1-kohtien sulkemista, 40/40
 hyväksyntätapausta, selain- ja staging-portteja sekä ulkopuolista ihmisarviointia.
 P1/P2-toteutusta ei sisällytetty tähän työpakettiin.
+
+## 7. Jälkitarkastus — prescriptionin mukautuksen fail-closed-portti
+
+### 7.1 Baseline ja juurisyy
+
+Jälkitarkastuksen baseline oli commit
+`e02f4bf9b3c7153cb5163b7ca5f8733a31d178ed`.
+
+Tarkastuksessa havaittiin, että `TrainingPrescriptionEngine.ts`-tiedoston
+`adaptPrescription()` kutsui `evaluateStrengthSafetyGate()`-porttia
+kovakoodatulla arvolla `age: 18`. Toteutus oletti, että aiemmin muodostettu
+prescription oli jo läpäissyt ikärajan ja että snapshotin aiempi kelpoisuus
+riitti myös myöhempään mukautukseen.
+
+Oletus ei ollut fail-closed. Käyttäjä saattoi olla mukautushetkellä vähintään
+65-vuotias, prescription saattoi olla muodostettu ennen nykyistä P0-porttia ja
+legacy-snapshotista saattoivat puuttua versionoidut kelpoisuus- ja
+turvallisuustiedot. Aiemman snapshotin olemassaolo ei siten todistanut
+käyttäjän nykyistä kelpoisuutta eikä saanut korvata puuttuvaa tietoa
+oletusarvolla.
+
+### 7.2 Tuotantokorjaus ja nykyiset tietolähteet
+
+Mukautusreitti vaatii nyt `PrescriptionAdaptationSafetyContext`-kontekstin,
+jonka pakolliset kentät ovat:
+
+- nykyisestä profiilista laskettu ikä;
+- saman päivän tallennettu readiness;
+- nykyisen terveysseulonnan `healthBlocked`-tila;
+- tieto siitä, ovatko turvallisuus- ja legacy-rajoitetiedot vahvistettu
+  (`safetyInformationComplete`).
+
+Kentille ei aseteta turvallisuuspäätöksessä oletusarvoja. Jos voimaharjoituksen
+ikä tai muu pakollinen turvallisuustieto puuttuu, `adaptPrescription()`
+palauttaa `SAFETY_INFORMATION_INCOMPLETE`-tuloksen eikä mukauta harjoitusta.
+Nykyinen ikä lasketaan käyttäjäprofiilin syntymäajasta, readiness luetaan
+päivän kuntotarkistuksesta ja terveydellinen estotila sekä vahvistetut
+rajoitetunnisteet nykyisestä terveysseulonnasta. Ikää tai muuta kelpoisuutta ei
+päätellä prescription-snapshotista.
+
+`WorkoutPage` käyttää samaa tuotantoadapteria sekä esikatselun mukautuksessa
+että tallennetun harjoituksen jatkamisen valtuutuksessa. Legacy-snapshot
+valtuutetaan uudelleen nykyisillä turvallisuustiedoilla, ja voimaharjoituksen
+jatkaminen edellyttää lisäksi, että nykyisestä käyttäjäprofiilista tehty
+prescription-ratkaisu on edelleen tuettu. Puuttuvaa tai vanhentunutta
+kelpoisuustietoa sisältävä snapshot estetään fail-closed-periaatteella.
+
+ORANGE_RECOVERY ei jatka voimaharjoitusta. Erillinen `RECOVERY`-prescription
+voidaan palauttaa vain, kun ikä, terveystila, turvallisuustietojen valmius ja
+voimabeta-version kohderajaus ovat muuten hyväksyttyjä.
+
+### 7.3 Lisätyt regressiot
+
+Jälkitarkastuksessa lisättiin seuraavat regressiot:
+
+1. legacy-voimaprescription ja puuttuva turvallisuuskonteksti palauttaa
+   `SAFETY_INFORMATION_INCOMPLETE`;
+2. ikä 17 ja GREEN palauttaa `YOUTH_ENGINE_NOT_AVAILABLE`;
+3. ikä 65 ja GREEN palauttaa `OLDER_ADULT_ENGINE_NOT_AVAILABLE`;
+4. ikä 64 ja GREEN sallii voimaharjoituksen mukautuksen;
+5. `healthBlocked=true` palauttaa `HEALTH_ENGINE_NOT_AVAILABLE`;
+6. RED_STOP palauttaa `READINESS_RED_STOP`;
+7. hyväksytty 18–64-vuotias ORANGE_RECOVERY-käyttäjä ei saa
+   voimaharjoitusta vaan erillisen palauttavan prescriptionin;
+8. ennen P0-porttia tallennettu snapshot ei voi ohittaa nykyistä porttia;
+9. käyttäjän täyttäessä 65 vuotta aiempi prescription ei enää mukaudu
+   voimaharjoitukseksi;
+10. käyttöliittymän todellinen mukautuspolku välittää nykyisen profiilin,
+    kuntotarkistuksen ja terveysseulonnan tiedot;
+11. vahvistamaton legacy-vapaatekstirajoite estää mukautuksen myös
+    käyttöliittymäpolussa;
+12. tallennetun harjoituksen jatkaminen valtuutetaan uudelleen nykyhetken
+    turvallisuustiedoilla.
+
+Sovellus-E2E:n voimaharjoituspolut luovat nyt tarkoituksellisesti nykyisen
+`CLEAR`-terveysseulonnan. Ilman terveysseulontaa voimaharjoituksen mukautuksen
+oikea tulos on `SAFETY_INFORMATION_INCOMPLETE`, ei testin aiemmin odottama
+automaattinen jatkaminen.
+
+### 7.4 Laajennetun `audit:p0`-ajon jakaumat
+
+Deterministinen ominaisuusajo käy nyt kaikki 50 000 tapausta sekä
+`resolvePrescription()`- että `adaptPrescription()`-tuotantoreitin kautta.
+
+Prescription-reitin jakauma:
+
+- sallittuja prescriptioneja: 21 839;
+- odottamattomia estoja: 0;
+- tyhjiä sallittuja prescriptioneja: 0.
+
+| Prescription-reitin reason code    | Odotettu | Toteutunut |
+| ---------------------------------- | -------: | ---------: |
+| `READINESS_RED_STOP`               |   11 505 |     11 505 |
+| `READINESS_RECOVERY_ONLY`          |   10 849 |     10 849 |
+| `HEALTH_ENGINE_NOT_AVAILABLE`      |    3 945 |      3 945 |
+| `YOUTH_ENGINE_NOT_AVAILABLE`       |      667 |        667 |
+| `OLDER_ADULT_ENGINE_NOT_AVAILABLE` |      699 |        699 |
+| `SAFETY_INFORMATION_INCOMPLETE`    |      340 |        340 |
+| `NO_SAFE_STRENGTH_DOSE_AVAILABLE`  |      156 |        156 |
+
+Adaptation-reitin jakauma:
+
+- sallittuja voimaharjoituksen mukautuksia: 21 995;
+- hyväksyttyjä erillisiä ORANGE_RECOVERY-palautumisreittejä: 10 849;
+- odottamattomia adaptation-estoja: 0.
+
+| Adaptation-reitin reason code      | Odotettu | Toteutunut |
+| ---------------------------------- | -------: | ---------: |
+| `READINESS_RED_STOP`               |   11 505 |     11 505 |
+| `HEALTH_ENGINE_NOT_AVAILABLE`      |    3 945 |      3 945 |
+| `YOUTH_ENGINE_NOT_AVAILABLE`       |      667 |        667 |
+| `OLDER_ADULT_ENGINE_NOT_AVAILABLE` |      699 |        699 |
+| `SAFETY_INFORMATION_INCOMPLETE`    |      340 |        340 |
+
+Kaikki 50 000 tapausta läpäisivät. P0-, turvallisuus-, kohderajaus-, aika-,
+väline-, hard constraint-, nauha-kg-, volyymi-, determinismi- tai
+mukautusportin rikkeitä oli yhteensä 0.
+
+### 7.5 Auditointiperustan muuttumattomuus
+
+Alkuperäistä
+`Haukkari_voimaharjoittelu_hyvaksyntaraportti_2026-08-27.md`-raporttia,
+alkuperäisen auditointiskriptin hyväksymisehtoja tai P1/P2-tapausten tulkintoja
+ei muutettu. Jälkitarkastus täydentää P0-sulkemisnäyttöä erillisellä
+`adaptPrescription()`-tuotantoreitin fail-closed-varmennuksella.

@@ -8,7 +8,10 @@ async function completeSetSafely(setRow: Locator) {
   await expect(completed).toBeChecked()
 }
 
-async function completeOnboarding(page: Page) {
+async function completeOnboarding(
+  page: Page,
+  options: { withStrengthSafetyContext?: boolean } = {},
+) {
   await page.goto('/')
   await expect(page).toHaveURL(/\/aloitus$/u)
   await page.getByLabel('Etunimi tai kutsumanimi').fill('Aino')
@@ -19,8 +22,20 @@ async function completeOnboarding(page: Page) {
     await page.getByLabel(label, { exact: true }).setChecked(index + 1 === weekday)
   }
   await page.getByRole('button', { name: 'Jatka' }).click()
+  if (options.withStrengthSafetyContext) {
+    await expect(
+      page.getByRole('heading', { name: 'Harjoitteluun vaikuttavat tiedot' }),
+    ).toBeVisible()
+    await page
+      .getByLabel('Lisätiedot ja ammattilaisen ohjeet (valinnainen)')
+      .fill('Ei tiedossa olevia harjoitteluun vaikuttavia terveysrajoitteita.')
+  }
   await page.getByRole('button', { name: 'Jatka' }).click()
-  await expect(page.getByText(/Et antanut vapaaehtoisia terveystietoja/u)).toBeVisible()
+  if (options.withStrengthSafetyContext) {
+    await page.getByLabel(/Annan nimenomaisen suostumukseni/u).check()
+  } else {
+    await expect(page.getByText(/Et antanut vapaaehtoisia terveystietoja/u)).toBeVisible()
+  }
   await page.getByRole('button', { name: 'Vahvista ja luo suunnitelma' }).click()
   await expect(page).toHaveURL(/\/$/u, { timeout: 30_000 })
   await expect(page.getByRole('heading', { name: /Aino/u })).toBeVisible()
@@ -78,7 +93,7 @@ test('käynnissä oleva harjoitus säilyy offline-latauksessa', async ({
     testInfo.project.name !== 'android-small',
     'Offline-polku ajetaan Chromium-mobiililla.',
   )
-  await completeOnboarding(page)
+  await completeOnboarding(page, { withStrengthSafetyContext: true })
   await page.getByRole('link', { name: 'Vko', exact: true }).click()
   const weekday = await page.evaluate(() => new Date().getDay() || 7)
   await expect(
@@ -118,7 +133,7 @@ test('kartoituksesta syntynyt harjoitus voidaan suorittaa ja avata palautteineen
     testInfo.project.name !== 'android-small',
     'Koko aktiivisen harjoituksen polku ajetaan kerran Chromium-mobiililla.',
   )
-  await completeOnboarding(page)
+  await completeOnboarding(page, { withStrengthSafetyContext: true })
   await page.getByRole('link', { name: 'Aloita treeni' }).click()
   await expect(
     page.getByRole('heading', { name: 'Onko jokin tänään poikkeavaa?' }),
@@ -186,7 +201,7 @@ test('voimakas kipu keskeyttää harjoituksen ja estää progression', async ({
     testInfo.project.name !== 'android-small',
     'Oirepolku ajetaan kerran Chromium-mobiililla.',
   )
-  await completeOnboarding(page)
+  await completeOnboarding(page, { withStrengthSafetyContext: true })
   await page.getByRole('link', { name: 'Aloita treeni' }).click()
   await page.getByRole('button', { name: 'Ei mitään poikkeavaa' }).click()
   await page.getByRole('link', { name: 'Avaa päivän harjoitus' }).click()
