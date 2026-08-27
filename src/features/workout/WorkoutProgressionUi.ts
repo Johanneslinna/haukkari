@@ -18,3 +18,14 @@ export function requestsNextLoadConfirmation(exercise: ExercisePrescription) {
       exercise.loadType === 'MACHINE_KG')
   )
 }
+
+export function mayPrefillPreviousLoad(exercise: ExercisePrescription) {
+  return !exercise.progressionDecision?.reasonCodes.some((code) =>
+    [
+      'PREVIOUS_LOAD_REFERENCE_ONLY',
+      'OLD_LOAD_REFERENCE_ONLY',
+      'OLD_LOAD_HISTORY_DISPLAY_ONLY',
+      'PRE_BREAK_LOAD_AUTHORITY_REVOKED',
+    ].includes(code),
+  )
+}

@@ -12,6 +12,7 @@ import {
   normalizePrescriptionV2,
   resolvePrescription,
   refreshStrengthPrescriptionTimeEstimate,
+  strengthTrainingBackgroundFrom,
   verifiedNextLoadsFrom,
   type CompletedSet,
   type ExercisePrescription,
@@ -52,7 +53,10 @@ import {
   storedReadiness,
 } from './WorkoutPrescriptionAdapter'
 import { strengthHistoryFromLogs } from './WorkoutHistory'
-import { requestsNextLoadConfirmation } from './WorkoutProgressionUi'
+import {
+  mayPrefillPreviousLoad,
+  requestsNextLoadConfirmation,
+} from './WorkoutProgressionUi'
 
 const variantLabels: Record<WorkoutVariant['kind'], string> = {
   FULL: 'Täysi',
@@ -138,7 +142,9 @@ function createSetRows(
         : exercise.progressionDecision?.action === 'INCREASE_LOAD' &&
             exercise.progressionDecision.nextLoadKg !== undefined
           ? String(exercise.progressionDecision.nextLoadKg).replace('.', ',')
-          : previousLoad
+          : !mayPrefillPreviousLoad(exercise)
+            ? null
+            : previousLoad
       const suggestedRepetitions =
         !persisted &&
         exercise.progressionDecision?.action === 'INCREASE_REPETITIONS' &&
@@ -200,6 +206,53 @@ function savedFeedback(record: LocalRecord) {
   return typeof value.sessionRpe === 'number'
     ? (value as unknown as WorkoutFeedback)
     : null
+}
+
+function StrengthReturnNotice({ prescription }: { prescription: PrescribedSession }) {
+  const decision = prescription.decisionTrace.strengthReturn
+  if (
+    !decision ||
+    decision.state === 'ACTIVE' ||
+    decision.state === 'NOVICE_COLD_START'
+  ) {
+    return null
+  }
+  const weekLength =
+    decision.state === 'RETURN_BLOCK_28_TO_55_DAYS'
+      ? 'kahden viikon'
+      : decision.state === 'RETURNING_56_PLUS_DAYS'
+        ? 'harjoituskertojen mukaan etenevä'
+        : 'seitsemän päivän'
+  const loadMessage =
+    decision.state === 'BREAK_8_TO_14_DAYS'
+      ? 'Sarjamäärää kevennetään ja progressio pidetään tauolla tämän jakson ajan.'
+      : 'Aiemmat kuormat ovat vain historiallista tietoa. Tämän päivän kuorma kalibroidaan RIR-tavoitteen avulla.'
+  return (
+    <section
+      className="surface-card return-to-strength-notice"
+      aria-label="Tauolta paluu"
+    >
+      <p className="eyebrow">Tauolta paluu</p>
+      <h2>Palaat harjoitteluun tauon jälkeen.</h2>
+      <p>
+        Vahvistettu tauko: <strong>{decision.breakDays} päivää</strong>. Käytössä on{' '}
+        {weekLength} kevennetty jakso. {loadMessage}
+      </p>
+      {decision.reentryEndsAt && (
+        <p>
+          Kevennetty jakso jatkuu vähintään{' '}
+          {new Date(decision.reentryEndsAt).toLocaleDateString('fi-FI')} asti.
+        </p>
+      )}
+      {decision.state === 'RETURNING_56_PLUS_DAYS' && (
+        <p>
+          Hyväksyttyjä paluuharjoituksia: {decision.approvedReturnWorkoutCount}/
+          {decision.requiredApprovedWorkoutCount}. Tarkka kuormaprogressio palaa vasta,
+          kun paluujakso ja uudet liikekohtaiset kalibroinnit ovat valmiit.
+        </p>
+      )}
+    </section>
+  )
 }
 
 export function WorkoutPage() {
@@ -345,6 +398,9 @@ export function WorkoutPage() {
         readiness: safetyContext.readiness,
         strengthHistory: strengthHistoryFromLogs(workoutLogs),
         verifiedNextLoads: verifiedNextLoadsFrom(profileSettings.verifiedNextLoads),
+        strengthTrainingBackground: strengthTrainingBackgroundFrom(
+          profileSettings.strengthTrainingBackground,
+        ),
       },
     })
   })()
@@ -905,6 +961,11 @@ export function WorkoutPage() {
           ),
           targetRepetitions: exercise.repetitions,
           targetRpe: exercise.targetRpe,
+          targetRirRange:
+            exercise.targetRirRange ??
+            (exercise.targetRir === undefined
+              ? undefined
+              : [exercise.targetRir, Math.min(5, exercise.targetRir + 1)]),
           primaryMuscles: exercise.primaryMuscles,
           secondaryMuscles: exercise.secondaryMuscles,
         }
@@ -995,7 +1056,10 @@ export function WorkoutPage() {
     const adaptation = adaptNextSet({
       prescribedLoadKg: completedLoadKg ?? undefined,
       prescribedRepetitions: targetRepetitions,
-      targetRir: [exercise.targetRir, Math.min(5, exercise.targetRir + 1)],
+      targetRir: exercise.targetRirRange ?? [
+        exercise.targetRir,
+        Math.min(5, exercise.targetRir + 1),
+      ],
       completedLoadKg: completedLoadKg ?? undefined,
       completedRepetitions: repetitions,
       completedRir: completedRir ?? undefined,
@@ -1192,6 +1256,8 @@ export function WorkoutPage() {
         </div>
         {activeWorkout && <span className="state-pill">Harjoitus käynnissä</span>}
       </header>
+
+      <StrengthReturnNotice prescription={prescription} />
 
       {!activeWorkout && (
         <>

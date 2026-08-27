@@ -149,6 +149,41 @@ describe('SyncEngine', () => {
     expect(remote.get('exercise_set_logs', id)?.rir).toBe(2)
   })
 
+  it('säilyttää versionoidun tauolta paluun taustatiedon kahden laitteen synkronoinnissa', async () => {
+    const dbA = database('return-background-a')
+    const dbB = database('return-background-b')
+    const remote = new FakeSyncRemoteGateway()
+    const a = runtime(dbA, remote, () => true)
+    const b = runtime(dbB, remote, () => true)
+    const id = 'acacacac-acac-4cac-8cac-acacacacacac'
+    const strengthTrainingBackground = {
+      regularTrainingAtLeast12Weeks: true,
+      lastStrengthWorkoutAt: '2026-06-18T12:00:00.000Z',
+      source: 'USER_CONFIRMED',
+      confirmedAt: '2026-08-27T08:00:00.000Z',
+      policyVersion: 'adult-strength-return-1.0.0',
+    }
+    await a.writes.create({
+      userId: user,
+      deviceId: deviceA.id,
+      table: 'profiles',
+      id,
+      data: {
+        display_name: 'Aino',
+        app_settings: { strengthTrainingBackground },
+      },
+    })
+
+    await a.engine.sync({ userId: user, device: deviceA })
+    await b.engine.sync({ userId: user, device: deviceB })
+
+    expect(remote.get('profiles', id)?.app_settings).toEqual({
+      strengthTrainingBackground,
+    })
+    const received = await dbB.records.where('id').equals(id).first()
+    expect(received?.data.app_settings).toEqual({ strengthTrainingBackground })
+  })
+
   it('vetää kaikki samalla aikaleimalla muuttuneet tietueet vakaalla kursorilla', async () => {
     const db = database('cursor')
     const remote = new FakeSyncRemoteGateway()

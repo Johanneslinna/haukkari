@@ -24,6 +24,7 @@ import type {
 } from './types'
 import type { AdultResistanceSetHistory } from './AdultResistanceEngine'
 import { applyHockeyMicrocycle } from './sports/iceHockeyAdapter'
+import type { StrengthTrainingBackground } from './ReturnToStrengthPolicy'
 
 export type PlanGenerationInput = {
   goal: GoalProfile
@@ -50,6 +51,7 @@ export type PlanGenerationInput = {
   /** Toteutunut, WorkoutRecord-tunnisteilla yksilöity voimaharjoitteluhistoria. */
   strengthHistory?: AdultResistanceSetHistory[]
   verifiedNextLoads?: VerifiedNextLoad[]
+  strengthTrainingBackground?: StrengthTrainingBackground
 }
 
 const sessionDefaults: Record<
@@ -350,6 +352,7 @@ export function generatePlan(
     readiness: 'GREEN',
     strengthHistory: input.strengthHistory,
     verifiedNextLoads: input.verifiedNextLoads,
+    strengthTrainingBackground: input.strengthTrainingBackground,
   }
   const prescribedSessions = hockeyAdjustment.sessions.map((session) => {
     if (session.source !== 'APP') return session

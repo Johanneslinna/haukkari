@@ -6,7 +6,7 @@ import type {
   StrengthSetsDose,
 } from './types'
 
-export const ADULT_STRENGTH_TIME_POLICY_VERSION = 'adult-strength-time-1.0.0'
+export const ADULT_STRENGTH_TIME_POLICY_VERSION = 'adult-strength-time-1.1.0'
 
 export const STRENGTH_TIME_REASON_CODES = {
   ACCESSORY_REMOVED: 'TIME_ACCESSORY_REMOVED',
@@ -146,9 +146,17 @@ export function estimatePrescriptionTime(
     transitionSeconds +
     equipmentSetupSeconds +
     cooldownSeconds
+  const requestedMinimumBufferSeconds = prescription.minimumTimeBufferSeconds
+  const preservedMinimumBufferSeconds =
+    typeof requestedMinimumBufferSeconds === 'number' &&
+    Number.isFinite(requestedMinimumBufferSeconds) &&
+    requestedMinimumBufferSeconds >= 0
+      ? requestedMinimumBufferSeconds
+      : 0
   const bufferSeconds = Math.max(
     policy.minimumBufferSeconds,
     Math.ceil(subtotalSeconds * policy.bufferRatio),
+    preservedMinimumBufferSeconds,
   )
 
   return {

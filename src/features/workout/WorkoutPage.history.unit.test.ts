@@ -1,12 +1,20 @@
 import { describe, expect, it } from 'vitest'
 import type { LocalRecord } from '../../domain/sync/types'
 import { strengthHistoryFromLogs } from './WorkoutHistory'
-import { requestsNextLoadConfirmation } from './WorkoutProgressionUi'
+import {
+  mayPrefillPreviousLoad,
+  requestsNextLoadConfirmation,
+} from './WorkoutProgressionUi'
 import type { ExercisePrescription } from '../../domain/coaching'
 
 function workoutLog(
   workoutId?: string,
   completed: boolean[] = [true, true],
+  feedbackPatch: {
+    difficulty?: 'TOO_EASY' | 'RIGHT' | 'TOO_HARD'
+    felt?: 'WORSE' | 'SAME' | 'BETTER'
+    sessionRpe?: number
+  } = {},
 ): LocalRecord {
   const timestamp = '2026-08-26T10:00:00.000Z'
   return {
@@ -22,11 +30,11 @@ function workoutLog(
       performed_at: timestamp,
       feedback: {
         completionStatus: 'COMPLETED',
-        sessionRpe: 7,
-        difficulty: 'RIGHT',
+        sessionRpe: feedbackPatch.sessionRpe ?? 7,
+        difficulty: feedbackPatch.difficulty ?? 'RIGHT',
         pain: 'NONE',
         painLocation: '',
-        felt: 'SAME',
+        felt: feedbackPatch.felt ?? 'SAME',
         notes: '',
         exerciseResults: [
           {
@@ -46,6 +54,7 @@ function workoutLog(
             techniqueOk: [true, false],
             targetRepetitions: '6–10',
             targetRpe: 7,
+            targetRirRange: [3, 4],
           },
         ],
       },
@@ -75,6 +84,9 @@ describe('WorkoutPage.strengthHistoryFromLogs', () => {
     expect(history.every((item) => item.completionStatus === 'COMPLETED')).toBe(true)
     expect(history.map((item) => item.pain)).toEqual([false, true])
     expect(history.map((item) => item.techniqueOk)).toEqual([true, false])
+    expect(history.every((item) => item.targetRirMin === 3)).toBe(true)
+    expect(history.every((item) => item.targetRirMax === 4)).toBe(true)
+    expect(history.every((item) => item.severeRecoveryProblem === false)).toBe(true)
   })
 
   it('ei keksi legacy-lokille harjoituskerran tunnistetta lokirivin id:stä', () => {
@@ -93,6 +105,25 @@ describe('WorkoutPage.strengthHistoryFromLogs', () => {
         doseCompleted: false,
       }),
     ])
+  })
+
+  it('säilyttää vakavan palautumisongelman täsmälliset syyt RETURNING-päätöstä varten', () => {
+    const tooHard = strengthHistoryFromLogs([
+      workoutLog('too-hard', [true, true], { difficulty: 'TOO_HARD' }),
+    ])
+    const worse = strengthHistoryFromLogs([
+      workoutLog('worse', [true, true], { felt: 'WORSE' }),
+    ])
+    const highRpe = strengthHistoryFromLogs([
+      workoutLog('high-rpe', [true, true], { sessionRpe: 9 }),
+    ])
+
+    expect(tooHard.every((row) => row.difficultyTooHard)).toBe(true)
+    expect(worse.every((row) => row.feltWorse)).toBe(true)
+    expect(highRpe.every((row) => row.sessionRpeNineOrMore)).toBe(true)
+    expect(
+      [...tooHard, ...worse, ...highRpe].every((row) => row.severeRecoveryProblem),
+    ).toBe(true)
   })
 })
 
@@ -152,5 +183,22 @@ describe('WorkoutPage.next load confirmation visibility', () => {
         loadContextId: 'legacy-generic-machine-context',
       }),
     ).toBe(false)
+  })
+
+  it('ei esitä ennen taukoa käytettyä kilogrammaa uuden paluuharjoituksen kenttään', () => {
+    expect(
+      mayPrefillPreviousLoad({
+        ...exercise,
+        progressionDecision: {
+          ...exercise.progressionDecision,
+          action: 'RECALIBRATE_LOAD',
+          reasonCodes: [
+            'OLD_LOAD_HISTORY_DISPLAY_ONLY',
+            'PRE_BREAK_LOAD_AUTHORITY_REVOKED',
+          ],
+        },
+      }),
+    ).toBe(false)
+    expect(mayPrefillPreviousLoad(exercise)).toBe(true)
   })
 })

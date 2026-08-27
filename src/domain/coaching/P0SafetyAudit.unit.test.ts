@@ -125,6 +125,8 @@ function onboardingInput(patch: Partial<OnboardingInput> = {}): OnboardingInput 
     secondaryGoals: [],
     targetDate: '',
     experience: 'BEGINNER',
+    previousRegularStrengthTraining: false,
+    lastStrengthWorkoutDate: '',
     availableDays: [1, 3, 5],
     minutesPerSession: 45,
     minutesByDay: { '1': 45, '3': 45, '5': 45 },

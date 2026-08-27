@@ -121,6 +121,17 @@ export {
 } from './TimeBudgetPolicy'
 export type { StrengthTimeBudgetPolicy, StrengthTimeFitResult } from './TimeBudgetPolicy'
 export {
+  ReturnToStrengthPolicy,
+  STRENGTH_RETURN_POLICY_VERSION,
+  evaluateStrengthReturn,
+  reduceReturnWorkingSets,
+  strengthTrainingBackgroundFrom,
+} from './ReturnToStrengthPolicy'
+export type {
+  StrengthReturnDecision,
+  StrengthTrainingBackground,
+} from './ReturnToStrengthPolicy'
+export {
   VERIFIED_NEXT_LOAD_POLICY_VERSION,
   automaticLoadIncreaseRatio,
   findVerifiedNextLoad,

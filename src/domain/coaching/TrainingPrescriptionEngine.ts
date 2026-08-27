@@ -49,6 +49,7 @@ import {
   STRENGTH_TIME_REASON_CODES,
   fitStrengthPrescriptionToTimeBudget,
 } from './TimeBudgetPolicy'
+import type { StrengthTrainingBackground } from './ReturnToStrengthPolicy'
 
 export const TRAINING_RULE_VERSION = '2026.08.25-v2'
 
@@ -73,6 +74,7 @@ export type PrescriptionProfile = {
   strengthHistory?: AdultResistanceSetHistory[]
   /** Käyttäjän vahvistamat kuormakohtaiset seuraavat vaihtoehdot. */
   verifiedNextLoads?: VerifiedNextLoad[]
+  strengthTrainingBackground?: StrengthTrainingBackground
   contentReleaseId?: string
   ruleVersion?: string
 }
@@ -272,6 +274,7 @@ function prescribeStrength(
       likedExerciseCodes,
       supervisionAvailable: profile.supervisionAvailable ?? false,
       verifiedNextLoads: profile.verifiedNextLoads,
+      strengthTrainingBackground: profile.strengthTrainingBackground,
     },
     history: profile.strengthHistory,
   })

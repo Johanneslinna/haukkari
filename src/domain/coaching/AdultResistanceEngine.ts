@@ -35,9 +35,16 @@ import {
   isAutomaticLoadIncreaseAllowed,
   isKilogramLoadType,
 } from './VerifiedNextLoad'
+import {
+  evaluateStrengthReturn,
+  reduceReturnWorkingSets,
+  STRENGTH_RETURN_POLICY_VERSION,
+  type StrengthReturnDecision,
+  type StrengthTrainingBackground,
+} from './ReturnToStrengthPolicy'
 
-export const ADULT_RESISTANCE_ENGINE_VERSION = 'adult-resistance-1.3.0'
-export const ADULT_RESISTANCE_RULE_VERSION = 'adult-resistance-rules-1.3.0'
+export const ADULT_RESISTANCE_ENGINE_VERSION = 'adult-resistance-1.4.0'
+export const ADULT_RESISTANCE_RULE_VERSION = 'adult-resistance-rules-1.4.0'
 export const ADULT_RESISTANCE_LOAD_CONTEXT_VERSION = 'adult-resistance-load-context-1.0.0'
 
 const experienceRank: Record<ExperienceLevel, number> = {
@@ -67,6 +74,14 @@ export type AdultResistanceSetHistory = {
   techniqueOk?: boolean
   completionStatus?: WorkoutCompletionStatus
   doseCompleted?: boolean
+  /** Tallennetun prescriptionin RIR-alue paluuharjoituksen hyväksyntää varten. */
+  targetRirMin?: number
+  targetRirMax?: number
+  stopped?: boolean
+  severeRecoveryProblem?: boolean
+  difficultyTooHard?: boolean
+  feltWorse?: boolean
+  sessionRpeNineOrMore?: boolean
 }
 
 export type AdultResistanceAthleteContext = {
@@ -88,6 +103,7 @@ export type AdultResistanceAthleteContext = {
   supervisionAvailable: boolean
   /** Käyttäjän nimenomaisesti vahvistamat kuormakohtaiset seuraavat vaihtoehdot. */
   verifiedNextLoads?: readonly VerifiedNextLoad[]
+  strengthTrainingBackground?: StrengthTrainingBackground
 }
 
 export type EligibilityDecision = {
@@ -669,6 +685,179 @@ function progressionGuidanceFi(decision: InterSessionProgressionDecision) {
   }
 }
 
+function latestHistoricalLoad(
+  exercise: ExercisePrescription,
+  history: readonly AdultResistanceSetHistory[],
+  before?: string | null,
+) {
+  const value = [...history]
+    .filter(
+      (row) =>
+        row.exerciseCode === exercise.code &&
+        row.exerciseVersion === exercise.contentVersion &&
+        row.loadType === exercise.loadType &&
+        (!exercise.loadContextId || row.loadContextId === exercise.loadContextId) &&
+        typeof row.loadKg === 'number' &&
+        row.loadKg > 0 &&
+        (!before || Date.parse(row.completedAt) < Date.parse(before)),
+    )
+    .sort((left, right) => left.completedAt.localeCompare(right.completedAt))
+    .at(-1)?.loadKg
+  return typeof value === 'number' ? value : undefined
+}
+
+function postBreakCalibrationSessions(
+  exercise: ExercisePrescription,
+  history: readonly AdultResistanceSetHistory[],
+  cutoff: string | null,
+) {
+  if (!cutoff) return []
+  return [
+    ...new Set(
+      history
+        .filter(
+          (row) =>
+            row.sessionId &&
+            row.exerciseCode === exercise.code &&
+            row.exerciseVersion === exercise.contentVersion &&
+            row.loadType === exercise.loadType &&
+            (!exercise.loadContextId || row.loadContextId === exercise.loadContextId) &&
+            Date.parse(row.completedAt) >= Date.parse(cutoff) &&
+            isApprovedCalibrationRow(row),
+        )
+        .map((row) => row.sessionId!),
+    ),
+  ]
+}
+
+function isApprovedCalibrationRow(row: AdultResistanceSetHistory) {
+  return (
+    row.completionStatus === 'COMPLETED' &&
+    row.doseCompleted === true &&
+    row.pain === false &&
+    row.techniqueOk === true &&
+    row.stopped !== true &&
+    row.severeRecoveryProblem !== true &&
+    typeof row.rir === 'number' &&
+    typeof row.targetRirMin === 'number' &&
+    typeof row.targetRirMax === 'number' &&
+    row.rir >= row.targetRirMin &&
+    row.rir <= row.targetRirMax
+  )
+}
+
+function suppressReturnProgression(
+  exercise: ExercisePrescription,
+  decision: StrengthReturnDecision,
+  history: readonly AdultResistanceSetHistory[],
+) {
+  if (!decision.progressionSuppressed) return exercise
+  const historicalLoadKg = latestHistoricalLoad(
+    exercise,
+    history,
+    decision.historyAuthorityCutoffAt,
+  )
+  const postBreakSessionIds = postBreakCalibrationSessions(
+    exercise,
+    history,
+    decision.historyAuthorityCutoffAt,
+  )
+  const postBreakCalibrated =
+    decision.state === 'RETURNING_56_PLUS_DAYS' && postBreakSessionIds.length >= 2
+  const postBreakLoadKg = postBreakCalibrated
+    ? latestHistoricalLoad(exercise, history)
+    : undefined
+  const recalibrate = decision.previousLoadDisplayOnly && !postBreakCalibrated
+  const reasonCodes = [...new Set(decision.reasonCodes)]
+  const historicalReference =
+    historicalLoadKg === undefined
+      ? ''
+      : ` Aiempi kuorma – ei tämän harjoituksen automaattinen suositus: ${historicalLoadKg} kg.`
+  const progressionDecision: ExerciseProgressionDecision = {
+    action: recalibrate ? 'RECALIBRATE_LOAD' : 'KEEP_LOAD',
+    ...(historicalLoadKg === undefined ? {} : { currentLoadKg: historicalLoadKg }),
+    changedVariable: 'NONE',
+    reasonCodes,
+    supportingSessionIds: postBreakSessionIds,
+  }
+  return {
+    ...exercise,
+    loadGuidance: postBreakCalibrated
+      ? `Kahden paluun jälkeisen harjoituksen kuorma-arvio on käytettävissä${
+          postBreakLoadKg === undefined ? '' : ` (${postBreakLoadKg} kg)`
+        }. Säilytä kuorma, kunnes koko paluujakso on valmis.`
+      : recalibrate
+        ? `${historicalReference} Kalibroi tämän päivän kuorma tavoite-RIR:n perusteella; moottori ei keksi kilogrammaporrasta.`.trim()
+        : `Tauolta paluun aikana kuorma ja toistot pidetään ennallaan. ${exercise.loadGuidance}`,
+    progressionDecision,
+  }
+}
+
+function conservativeRepetitions(repetitions: string | undefined) {
+  if (!repetitions) return '6–10'
+  const values = repetitions.match(/\d+/gu)?.map(Number) ?? []
+  if (values.length === 0 || Math.min(...values) < 6) return '6–10'
+  return repetitions
+}
+
+function applyReturnDose(
+  source: readonly ExercisePrescription[],
+  decision: StrengthReturnDecision,
+  history: readonly AdultResistanceSetHistory[],
+) {
+  let exercises = source.map((exercise) => ({ ...exercise }))
+  if (decision.state === 'BREAK_8_TO_14_DAYS') {
+    exercises = reduceReturnWorkingSets(exercises, 0.75)
+  } else if (decision.state === 'BREAK_15_TO_27_DAYS') {
+    exercises = reduceReturnWorkingSets(exercises, 0.65).map((exercise) => {
+      const targetRir = Math.min(4, (exercise.targetRir ?? 3) + 1)
+      return {
+        ...exercise,
+        targetRir,
+        targetRirRange: [targetRir, Math.min(4, targetRir + 1)] as [number, number],
+        targetRpe: Math.max(5, 10 - targetRir),
+        dose:
+          exercise.dose?.kind === 'STRENGTH_SETS'
+            ? {
+                ...exercise.dose,
+                targetRir,
+                targetRpe: Math.max(5, 10 - targetRir),
+              }
+            : exercise.dose,
+      }
+    })
+  } else if (
+    decision.state === 'RETURN_BLOCK_28_TO_55_DAYS' ||
+    decision.state === 'RETURNING_56_PLUS_DAYS'
+  ) {
+    exercises = exercises.map((exercise) => {
+      const sets = Math.max(1, Math.min(2, exercise.sets))
+      const repetitions = conservativeRepetitions(exercise.repetitions)
+      return {
+        ...exercise,
+        sets,
+        repetitions,
+        targetRir: 3,
+        targetRirRange: [3, 4] as [number, number],
+        targetRpe: 7,
+        dose:
+          exercise.dose?.kind === 'STRENGTH_SETS'
+            ? {
+                ...exercise.dose,
+                sets,
+                repetitions,
+                targetRir: 3,
+                targetRpe: 7,
+              }
+            : exercise.dose,
+      }
+    })
+  }
+  return exercises.map((exercise) =>
+    suppressReturnProgression(exercise, decision, history),
+  )
+}
+
 export function prescribeAdultResistanceSession(input: {
   sessionId: string
   title: string
@@ -702,6 +891,25 @@ export function prescribeAdultResistanceSession(input: {
     secondaryMuscles:
       item.secondaryMuscles ?? catalog.getExercise(item.exerciseCode)?.secondaryMuscles,
   }))
+  const returnDecision = evaluateStrengthReturn({
+    history,
+    generatedAt: input.context.generatedAt,
+    background: input.context.strengthTrainingBackground,
+  })
+  const authoritativeHistory = returnDecision.historyAuthorityCutoffAt
+    ? history.filter(
+        (item) =>
+          Date.parse(item.completedAt) >=
+          Date.parse(returnDecision.historyAuthorityCutoffAt!),
+      )
+    : history
+  const postLongBreakAuthorityRestricted =
+    returnDecision.historyAuthorityCutoffAt !== null &&
+    returnDecision.breakDays !== null &&
+    returnDecision.breakDays >= 56
+  const capabilityAndProgressionHistory = postLongBreakAuthorityRestricted
+    ? authoritativeHistory.filter(isApprovedCalibrationRow)
+    : authoritativeHistory
   const objective = createResistanceSessionObjective(input.context)
   const eligibility = filterEligibleExercises(catalog, input.context, objective)
   const eligible = eligibility
@@ -719,14 +927,14 @@ export function prescribeAdultResistanceSession(input: {
   const capabilities = chosen.map((item) =>
     estimateAdultResistanceCapability(
       item.exercise,
-      history,
+      capabilityAndProgressionHistory,
       input.context.generatedAt,
       input.context.experience,
     ),
   )
   const generatedAtMs = Date.parse(input.context.generatedAt)
   const doses = chosen.map((item, index) => {
-    const comparableSetsThisWeek = history.filter((set) => {
+    const comparableSetsThisWeek = authoritativeHistory.filter((set) => {
       const ageDays = (generatedAtMs - Date.parse(set.completedAt)) / 86_400_000
       return (
         ageDays >= 0 &&
@@ -779,7 +987,7 @@ export function prescribeAdultResistanceSession(input: {
   const cooldownMinutes =
     ADULT_STRENGTH_TIME_POLICY.cooldownSecondsForBudget(input.context.availableMinutes) /
     60
-  const exercises: ExercisePrescription[] = chosen.flatMap((item, index) => {
+  const baseExercises: ExercisePrescription[] = chosen.flatMap((item, index) => {
     const dose = doses[index]!
     if (dose.sets <= 0) return []
     const repetitions = Array.isArray(dose.repetitions)
@@ -791,7 +999,7 @@ export function prescribeAdultResistanceSession(input: {
       ? dose.repetitions[1]
       : dose.repetitions
     const progressionDecision = decideInterSessionProgression({
-      comparableSessions: history,
+      comparableSessions: capabilityAndProgressionHistory,
       targetRir: Array.isArray(dose.targetRir)
         ? dose.targetRir
         : [dose.targetRir, dose.targetRir],
@@ -856,6 +1064,7 @@ export function prescribeAdultResistanceSession(input: {
       },
     ]
   })
+  const exercises = baseExercises
   if (exercises.length === 0) {
     throw new Error('UNSUPPORTED_PRESCRIPTION:NO_SAFE_STRENGTH_DOSE_AVAILABLE')
   }
@@ -866,6 +1075,8 @@ export function prescribeAdultResistanceSession(input: {
     'RT-PROGRESSION-001',
     STRENGTH_VOLUME_POLICY_VERSION,
     ADULT_STRENGTH_TIME_POLICY_VERSION,
+    STRENGTH_RETURN_POLICY_VERSION,
+    ...returnDecision.reasonCodes,
   ]
   const evidenceClaimIds = [...new Set(doses.flatMap((dose) => dose.evidenceClaimIds))]
   const unfitted = withV2Blocks({
@@ -913,6 +1124,8 @@ export function prescribeAdultResistanceSession(input: {
         `Mieluisat liikkeet: ${input.context.likedExerciseCodes.join(', ') || 'ei ilmoitettu'}`,
         `Vältettävät liikkeet: ${input.context.dislikedExerciseCodes.join(', ') || 'ei ilmoitettu'}`,
         `Historiallisia sarjoja: ${history.length}`,
+        `Tauolta paluun tila: ${returnDecision.state}`,
+        `Tauko: ${returnDecision.breakDays ?? 'ei vahvistettua tietoa'} päivää`,
       ],
       missingData: capabilities
         .filter((item) => item.calibrationRequired)
@@ -979,6 +1192,7 @@ export function prescribeAdultResistanceSession(input: {
           'NO_COMPARABLE_SESSION_HISTORY',
         ],
       })),
+      strengthReturn: returnDecision,
     },
   })
   const fitted = fitStrengthPrescriptionToTimeBudget({
@@ -988,7 +1202,48 @@ export function prescribeAdultResistanceSession(input: {
   if (fitted.status === 'UNSUPPORTED') {
     throw new Error('UNSUPPORTED_PRESCRIPTION:NO_SAFE_STRENGTH_DOSE_AVAILABLE')
   }
-  return fitted.prescription
+  if (!returnDecision.progressionSuppressed) return fitted.prescription
+
+  const returnedExercises = applyReturnDose(
+    fitted.prescription.exercises,
+    returnDecision,
+    history,
+  )
+  const returned = fitStrengthPrescriptionToTimeBudget({
+    prescription: {
+      ...fitted.prescription,
+      minimumTimeBufferSeconds: fitted.prescription.timeBreakdown?.bufferSeconds,
+      exercises: returnedExercises,
+      blocks: returnedExercises,
+      decisionTrace: {
+        ...fitted.prescription.decisionTrace,
+        adaptations: [
+          ...(fitted.prescription.decisionTrace.adaptations ?? []),
+          {
+            original: fitted.prescription.exercises.map((exercise) => ({
+              code: exercise.code,
+              sets: exercise.sets,
+              repetitions: exercise.repetitions ?? null,
+              targetRir: exercise.targetRir ?? null,
+            })),
+            adjusted: returnedExercises.map((exercise) => ({
+              code: exercise.code,
+              sets: exercise.sets,
+              repetitions: exercise.repetitions ?? null,
+              targetRirRange: exercise.targetRirRange ?? null,
+            })),
+            reasonCodes: returnDecision.reasonCodes,
+          },
+        ],
+      },
+    },
+    timeBudgetMinutes: input.context.availableMinutes,
+    initialReasonCodes: returnDecision.reasonCodes,
+  })
+  if (returned.status === 'UNSUPPORTED') {
+    throw new Error('UNSUPPORTED_PRESCRIPTION:NO_SAFE_STRENGTH_DOSE_AVAILABLE')
+  }
+  return returned.prescription
 }
 
 export function adaptNextSet(input: {

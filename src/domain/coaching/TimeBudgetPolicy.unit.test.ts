@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
+  ADULT_STRENGTH_TIME_POLICY_VERSION,
   ADULT_STRENGTH_TIME_POLICY,
   STRENGTH_TIME_INVARIANT_CODES,
   STRENGTH_TIME_REASON_CODES,
@@ -7,6 +8,7 @@ import {
   auditStrengthPrescriptionTime,
   estimatePrescriptionTime,
   fitStrengthPrescriptionToTimeBudget,
+  normalizePrescriptionV2,
   refreshStrengthPrescriptionTimeEstimate,
   resolvePrescription,
   type ExperienceLevel,
@@ -91,6 +93,77 @@ function refreshedTimeSnapshot(prescription: PrescribedSession): PrescribedSessi
 }
 
 describe('Aikuisten voimaharjoittelun kanoninen aikamalli', () => {
+  it('versionoi puskurin säilytyssemantiikan muuttamatta tavallisen prescriptionin laskentaa', () => {
+    const prescription = resolvedStrength({ budget: 45 })
+    expect(prescription.minimumTimeBufferSeconds).toBeUndefined()
+    expect(prescription.timePolicyVersion).toBe(ADULT_STRENGTH_TIME_POLICY_VERSION)
+    expect(ADULT_STRENGTH_TIME_POLICY_VERSION).toBe('adult-strength-time-1.1.0')
+
+    const previousPolicy = {
+      ...ADULT_STRENGTH_TIME_POLICY,
+      version: 'adult-strength-time-1.0.0',
+    }
+    const current = estimatePrescriptionTime(prescription)
+    const previous = estimatePrescriptionTime(prescription, previousPolicy)
+    expect({ ...current, policyVersion: undefined }).toEqual({
+      ...previous,
+      policyVersion: undefined,
+    })
+  })
+
+  it.each([Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY, -1])(
+    'ei käytä virheellistä absoluuttista puskuria %s laskentavaltuutena',
+    (minimumTimeBufferSeconds) => {
+      const prescription = resolvedStrength({ budget: 45 })
+      const baseline = estimatePrescriptionTime(prescription)
+      const invalid = estimatePrescriptionTime({
+        ...prescription,
+        minimumTimeBufferSeconds,
+      })
+      expect(invalid).toEqual(baseline)
+    },
+  )
+
+  it('säilyttää suuremman hyväksytyn absoluuttisen puskurin aikabudjetin sisällä', () => {
+    const prescription = resolvedStrength({ budget: 60 })
+    const preservedBufferSeconds = (prescription.timeBreakdown?.bufferSeconds ?? 0) + 60
+    const fitted = fitStrengthPrescriptionToTimeBudget({
+      prescription: {
+        ...prescription,
+        minimumTimeBufferSeconds: preservedBufferSeconds,
+      },
+      timeBudgetMinutes: 60,
+    })
+    expect(fitted.status).toBe('SUPPORTED')
+    if (fitted.status !== 'SUPPORTED') throw new Error(fitted.reasonCode)
+    expect(fitted.prescription.timeBreakdown?.bufferSeconds).toBeGreaterThanOrEqual(
+      preservedBufferSeconds,
+    )
+    expect(fitted.prescription.calculatedTotalSeconds).toBeLessThanOrEqual(60 * 60)
+    expect(auditStrengthPrescriptionTime(fitted.prescription).violations).toEqual([])
+  })
+
+  it('ei kirjoita toteutuneen 1.0.0-snapshotin näkyvää kestoa tai aikahistoriaa uudelleen', () => {
+    const current = resolvedStrength({ budget: 45 })
+    const historical = {
+      ...current,
+      durationMinutes: 41,
+      timePolicyVersion: 'adult-strength-time-1.0.0',
+      timeBreakdown: {
+        ...current.timeBreakdown!,
+        totalSeconds: 2_431,
+        policyVersion: 'adult-strength-time-1.0.0',
+      },
+      calculatedTotalSeconds: 2_431,
+    }
+    const normalized = normalizePrescriptionV2(historical)
+    expect(normalized).toBe(historical)
+    expect(normalized.durationMinutes).toBe(41)
+    expect(normalized.timePolicyVersion).toBe('adult-strength-time-1.0.0')
+    expect(normalized.calculatedTotalSeconds).toBe(2_431)
+    expect(normalized.timeBreakdown).toBe(historical.timeBreakdown)
+  })
+
   it('käyttää yhtä versionoitua erittelyä kaikissa tuetuissa budjetti- ja varianttiyhdistelmissä', () => {
     let supported = 0
     for (const budget of budgets) {

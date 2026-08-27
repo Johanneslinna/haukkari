@@ -46,6 +46,17 @@ export function strengthHistoryFromLogs(
               result.techniqueOk?.[index] ?? feedback.stopReason !== 'TECHNIQUE',
             completionStatus: feedback.completionStatus,
             doseCompleted: result.completedSets >= result.plannedSets,
+            targetRirMin: result.targetRirRange?.[0],
+            targetRirMax: result.targetRirRange?.[1],
+            stopped:
+              feedback.completionStatus === 'STOPPED' || Boolean(feedback.stopReason),
+            severeRecoveryProblem:
+              feedback.difficulty === 'TOO_HARD' ||
+              feedback.felt === 'WORSE' ||
+              feedback.sessionRpe >= 9,
+            difficultyTooHard: feedback.difficulty === 'TOO_HARD',
+            feltWorse: feedback.felt === 'WORSE',
+            sessionRpeNineOrMore: feedback.sessionRpe >= 9,
           },
         ]
       })
@@ -70,6 +81,17 @@ export function strengthHistoryFromLogs(
           techniqueOk: feedback.stopReason !== 'TECHNIQUE',
           completionStatus: feedback.completionStatus,
           doseCompleted: false,
+          targetRirMin: result.targetRirRange?.[0],
+          targetRirMax: result.targetRirRange?.[1],
+          stopped:
+            feedback.completionStatus === 'STOPPED' || Boolean(feedback.stopReason),
+          severeRecoveryProblem:
+            feedback.difficulty === 'TOO_HARD' ||
+            feedback.felt === 'WORSE' ||
+            feedback.sessionRpe >= 9,
+          difficultyTooHard: feedback.difficulty === 'TOO_HARD',
+          feltWorse: feedback.felt === 'WORSE',
+          sessionRpeNineOrMore: feedback.sessionRpe >= 9,
         },
       ]
     })

@@ -84,7 +84,7 @@ describe('TrainingPrescriptionEngine – kultaiset käyttäjäprofiilit', () => 
           item.stopCondition.length > 0,
       ),
     ).toBe(true)
-    expect(result.decisionTrace.ruleVersion).toBe('adult-resistance-rules-1.3.0')
+    expect(result.decisionTrace.ruleVersion).toBe('adult-resistance-rules-1.4.0')
     expect(result.decisionTrace.contentReleaseId).toBe('adult-resistance-v1.0.0')
   })
 
@@ -274,14 +274,14 @@ describe('TrainingPrescriptionEngine – kultaiset käyttäjäprofiilit', () => 
     })
 
     expect(result.schemaVersion).toBe(2)
-    expect(result.engineVersion).toBe('adult-resistance-1.3.0')
+    expect(result.engineVersion).toBe('adult-resistance-1.4.0')
     expect(result.blocks).toEqual(result.exercises)
     expect(result.objective?.primary).toBeTruthy()
     expect(prescriptionDurationSeconds(result)).toBeLessThanOrEqual(45 * 60)
     expect(result.durationMinutes).toBe(
       Math.ceil(prescriptionDurationSeconds(result) / 60),
     )
-    expect(result.timePolicyVersion).toBe('adult-strength-time-1.0.0')
+    expect(result.timePolicyVersion).toBe('adult-strength-time-1.1.0')
     expect(result.calculatedTotalSeconds).toBe(result.timeBreakdown?.totalSeconds)
     expect(result.timeBreakdown).toMatchObject({
       warmupSeconds: expect.any(Number),
@@ -292,7 +292,7 @@ describe('TrainingPrescriptionEngine – kultaiset käyttäjäprofiilit', () => 
       equipmentSetupSeconds: expect.any(Number),
       cooldownSeconds: expect.any(Number),
       bufferSeconds: expect.any(Number),
-      policyVersion: 'adult-strength-time-1.0.0',
+      policyVersion: 'adult-strength-time-1.1.0',
     })
   })
 
@@ -360,7 +360,7 @@ describe('TrainingPrescriptionEngine – kultaiset käyttäjäprofiilit', () => 
     )
     expect(reauthorized.status).toBe('SUPPORTED')
     if (reauthorized.status !== 'SUPPORTED') throw new Error(reauthorized.reasonCode)
-    expect(reauthorized.prescription.timePolicyVersion).toBe('adult-strength-time-1.0.0')
+    expect(reauthorized.prescription.timePolicyVersion).toBe('adult-strength-time-1.1.0')
     expect(reauthorized.prescription.timeAdjustmentReasonCodes).toContain(
       'TIME_LEGACY_REAUTHORIZED',
     )

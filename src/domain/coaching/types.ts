@@ -72,6 +72,29 @@ export type DecisionTrace = {
     adjusted: DecisionTraceValue
     reasonCodes: string[]
   }[]
+  /** Versionoitu voimaharjoittelun tauolta paluun päätös. */
+  strengthReturn?: StrengthReturnDecisionTrace
+}
+
+export type StrengthReturnState =
+  | 'NOVICE_COLD_START'
+  | 'ACTIVE'
+  | 'BREAK_8_TO_14_DAYS'
+  | 'BREAK_15_TO_27_DAYS'
+  | 'RETURN_BLOCK_28_TO_55_DAYS'
+  | 'RETURNING_56_PLUS_DAYS'
+
+export type StrengthReturnDecisionTrace = {
+  state: StrengthReturnState
+  policyVersion: string
+  source: 'APP_HISTORY' | 'USER_CONFIRMED' | 'NONE'
+  breakDays: number | null
+  episodeStartedAt: string | null
+  approvedReturnWorkoutCount: number
+  requiredApprovedWorkoutCount: number
+  reentryEndsAt: string | null
+  historyAuthorityCutoffAt: string | null
+  reasonCodes: string[]
 }
 
 export type SessionKind =
@@ -407,6 +430,8 @@ export type ExercisePrescription = {
   restSeconds: number
   targetRpe: number
   targetRir?: number
+  /** Valinnainen tavoiteväli esimerkiksi tauolta paluun RIR 3–4 -ohjaukseen. */
+  targetRirRange?: [number, number]
   /** Liikekohtaiset lämmittely-/kalibrointisarjat ennen työsarjoja. */
   warmupSets?: number
   /** Versionoidun aikamallin käyttämä arvio yhden työsarjan kestosta. */
@@ -465,6 +490,8 @@ export type PrescribedSession = {
   timePolicyVersion?: string
   timeBreakdown?: PrescriptionTimeBreakdown
   timeAdjustmentReasonCodes?: string[]
+  /** Paluusovitus voi säilyttää alkuperäisen kanonisen aikapuskurin. */
+  minimumTimeBufferSeconds?: number
   objective?: SessionObjective
   confidence?: DecisionTrace['confidence']
   warmup: string[]
@@ -517,6 +544,8 @@ export type WorkoutExerciseResult = {
   techniqueOk?: Array<boolean | null>
   targetRepetitions?: string
   targetRpe: number
+  /** Tallennettu prescription-tavoite paluuharjoituksen hyväksyntää varten. */
+  targetRirRange?: [number, number]
   primaryMuscles?: string[]
   secondaryMuscles?: string[]
 }

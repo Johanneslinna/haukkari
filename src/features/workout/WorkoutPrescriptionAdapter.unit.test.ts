@@ -177,7 +177,7 @@ describe('WorkoutPrescriptionAdapter – käyttöliittymän nykyhetken turvallis
     })
     expect(authorized.status).toBe('SUPPORTED')
     if (authorized.status !== 'SUPPORTED') throw new Error(authorized.reasonCode)
-    expect(authorized.prescription.timePolicyVersion).toBe('adult-strength-time-1.0.0')
+    expect(authorized.prescription.timePolicyVersion).toBe('adult-strength-time-1.1.0')
     expect(authorized.prescription.timeAdjustmentReasonCodes).toContain(
       'TIME_LEGACY_REAUTHORIZED',
     )

@@ -85,6 +85,8 @@ const initialForm: OnboardingForm = {
   secondaryGoals: ['BODY_RECOMPOSITION'],
   targetDate: '',
   experience: 'BEGINNER',
+  previousRegularStrengthTraining: false,
+  lastStrengthWorkoutDate: '',
   availableDays: [1, 3, 5],
   minutesPerSession: 45,
   minutesByDay: {
@@ -477,6 +479,43 @@ export function OnboardingPage() {
                   tavoite-RPE:n ja palautusajat. Aloittelijalle ei määrätä maksimitestejä.
                 </FieldHelp>
               </label>
+              <label className="check-row">
+                <input
+                  type="checkbox"
+                  checked={form.previousRegularStrengthTraining}
+                  onChange={(event) =>
+                    setForm({
+                      ...form,
+                      previousRegularStrengthTraining: event.target.checked,
+                      lastStrengthWorkoutDate: event.target.checked
+                        ? form.lastStrengthWorkoutDate
+                        : '',
+                    })
+                  }
+                />
+                <span>
+                  Olen harjoitellut voimaa aiemmin säännöllisesti vähintään 12 viikkoa.
+                </span>
+              </label>
+              {form.previousRegularStrengthTraining && (
+                <label className="field">
+                  <span>Milloin teit viimeisen voimaharjoituksen?</span>
+                  <input
+                    type="date"
+                    max={new Date().toISOString().slice(0, 10)}
+                    value={form.lastStrengthWorkoutDate}
+                    onChange={(event) =>
+                      setForm({ ...form, lastStrengthWorkoutDate: event.target.value })
+                    }
+                    required
+                  />
+                  <FieldHelp>
+                    Tietoa kysytään vain tauolta paluun turvalliseen annosteluun. Se ei
+                    muuta kokemustasoasi, ja puuttuva tieto johtaa tavalliseen
+                    kalibroivaan aloitukseen.
+                  </FieldHelp>
+                </label>
+              )}
               <label className="field">
                 <span>Oletusaika uusille harjoituspäiville (min)</span>
                 <ClearableNumberInput

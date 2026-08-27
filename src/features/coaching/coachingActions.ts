@@ -12,6 +12,8 @@ import {
   previewPreviousGoalRestore,
   verifiedNextLoadsFrom,
   verifyNextLoad,
+  strengthTrainingBackgroundFrom,
+  STRENGTH_RETURN_POLICY_VERSION,
 } from '../../domain/coaching'
 import type {
   CompletedSet,
@@ -36,6 +38,7 @@ import type {
   GoalChangeDraft,
 } from '../app-data/appDataContextValue'
 import { objectValue, stringValue, toJsonObject, todayIso } from './coachingData'
+import { strengthHistoryFromLogs } from '../workout/WorkoutHistory'
 
 export type OnboardingInput = {
   displayName: string
@@ -46,6 +49,8 @@ export type OnboardingInput = {
   secondaryGoals: GoalProfile['secondary']
   targetDate: string
   experience: 'BEGINNER' | 'INTERMEDIATE' | 'ADVANCED'
+  previousRegularStrengthTraining: boolean
+  lastStrengthWorkoutDate: string
   availableDays: number[]
   minutesPerSession: number
   minutesByDay: Record<string, number>
@@ -234,6 +239,7 @@ function planFromPreferences(
       daysUntil: number
     }>
   } = {},
+  strengthHistory = [] as ReturnType<typeof strengthHistoryFromLogs>,
 ) {
   const sportDiscipline =
     'sportDiscipline' in preferences && typeof preferences.sportDiscipline === 'string'
@@ -357,6 +363,10 @@ function planFromPreferences(
     verifiedNextLoads: verifiedNextLoadsFrom(
       (preferences as Record<string, unknown>).verifiedNextLoads,
     ),
+    strengthHistory,
+    strengthTrainingBackground: strengthTrainingBackgroundFrom(
+      (preferences as Record<string, unknown>).strengthTrainingBackground,
+    ),
   })
   if (healthBlocked) {
     generated.decision.sessions = generated.decision.sessions
@@ -381,6 +391,17 @@ export async function completeOnboarding(
   data: AppDataContextValue,
   input: OnboardingInput,
 ) {
+  const createdAt = new Date().toISOString()
+  const strengthTrainingBackground =
+    input.previousRegularStrengthTraining && input.lastStrengthWorkoutDate
+      ? {
+          regularTrainingAtLeast12Weeks: true as const,
+          lastStrengthWorkoutAt: `${input.lastStrengthWorkoutDate}T12:00:00.000Z`,
+          source: 'USER_CONFIRMED' as const,
+          confirmedAt: createdAt,
+          policyVersion: STRENGTH_RETURN_POLICY_VERSION,
+        }
+      : undefined
   const { safetyReviewRequired, highIntensityBlocked } = classifyOnboardingHealth(input)
   const goal: GoalProfile = {
     primary: input.primaryGoal,
@@ -404,10 +425,14 @@ export async function completeOnboarding(
       confirmed: true,
       goalPeriodId,
       planVersionId,
-      createdAt: new Date().toISOString(),
+      createdAt,
     },
   )
-  const plan = planFromPreferences(goal, input, highIntensityBlocked)
+  const plan = planFromPreferences(
+    goal,
+    { ...input, strengthTrainingBackground },
+    highIntensityBlocked,
+  )
   const profileId = crypto.randomUUID()
   const goalProfileId = crypto.randomUUID()
   const consentAt = input.sensitiveConsent ? new Date().toISOString() : null
@@ -428,6 +453,7 @@ export async function completeOnboarding(
       currentEnduranceMinutes: input.currentEnduranceMinutes,
       weeklyActivities: input.weeklyActivities,
       experience: input.experience,
+      strengthTrainingBackground,
       currentWeeklyTraining: input.currentWeeklyTraining,
       enduranceSportBackground: input.enduranceSportBackground,
       physicalLoad: input.physicalLoad,
@@ -577,6 +603,8 @@ export async function activateGoalDraft(
     draft.profile,
     planningPreferencesWithScreening(settings, screening),
     screeningStatus === 'HIGH_INTENSITY_BLOCKED' || screeningStatus === 'NEEDS_REVIEW',
+    {},
+    strengthHistoryFromLogs(data.list('workout_logs')),
   )
   const previousPeriod = data
     .list('goal_periods')
@@ -1142,6 +1170,7 @@ async function createCalendarPlanVersion(
     preferences,
     screeningStatus === 'HIGH_INTENSITY_BLOCKED' || screeningStatus === 'NEEDS_REVIEW',
     calendarPlanningInputs(data, mutation),
+    strengthHistoryFromLogs(data.list('workout_logs')),
   )
   const previousVersion = data.latest('plan_versions')
   const planVersionId = crypto.randomUUID()

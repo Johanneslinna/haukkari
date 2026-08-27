@@ -13,6 +13,7 @@ async function completeOnboarding(
   options: {
     withStrengthSafetyContext?: boolean
     strengthProgressionScenario?: boolean
+    returningStrengthDays?: number
   } = {},
 ) {
   await page.goto('/')
@@ -33,6 +34,16 @@ async function completeOnboarding(
     await page.getByRole('button', { name: 'Koti', exact: true }).click()
     await page.getByLabel('Mieluisat harjoitukset').fill('Maljakyykky')
   }
+  if (options.returningStrengthDays !== undefined) {
+    await page
+      .getByLabel('Olen harjoitellut voimaa aiemmin säännöllisesti vähintään 12 viikkoa.')
+      .check()
+    const lastDate = await page.evaluate(
+      (days) => new Date(Date.now() - days * 86_400_000).toISOString().slice(0, 10),
+      options.returningStrengthDays,
+    )
+    await page.getByLabel('Milloin teit viimeisen voimaharjoituksen?').fill(lastDate)
+  }
   await page.getByRole('button', { name: 'Jatka' }).click()
   if (options.withStrengthSafetyContext) {
     await expect(
@@ -52,6 +63,29 @@ async function completeOnboarding(
   await expect(page).toHaveURL(/\/$/u, { timeout: 30_000 })
   await expect(page.getByRole('heading', { name: /Aino/u })).toBeVisible()
 }
+
+test('tauolta paluun päätös näkyy oikeassa käyttäjäpolussa ja säilyy latauksessa', async ({
+  page,
+}) => {
+  await completeOnboarding(page, {
+    strengthProgressionScenario: true,
+    returningStrengthDays: 70,
+    withStrengthSafetyContext: true,
+  })
+  await page.getByRole('link', { name: 'Aloita treeni' }).click()
+  await page.getByRole('button', { name: 'Ei mitään poikkeavaa' }).click()
+  await page.getByRole('link', { name: 'Avaa päivän harjoitus' }).click()
+  await expect(
+    page.getByRole('heading', { name: 'Palaat harjoitteluun tauon jälkeen.' }),
+  ).toBeVisible()
+  await expect(page.getByText(/Vahvistettu tauko: (?:69|70) päivää/u)).toBeVisible()
+  await expect(page.getByText(/Hyväksyttyjä paluuharjoituksia: 0\/6/u)).toBeVisible()
+  await page.reload()
+  await expect(
+    page.getByRole('heading', { name: 'Palaat harjoitteluun tauon jälkeen.' }),
+  ).toBeVisible()
+  await expect(page.getByText(/Hyväksyttyjä paluuharjoituksia: 0\/6/u)).toBeVisible()
+})
 
 function repetitionsFromDose(value: string, useMaximum: boolean) {
   const numbers = [...value.matchAll(/\d+/gu)].map((match) => Number(match[0]))

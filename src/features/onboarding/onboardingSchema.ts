@@ -28,6 +28,14 @@ export const onboardingSchema = z
         'Anna tavoitepäivä muodossa vvvv-kk-pp.',
       ),
     experience: z.enum(['BEGINNER', 'INTERMEDIATE', 'ADVANCED']),
+    previousRegularStrengthTraining: z.boolean().default(false),
+    lastStrengthWorkoutDate: z
+      .string()
+      .refine(
+        (value) => value === '' || /^\d{4}-\d{2}-\d{2}$/u.test(value),
+        'Anna viimeisen voimaharjoituksen päivä muodossa vvvv-kk-pp.',
+      )
+      .default(''),
     availableDays: z.array(z.number().int().min(1).max(7)).min(1),
     minutesPerSession: z.number().int().min(10).max(240),
     minutesByDay: z.record(z.string(), z.number().int().min(10).max(240)),
@@ -94,6 +102,23 @@ export const onboardingSchema = z
     path: ['secondaryGoals'],
   })
   .superRefine((value, context) => {
+    if (value.previousRegularStrengthTraining && !value.lastStrengthWorkoutDate) {
+      context.addIssue({
+        code: 'custom',
+        path: ['lastStrengthWorkoutDate'],
+        message: 'Anna viimeisen voimaharjoituksen päivä tai poista vahvistus.',
+      })
+    }
+    if (
+      value.lastStrengthWorkoutDate &&
+      Date.parse(`${value.lastStrengthWorkoutDate}T12:00:00.000Z`) > Date.now()
+    ) {
+      context.addIssue({
+        code: 'custom',
+        path: ['lastStrengthWorkoutDate'],
+        message: 'Viimeinen voimaharjoitus ei voi olla tulevaisuudessa.',
+      })
+    }
     if (hasSensitiveHealthData(value) && !value.sensitiveConsent) {
       context.addIssue({
         code: 'custom',
