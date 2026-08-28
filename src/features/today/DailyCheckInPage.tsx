@@ -14,6 +14,7 @@ import {
 } from '../coaching/coachingActions'
 import {
   booleanValue,
+  calendarContextForProfile,
   objectValue,
   planSessions,
   readinessLabels,
@@ -41,11 +42,12 @@ const symptoms: Array<{ value: SafetySymptom; label: string }> = [
 export function DailyCheckInPage() {
   const data = useAppData()
   const profile = data.latest('profiles')
+  const clock = calendarContextForProfile(profile)
   const goal = stringValue(
     activeGoalRecord(data)?.data.primary_goal,
     'GENERAL_FITNESS',
   ) as GoalType
-  const weekday = new Date().getDay() || 7
+  const weekday = clock.weekday
   const planned = planSessions(activeTrainingPlan(data)).find(
     (session) => session.day === weekday,
   )

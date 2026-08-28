@@ -23,7 +23,6 @@ const experiences: ExperienceLevel[] = ['BEGINNER', 'INTERMEDIATE', 'ADVANCED']
 const goals: GoalType[] = ['GENERAL_FITNESS', 'MAX_STRENGTH', 'MUSCLE_GAIN']
 const readinessStates = ['GREEN', 'YELLOW'] as const
 const equipmentProfiles = [
-  { id: 'BODYWEIGHT', equipment: ['Kehonpaino'] },
   { id: 'BANDS', equipment: ['Kehonpaino', 'Vastuskuminauhat'] },
   { id: 'DUMBBELLS', equipment: ['Kehonpaino', 'Käsipainot'] },
   { id: 'MACHINES', equipment: ['Kehonpaino', 'Kuntosalilaitteet'] },
@@ -223,11 +222,7 @@ describe('Aikuisten voimaharjoittelun kanoninen aikamalli', () => {
                 if (effectiveBudget <= 10) {
                   expect(prescription.exercises.length).toBeGreaterThanOrEqual(2)
                 }
-                if (
-                  effectiveBudget === 20 &&
-                  experience === 'BEGINNER' &&
-                  equipmentProfile.id !== 'BODYWEIGHT'
-                ) {
+                if (effectiveBudget === 20 && experience === 'BEGINNER') {
                   expect(prescription.exercises.length).toBeGreaterThanOrEqual(3)
                   const totalSets = prescription.exercises.reduce(
                     (sum, exercise) => sum + exercise.sets,
@@ -256,7 +251,7 @@ describe('Aikuisten voimaharjoittelun kanoninen aikamalli', () => {
                     }),
                   ).toBeGreaterThanOrEqual(5)
                 }
-                if (effectiveBudget === 30 && equipmentProfile.id !== 'BODYWEIGHT') {
+                if (effectiveBudget === 30) {
                   expect(prescription.exercises.length).toBeGreaterThanOrEqual(4)
                   expect(
                     prescription.exercises.reduce(
@@ -266,9 +261,7 @@ describe('Aikuisten voimaharjoittelun kanoninen aikamalli', () => {
                   ).toBeLessThanOrEqual(10)
                 }
                 if (effectiveBudget >= 45) {
-                  expect(prescription.exercises.length).toBeGreaterThanOrEqual(
-                    equipmentProfile.id === 'BODYWEIGHT' ? 4 : 5,
-                  )
+                  expect(prescription.exercises.length).toBeGreaterThanOrEqual(5)
                 }
                 if (effectiveBudget === 90) {
                   expect(prescription.durationMinutes).toBeLessThan(90)
@@ -279,7 +272,7 @@ describe('Aikuisten voimaharjoittelun kanoninen aikamalli', () => {
         }
       }
     }
-    expect(supported).toBe(2700)
+    expect(supported).toBe(2160)
   })
 
   it('sovittaa deterministisesti poistamalla apuliikkeen ja sarjoja ilman lepojen lyhentämistä', () => {

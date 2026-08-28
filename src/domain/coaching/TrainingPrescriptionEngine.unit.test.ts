@@ -128,7 +128,7 @@ describe('TrainingPrescriptionEngine – kultaiset käyttäjäprofiilit', () => 
     expect(high.decisionTrace.safetyOutcome).toBe('MODIFY')
   })
 
-  it('10 minuutin versio säilyttää avainliikkeet mutta rajaa kokonaismäärää', () => {
+  it('10 minuutin versio säilyttää kaksi priorisoitua avainliikettä myös viikon kattavuussnapshotista', () => {
     const full = prescribeSession({
       sessionId: 'compact',
       title: 'Voima',
@@ -136,7 +136,20 @@ describe('TrainingPrescriptionEngine – kultaiset käyttäjäprofiilit', () => 
       durationMinutes: 45,
       profile: profile(),
     })
-    const adaptation = adaptPrescription(full, compact10, adaptationSafety)
+    const weeklyCoverageExercises = full.exercises.map((exercise) => ({
+      ...exercise,
+      keyExercise: true,
+    }))
+    const weeklyCoverageSnapshot = {
+      ...full,
+      exercises: weeklyCoverageExercises,
+      blocks: weeklyCoverageExercises,
+    }
+    const adaptation = adaptPrescription(
+      weeklyCoverageSnapshot,
+      compact10,
+      adaptationSafety,
+    )
     expect(adaptation.status).toBe('SUPPORTED')
     if (adaptation.status !== 'SUPPORTED') throw new Error(adaptation.reasonCode)
     const compact = adaptation.prescription

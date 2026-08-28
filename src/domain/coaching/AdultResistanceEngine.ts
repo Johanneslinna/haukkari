@@ -21,6 +21,7 @@ import type {
   SessionObjective,
   WorkoutCompletionStatus,
   VerifiedNextLoad,
+  StrengthWeekSessionRole,
 } from './types'
 import { evaluateStrengthSafetyGate } from './StrengthSafetyGate'
 import {
@@ -42,6 +43,7 @@ import {
   type StrengthReturnDecision,
   type StrengthTrainingBackground,
 } from './ReturnToStrengthPolicy'
+import { movementPatternsForRole } from './StrengthWeekPolicy'
 
 export const ADULT_RESISTANCE_ENGINE_VERSION = 'adult-resistance-1.4.0'
 export const ADULT_RESISTANCE_RULE_VERSION = 'adult-resistance-rules-1.4.0'
@@ -104,6 +106,8 @@ export type AdultResistanceAthleteContext = {
   /** Käyttäjän nimenomaisesti vahvistamat kuormakohtaiset seuraavat vaihtoehdot. */
   verifiedNextLoads?: readonly VerifiedNextLoad[]
   strengthTrainingBackground?: StrengthTrainingBackground
+  /** Viikkopolitiikan määräämä harjoitusrakenne; ei päätellä kellosta tai listan indeksistä. */
+  strengthWeekRole?: StrengthWeekSessionRole
 }
 
 export type EligibilityDecision = {
@@ -660,7 +664,11 @@ function loadTracking(exercise: ExerciseDefinition): {
   }
 }
 
-function selectedPatternOrder(minutes: number) {
+function selectedPatternOrder(
+  minutes: number,
+  strengthWeekRole?: StrengthWeekSessionRole,
+) {
+  if (strengthWeekRole) return movementPatternsForRole(strengthWeekRole, minutes)
   if (minutes <= 20) return ['SQUAT', 'HORIZONTAL_PUSH', 'HORIZONTAL_PULL']
   if (minutes <= 30) return ['SQUAT', 'HINGE', 'HORIZONTAL_PUSH', 'HORIZONTAL_PULL']
   return ['SQUAT', 'HINGE', 'HORIZONTAL_PUSH', 'HORIZONTAL_PULL', 'ANTI_EXTENSION']
@@ -682,6 +690,68 @@ function progressionGuidanceFi(decision: InterSessionProgressionDecision) {
       return 'Seuraava askel: säilytä nykyinen kuorma.'
     case 'RECALIBRATE_LOAD':
       return 'Seuraava askel: kalibroi kuorma uudelleen ennen tarkkaa kuormasuositusta.'
+  }
+}
+
+export function refreshAdultResistanceProgression(input: {
+  prescription: PrescribedSession
+  history: readonly AdultResistanceSetHistory[]
+  verifiedNextLoads?: readonly VerifiedNextLoad[]
+  generatedAt: string
+}): PrescribedSession {
+  if (input.prescription.kind !== 'STRENGTH') return input.prescription
+  const adaptations: NonNullable<PrescribedSession['decisionTrace']['adaptations']> = []
+  const exercises = input.prescription.exercises.map((exercise) => {
+    const maximumRepetitions = Math.max(
+      1,
+      ...(exercise.repetitions?.match(/\d+/gu)?.map(Number) ?? [1]),
+    )
+    const targetRirValue = exercise.targetRir ?? Math.max(0, 10 - exercise.targetRpe)
+    const targetRir: [number, number] = exercise.targetRirRange ?? [
+      targetRirValue,
+      Math.min(5, targetRirValue + 1),
+    ]
+    const decision = decideInterSessionProgression({
+      comparableSessions: input.history,
+      targetRir,
+      verifiedNextLoads: input.verifiedNextLoads,
+      targetExerciseCode: exercise.code,
+      targetExerciseVersion: exercise.contentVersion,
+      targetLoadType: exercise.loadType,
+      targetLoadContextId: exercise.loadContextId,
+      maximumRepetitions,
+      generatedAt: input.generatedAt,
+    })
+    adaptations.push({
+      original: {
+        exerciseCode: exercise.code,
+        action: exercise.progressionDecision?.action ?? null,
+      },
+      adjusted: {
+        action: decision.action,
+        nextLoadKg: decision.nextLoadKg ?? null,
+        nextRepetitions: decision.nextRepetitions ?? null,
+      },
+      reasonCodes: decision.reasonCodes,
+    })
+    const baseGuidance = exercise.loadGuidance.replace(/\s*Seuraava askel:.*$/u, '')
+    return {
+      ...exercise,
+      loadGuidance: `${baseGuidance} ${progressionGuidanceFi(decision)}`,
+      progressionDecision: decision as ExerciseProgressionDecision,
+    }
+  })
+  return {
+    ...input.prescription,
+    exercises,
+    blocks: exercises,
+    decisionTrace: {
+      ...input.prescription.decisionTrace,
+      adaptations: [
+        ...(input.prescription.decisionTrace.adaptations ?? []),
+        ...adaptations,
+      ],
+    },
   }
 }
 
@@ -917,12 +987,45 @@ export function prescribeAdultResistanceSession(input: {
     .map((item) => item.exercise)
   const scores = scoreExerciseCandidates(eligible, input.context, objective, history)
   const chosen: ExerciseCandidateScore[] = []
-  for (const pattern of selectedPatternOrder(input.context.availableMinutes)) {
+  const requiredPatternOrder = selectedPatternOrder(
+    input.context.availableMinutes,
+    input.context.strengthWeekRole,
+  )
+  for (const pattern of requiredPatternOrder) {
     const candidate = scores.find(
       (item) =>
         item.exercise.movementPatterns.includes(pattern) && !chosen.includes(item),
     )
     if (candidate) chosen.push(candidate)
+  }
+  const coverageCandidateCount = chosen.length
+  const maximumCandidateCount = input.context.strengthWeekRole
+    ? coverageCandidateCount
+    : input.context.availableMinutes <= 10
+      ? 2
+      : input.context.availableMinutes <= 20
+        ? 3
+        : input.context.availableMinutes <= 30
+          ? 5
+          : input.context.availableMinutes <= 45
+            ? 7
+            : input.context.availableMinutes <= 60
+              ? 8
+              : 10
+  // Ensin katetaan roolin liikesuunnat. Vasta sen jälkeen jäljellä oleva
+  // turvallinen aika voidaan käyttää saman roolin volyymia täydentäviin liikkeisiin.
+  for (const candidate of scores) {
+    if (chosen.length >= maximumCandidateCount) break
+    if (chosen.includes(candidate)) continue
+    if (
+      input.context.strengthWeekRole &&
+      !candidate.exercise.movementPatterns.some((pattern) =>
+        requiredPatternOrder.includes(pattern),
+      )
+    ) {
+      continue
+    }
+    chosen.push(candidate)
   }
   const capabilities = chosen.map((item) =>
     estimateAdultResistanceCapability(
@@ -947,13 +1050,17 @@ export function prescribeAdultResistanceSession(input: {
           ))
       )
     }).length
-    return prescribeResistanceDose(
+    const dose = prescribeResistanceDose(
       objective,
       item.exercise,
       capabilities[index]!,
       input.context,
       { comparableSetsThisWeek },
     )
+    if (input.context.strengthWeekRole && index < coverageCandidateCount) {
+      dose.sets = Math.min(2, dose.sets)
+    }
+    return dose
   })
   const rollingVolume = calculateRollingMuscleVolume({
     sets: history,
@@ -1052,7 +1159,9 @@ export function prescribeAdultResistanceSession(input: {
         primaryMuscles: [...item.exercise.primaryMuscles],
         secondaryMuscles: [...item.exercise.secondaryMuscles],
         techniqueReviewStatus: 'PENDING_REVIEW',
-        keyExercise: index < 2,
+        keyExercise: input.context.strengthWeekRole
+          ? index < coverageCandidateCount
+          : index < 2,
         dose: {
           kind: 'STRENGTH_SETS',
           sets: dose.sets,

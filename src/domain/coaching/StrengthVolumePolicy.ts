@@ -1,3 +1,4 @@
+import type { ExercisePrescription } from './types'
 import type { ExerciseCatalog, ExerciseDefinition } from './content/TrainingContent'
 
 export const STRENGTH_VOLUME_POLICY_VERSION = 'strength-volume-policy-1.0.0'
@@ -17,6 +18,39 @@ export type VersionedStrengthSet = {
 }
 
 export type MuscleVolume = Record<string, number>
+
+export function mergeMuscleVolume(
+  ...volumes: readonly Readonly<MuscleVolume>[]
+): MuscleVolume {
+  const result: MuscleVolume = {}
+  for (const volume of volumes) {
+    for (const [muscle, amount] of Object.entries(volume)) add(result, muscle, amount)
+  }
+  return result
+}
+
+/**
+ * Laskee suunnitellut sarjat samoilla 1,0/0,5-painoilla kuin toteutuneen
+ * seitsemän vuorokauden historian. Tämä on viikkosuunnittelun ainoa
+ * suunnitellun lihasvolyymin laskuri.
+ */
+export function calculatePlannedMuscleVolume(
+  exercises: readonly Pick<
+    ExercisePrescription,
+    'sets' | 'primaryMuscles' | 'secondaryMuscles'
+  >[],
+): MuscleVolume {
+  const volume: MuscleVolume = {}
+  for (const exercise of exercises) {
+    for (const muscle of exercise.primaryMuscles ?? []) {
+      add(volume, muscle, exercise.sets * PRIMARY_MUSCLE_SET_WEIGHT)
+    }
+    for (const muscle of exercise.secondaryMuscles ?? []) {
+      add(volume, muscle, exercise.sets * SECONDARY_MUSCLE_SET_WEIGHT)
+    }
+  }
+  return volume
+}
 
 function add(volume: MuscleVolume, muscle: string, amount: number) {
   volume[muscle] = (volume[muscle] ?? 0) + amount

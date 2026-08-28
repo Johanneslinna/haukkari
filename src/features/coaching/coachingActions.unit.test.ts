@@ -6,6 +6,7 @@ import {
   calendarPlanningInputs,
   classifyOnboardingHealth,
   confirmNextAvailableLoad,
+  ensureCurrentStrengthWeekPlan,
 } from './coachingActions'
 
 const userId = '00000000-0000-4000-8000-000000000001'
@@ -123,6 +124,71 @@ function mutableData(initial: LocalRecord[]): AppDataContextValue {
     },
     refresh: async () => undefined,
   }
+}
+
+function rolloverFixture(
+  options: {
+    timezone?: string
+    includeTimezone?: boolean
+    weekAnchorDate?: string
+  } = {},
+) {
+  const goalId = '40000000-0000-4000-8000-000000000001'
+  const goalPeriodId = '40000000-0000-4000-8000-000000000002'
+  const oldVersionId = '40000000-0000-4000-8000-000000000003'
+  const oldPlanId = '40000000-0000-4000-8000-000000000004'
+  const profileData: JsonObject = {
+    app_settings: {
+      age: 35,
+      experience: 'INTERMEDIATE',
+      availableDays: [1, 3],
+      equipment: ['Kehonpaino', 'Käsipainot'],
+      minutesPerSession: 45,
+      physicalLoad: 'MODERATE',
+    },
+  }
+  if (options.includeTimezone !== false) {
+    profileData.timezone = options.timezone ?? 'Europe/Helsinki'
+  }
+  return mutableData([
+    storedRecord('profiles', '40000000-0000-4000-8000-000000000000', profileData),
+    storedRecord('goal_profiles', goalId, {
+      primary_goal: 'MUSCLE_GAIN',
+      secondary_goals: [],
+      preferences: {
+        age: 35,
+        experience: 'INTERMEDIATE',
+        availableDays: [1, 3],
+        equipment: ['Kehonpaino', 'Käsipainot'],
+        minutesPerSession: 45,
+        physicalLoad: 'MODERATE',
+      },
+    }),
+    storedRecord('goal_periods', goalPeriodId, {
+      goal_profile_id: goalId,
+      starts_on: '2026-08-01',
+      status: 'ACTIVE',
+    }),
+    storedRecord('plan_versions', oldVersionId, {
+      goal_period_id: goalPeriodId,
+      previous_plan_version_id: null,
+      version_number: 1,
+      effective_from: options.weekAnchorDate ?? '2026-08-17',
+      change_reason: 'WEEKLY_MATERIALIZATION',
+      snapshot: { oldWeek: true },
+    }),
+    storedRecord('training_plans', oldPlanId, {
+      plan_version_id: oldVersionId,
+      status: 'ACTIVE',
+      plan: {
+        sessions: [],
+        strengthWeek: {
+          policyVersion: 'adult-strength-week-1.0.0',
+          weekAnchorDate: options.weekAnchorDate ?? '2026-08-17',
+        },
+      },
+    }),
+  ])
 }
 
 describe('calendarPlanningInputs', () => {
@@ -361,5 +427,142 @@ describe('kalenterin replanner', () => {
     ).toBe('ARCHIVED')
     expect(data.list('training_plans').at(-1)?.data.status).toBe('ACTIVE')
     expect(data.list('workout_logs').map((record) => record.id)).toContain(historyId)
+  })
+})
+
+describe('voimaviikon vaihtuminen', () => {
+  it('käyttää Helsingin paikallista maanantairajaa eikä UTC-vuorokauden rajaa', async () => {
+    const sunday = rolloverFixture({ weekAnchorDate: '2026-08-24' })
+    await expect(
+      ensureCurrentStrengthWeekPlan(sunday, '2026-08-30T20:30:00.000Z'),
+    ).resolves.toBe(false)
+    expect(sunday.list('plan_versions')).toHaveLength(1)
+
+    const monday = rolloverFixture({ weekAnchorDate: '2026-08-24' })
+    await expect(
+      ensureCurrentStrengthWeekPlan(monday, '2026-08-30T21:30:00.000Z'),
+    ).resolves.toBe(true)
+    expect(monday.list('plan_versions')).toHaveLength(2)
+    expect(monday.list('plan_versions').at(-1)?.data.effective_from).toBe('2026-08-31')
+  })
+
+  it('käyttää legacy-profiilille Helsinkiä mutta estää virheellisen aikavyöhykkeen', async () => {
+    const legacy = rolloverFixture({ includeTimezone: false })
+    await expect(
+      ensureCurrentStrengthWeekPlan(legacy, '2026-08-30T21:30:00.000Z'),
+    ).resolves.toBe(true)
+    const invalid = rolloverFixture({ timezone: 'Not/A_Timezone' })
+    await expect(
+      ensureCurrentStrengthWeekPlan(invalid, '2026-08-30T21:30:00.000Z'),
+    ).rejects.toThrow('INVALID_CALENDAR_TIME_ZONE')
+  })
+
+  it('tuottaa kahdella offline-laitteella samalle viikolle samat tunnisteet', async () => {
+    const deviceA = rolloverFixture()
+    const deviceB = rolloverFixture()
+    await ensureCurrentStrengthWeekPlan(deviceA, '2026-08-24T08:00:00.000Z')
+    await ensureCurrentStrengthWeekPlan(deviceB, '2026-08-24T12:00:00.000Z')
+    expect(deviceA.list('plan_versions').at(-1)?.id).toBe(
+      deviceB.list('plan_versions').at(-1)?.id,
+    )
+    expect(deviceA.list('training_plans').at(-1)?.id).toBe(
+      deviceB.list('training_plans').at(-1)?.id,
+    )
+    expect(
+      deviceA.list('training_plans').filter((record) => record.data.status === 'ACTIVE'),
+    ).toHaveLength(1)
+    expect(
+      deviceB.list('training_plans').filter((record) => record.data.status === 'ACTIVE'),
+    ).toHaveLength(1)
+  })
+
+  it('arkistoi edellisen viikon snapshotin ja luo nykyviikolle uuden version historiasta', async () => {
+    const goalId = '20000000-0000-4000-8000-000000000001'
+    const planId = '20000000-0000-4000-8000-000000000002'
+    const goalPeriodId = '20000000-0000-4000-8000-000000000003'
+    const oldVersionId = '20000000-0000-4000-8000-000000000004'
+    const data = mutableData([
+      storedRecord('profiles', '20000000-0000-4000-8000-000000000000', {
+        timezone: 'Europe/Helsinki',
+        app_settings: {
+          age: 35,
+          experience: 'INTERMEDIATE',
+          availableDays: [1, 2],
+          equipment: ['Kehonpaino', 'Käsipainot'],
+          minutesPerSession: 45,
+          physicalLoad: 'MODERATE',
+        },
+      }),
+      storedRecord('goal_profiles', goalId, {
+        primary_goal: 'MUSCLE_GAIN',
+        secondary_goals: [],
+        preferences: {
+          age: 35,
+          experience: 'INTERMEDIATE',
+          availableDays: [1, 2],
+          equipment: ['Kehonpaino', 'Käsipainot'],
+          minutesPerSession: 45,
+          physicalLoad: 'MODERATE',
+        },
+      }),
+      storedRecord('goal_periods', goalPeriodId, {
+        goal_profile_id: goalId,
+        starts_on: '2026-08-01',
+        status: 'ACTIVE',
+      }),
+      storedRecord('plan_versions', oldVersionId, {
+        goal_period_id: goalPeriodId,
+        previous_plan_version_id: null,
+        version_number: 1,
+        effective_from: '2026-08-17',
+        change_reason: 'WEEKLY_MATERIALIZATION',
+        snapshot: { immutableLegacyWeek: true },
+      }),
+      storedRecord('training_plans', planId, {
+        plan_version_id: oldVersionId,
+        status: 'ACTIVE',
+        plan: {
+          sessions: [],
+          strengthWeek: {
+            policyVersion: 'adult-strength-week-1.0.0',
+            weekAnchorDate: '2026-08-17',
+          },
+        },
+      }),
+    ])
+
+    await expect(
+      ensureCurrentStrengthWeekPlan(data, '2026-08-24T08:00:00.000Z'),
+    ).resolves.toBe(true)
+    expect(
+      data.list('training_plans').find((plan) => plan.id === planId)?.data.status,
+    ).toBe('ARCHIVED')
+    const replacement = data.list('training_plans').at(-1)
+    expect(replacement?.data).not.toHaveProperty('change_reason')
+    expect(replacement?.data.status).toBe('ACTIVE')
+    expect(
+      (replacement?.data.plan as JsonObject | undefined)?.strengthWeek,
+    ).toMatchObject({
+      policyVersion: 'adult-strength-week-1.0.0',
+      weekAnchorDate: '2026-08-24',
+    })
+    expect(data.list('plan_versions')).toHaveLength(2)
+    expect(data.list('plan_versions').at(-1)?.data).toMatchObject({
+      change_reason: 'WEEKLY_MATERIALIZATION',
+      snapshot: {
+        materialization: {
+          idempotencyKey: expect.stringContaining('weekly:'),
+          trainingPlanId: replacement?.id,
+        },
+      },
+    })
+    expect(data.list('plan_versions')[0]?.data.snapshot).toEqual({
+      immutableLegacyWeek: true,
+    })
+    await expect(
+      ensureCurrentStrengthWeekPlan(data, '2026-08-24T09:00:00.000Z'),
+    ).resolves.toBe(false)
+    expect(data.list('plan_versions')).toHaveLength(2)
+    expect(data.list('training_plans')).toHaveLength(2)
   })
 })

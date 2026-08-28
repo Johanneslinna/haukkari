@@ -1790,6 +1790,16 @@ legend {
   padding: 0.9rem 1rem;
   line-height: 1.5;
 }
+.status-banner-success {
+  border-color: #79a889;
+  background: color-mix(in srgb, #dcebd8 80%, var(--paper));
+  color: var(--forest-deep);
+}
+.status-banner-warning {
+  border-color: #d7a13c;
+  background: color-mix(in srgb, #fff0bd 80%, var(--paper));
+  color: #604b11;
+}
 .tag-list {
   display: flex;
   flex-wrap: wrap;

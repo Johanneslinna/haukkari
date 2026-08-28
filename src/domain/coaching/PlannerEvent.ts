@@ -1,4 +1,5 @@
 import type { PlannedSession, SessionIntensity } from './types'
+import { weekdayInTimeZone } from './LocalCalendarPolicy'
 
 export type PlannerEventKind =
   'ICE_PRACTICE' | 'MATCH' | 'TOURNAMENT' | 'OTHER_ACTIVITY' | 'PHYSICAL_LOAD' | 'ABSENCE'
@@ -20,16 +21,19 @@ export type PlannerEvent = {
   metadata: Record<string, string | number | boolean>
 }
 
-export function plannerEventWeekday(event: PlannerEvent) {
-  return new Date(event.startsAt).getDay() || 7
+export function plannerEventWeekday(event: PlannerEvent, calendarTimeZone: string) {
+  return weekdayInTimeZone(event.startsAt, calendarTimeZone)
 }
 
-export function plannerEventToSession(event: PlannerEvent): PlannedSession | null {
+export function plannerEventToSession(
+  event: PlannerEvent,
+  calendarTimeZone: string,
+): PlannedSession | null {
   if (event.kind === 'ABSENCE') return null
   const kind = event.kind === 'MATCH' || event.kind === 'TOURNAMENT' ? 'MATCH' : 'SPORT'
   return {
     id: `planner-${event.id}`,
-    day: plannerEventWeekday(event),
+    day: plannerEventWeekday(event, calendarTimeZone),
     kind,
     title: event.title,
     durationMinutes: event.durationMinutes,

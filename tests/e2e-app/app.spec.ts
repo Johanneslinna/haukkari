@@ -14,6 +14,10 @@ async function completeOnboarding(
     withStrengthSafetyContext?: boolean
     strengthProgressionScenario?: boolean
     returningStrengthDays?: number
+    availableDayCount?: number
+    minutesPerSession?: number
+    experience?: 'BEGINNER' | 'INTERMEDIATE' | 'ADVANCED'
+    equipmentPreset?: 'Ei välineitä' | 'Koti' | 'Kuntosali'
   } = {},
 ) {
   await page.goto('/')
@@ -28,10 +32,36 @@ async function completeOnboarding(
   const weekday = await page.evaluate(() => new Date().getDay() || 7)
   const labels = ['Ma', 'Ti', 'Ke', 'To', 'Pe', 'La', 'Su']
   for (const [index, label] of labels.entries()) {
-    await page.getByLabel(label, { exact: true }).setChecked(index + 1 === weekday)
+    await page
+      .getByLabel(label, { exact: true })
+      .setChecked(
+        options.availableDayCount === undefined
+          ? index + 1 === weekday
+          : index < options.availableDayCount,
+      )
+  }
+  if (options.experience) {
+    await page.getByLabel('Voimaharjoittelukokemus').selectOption(options.experience)
+  }
+  if (options.minutesPerSession) {
+    await page
+      .getByLabel('Oletusaika uusille harjoituspäiville (min)')
+      .fill(String(options.minutesPerSession))
+    for (const label of labels.slice(0, options.availableDayCount ?? 0)) {
+      await page
+        .getByLabel(`${label}: enimmäisaika (min)`)
+        .fill(String(options.minutesPerSession))
+    }
+  }
+  if (options.strengthProgressionScenario || options.equipmentPreset) {
+    await page
+      .getByRole('button', {
+        name: options.equipmentPreset ?? 'Koti',
+        exact: true,
+      })
+      .click()
   }
   if (options.strengthProgressionScenario) {
-    await page.getByRole('button', { name: 'Koti', exact: true }).click()
     await page.getByLabel('Mieluisat harjoitukset').fill('Maljakyykky')
   }
   if (options.returningStrengthDays !== undefined) {
@@ -63,6 +93,247 @@ async function completeOnboarding(
   await expect(page).toHaveURL(/\/$/u, { timeout: 30_000 })
   await expect(page.getByRole('heading', { name: /Aino/u })).toBeVisible()
 }
+
+async function expectStrengthWeekRoles(page: Page, roles: string[]) {
+  await page.goto('/viikko')
+  const sessions = page.locator('.session-block')
+  await expect(sessions).toHaveCount(roles.length)
+  for (const [index, role] of roles.entries()) {
+    await sessions.nth(index).click()
+    await expect(page.getByRole('heading', { name: role, exact: true })).toBeVisible()
+    await page.getByRole('link', { name: 'Takaisin viikkoon' }).click()
+  }
+}
+
+async function planningRecords(page: Page) {
+  return page.evaluate(
+    () =>
+      new Promise<
+        Array<{
+          id: string
+          table: string
+          data: Record<string, unknown>
+        }>
+      >((resolve, reject) => {
+        const request = indexedDB.open('treenikompassi')
+        request.onerror = () => reject(request.error)
+        request.onsuccess = () => {
+          const database = request.result
+          const transaction = database.transaction('records', 'readonly')
+          const records = transaction.objectStore('records').getAll()
+          records.onerror = () => reject(records.error)
+          records.onsuccess = () => {
+            resolve(
+              records.result
+                .filter(
+                  (record) =>
+                    record.table === 'plan_versions' ||
+                    record.table === 'training_plans' ||
+                    record.table === 'workout_logs',
+                )
+                .map((record) => ({
+                  id: record.id,
+                  table: record.table,
+                  data: record.data,
+                })),
+            )
+            database.close()
+          }
+        }
+      }),
+  )
+}
+
+test('10 minuutin voimaviikko käyttää oikeaa A/B-kiertoa', async ({ page }) => {
+  await completeOnboarding(page, {
+    strengthProgressionScenario: true,
+    availableDayCount: 2,
+    minutesPerSession: 10,
+    experience: 'INTERMEDIATE',
+    returningStrengthDays: 1,
+    equipmentPreset: 'Koti',
+  })
+  await expectStrengthWeekRoles(page, ['FULL BODY A', 'FULL BODY B'])
+})
+
+test('kolmen päivän voimaviikko näyttää koko kehon A/B/C-kierron', async ({ page }) => {
+  await completeOnboarding(page, {
+    strengthProgressionScenario: true,
+    availableDayCount: 3,
+    experience: 'INTERMEDIATE',
+    returningStrengthDays: 1,
+    equipmentPreset: 'Koti',
+  })
+  await expectStrengthWeekRoles(page, ['FULL BODY A', 'FULL BODY B', 'FULL BODY C'])
+})
+
+test('neljän päivän aktiivinen voimaviikko näyttää upper/lower-rakenteen', async ({
+  page,
+}) => {
+  await completeOnboarding(page, {
+    strengthProgressionScenario: true,
+    availableDayCount: 4,
+    experience: 'INTERMEDIATE',
+    returningStrengthDays: 1,
+    equipmentPreset: 'Koti',
+  })
+  await expectStrengthWeekRoles(page, ['UPPER A', 'LOWER A', 'UPPER B', 'LOWER B'])
+  await page.locator('.session-block').nth(3).click()
+  await expect(page.locator('.exercise-plan-list h3')).toHaveCount(3)
+})
+
+test('kolmen päivän 45 minuutin kuntosaliviikko on tuettu ja sisältää coren', async ({
+  page,
+}) => {
+  await completeOnboarding(page, {
+    strengthProgressionScenario: true,
+    availableDayCount: 3,
+    minutesPerSession: 45,
+    experience: 'INTERMEDIATE',
+    returningStrengthDays: 1,
+    equipmentPreset: 'Kuntosali',
+  })
+  await page.goto('/viikko')
+  await expect(page.getByText('Tuettu viikko')).toBeVisible()
+  await expect(page.getByText('Vielä kattamatta:')).toHaveCount(0)
+  const sessionLinks = page.locator('.session-block')
+  let coreFound = false
+  for (let index = 0; index < 3; index += 1) {
+    await sessionLinks.nth(index).click()
+    const category = await page.locator('.exercise-plan-list').textContent()
+    coreFound ||= /dead bug|bird dog|pallof|keskivartalo/iu.test(category ?? '')
+    await page.getByRole('link', { name: 'Takaisin viikkoon' }).click()
+  }
+  expect(coreFound).toBe(true)
+})
+
+test('yhden päivän voimaviikko näyttää osittaisen tilan ja toimintaohjeen', async ({
+  page,
+}) => {
+  await completeOnboarding(page, {
+    strengthProgressionScenario: true,
+    availableDayCount: 1,
+    minutesPerSession: 45,
+    equipmentPreset: 'Koti',
+  })
+  await page.goto('/viikko')
+  await expect(page.getByText('Osittainen viikko')).toBeVisible()
+  await expect(
+    page.getByText(/yhteen harjoituspäivään ei mahdu koko viikon tavoitealtistusta/iu),
+  ).toBeVisible()
+  await expect(page.getByText(/Lisää toinen harjoituspäivä/iu)).toBeVisible()
+})
+
+test('pelkkä kehonpaino näyttää vetoliikkeen välinerajan selkokielellä', async ({
+  page,
+}) => {
+  await completeOnboarding(page, {
+    availableDayCount: 2,
+    equipmentPreset: 'Ei välineitä',
+  })
+  await page.goto('/viikko')
+  await expect(page.getByText('Viikkoa ei voida muodostaa tuettuna')).toBeVisible()
+  await expect(page.getByText('Vetävä liikesuunta tarvitsee välineen.')).toBeVisible()
+  await expect(
+    page.getByText(
+      /Täysi kotivoimaohjelma tarvitsee vetoliikettä varten vähintään pitkän vastuskuminauhan/u,
+    ),
+  ).toBeVisible()
+  await page.getByRole('link', { name: 'Päivitä harjoitusvälineet' }).click()
+  await expect(page).toHaveURL(/\/asetukset#harjoitusvalineet$/u)
+  await expect(page.getByRole('heading', { name: 'Harjoitusvälineet' })).toBeVisible()
+})
+
+test('Helsingin sunnuntai–maanantai luo uuden viikon kerran ja säilyttää vanhan snapshotin', async ({
+  page,
+}) => {
+  await page.clock.install({ time: new Date('2026-08-30T20:30:00.000Z') })
+  await completeOnboarding(page, {
+    strengthProgressionScenario: true,
+    availableDayCount: 2,
+    minutesPerSession: 45,
+    equipmentPreset: 'Koti',
+  })
+  await expect(page.getByText('sunnuntai 30. elokuuta')).toBeVisible()
+  const before = await planningRecords(page)
+  const beforeVersions = before.filter((record) => record.table === 'plan_versions')
+  const beforePlans = before.filter((record) => record.table === 'training_plans')
+  const oldSnapshot = JSON.stringify(beforeVersions[0]?.data.snapshot)
+  const oldVersionId = beforeVersions[0]?.id
+  const workoutHistory = JSON.stringify(
+    before.filter((record) => record.table === 'workout_logs'),
+  )
+  expect(beforePlans.filter((record) => record.data.status === 'ACTIVE')).toHaveLength(1)
+
+  await page.clock.fastForward(60 * 60 * 1000)
+  await page.reload()
+  await expect(page.getByText('maanantai 31. elokuuta')).toBeVisible()
+  await expect
+    .poll(async () => {
+      const records = await planningRecords(page)
+      return records.filter((record) => record.table === 'plan_versions').length
+    })
+    .toBe(beforeVersions.length + 1)
+
+  const after = await planningRecords(page)
+  const afterVersions = after.filter((record) => record.table === 'plan_versions')
+  const afterPlans = after.filter((record) => record.table === 'training_plans')
+  const oldVersion = afterVersions.find((record) => record.id === oldVersionId)
+  const newVersion = afterVersions.find((record) => record.id !== oldVersionId)
+  expect(JSON.stringify(oldVersion?.data.snapshot)).toBe(oldSnapshot)
+  expect(newVersion?.data.previous_plan_version_id).toBe(oldVersionId)
+  expect(newVersion?.data.effective_from).toBe('2026-08-31')
+  expect(newVersion?.data.change_reason).toBe('WEEKLY_MATERIALIZATION')
+  expect(afterPlans.filter((record) => record.data.status === 'ACTIVE')).toHaveLength(1)
+  expect(JSON.stringify(after.filter((record) => record.table === 'workout_logs'))).toBe(
+    workoutHistory,
+  )
+
+  await page.reload()
+  await expect
+    .poll(async () => {
+      const records = await planningRecords(page)
+      return records.filter((record) => record.table === 'plan_versions').length
+    })
+    .toBe(beforeVersions.length + 1)
+})
+
+test('viikkonäkymän blueprint säilyy suoritukseen ja toteuma päivittää viikon uudelleenlatauksessa', async ({
+  page,
+}) => {
+  await page.clock.install({ time: new Date('2026-08-24T08:00:00.000Z') })
+  await completeOnboarding(page, {
+    strengthProgressionScenario: true,
+    availableDayCount: 4,
+    experience: 'INTERMEDIATE',
+    returningStrengthDays: 1,
+    equipmentPreset: 'Koti',
+    withStrengthSafetyContext: true,
+  })
+  const weekday = await page.evaluate(() => new Date().getDay() || 7)
+  await page.goto('/viikko')
+  await page
+    .locator('.week-day')
+    .nth(weekday - 1)
+    .locator('.session-block')
+    .click()
+  await expect(page.locator('.exercise-plan-list h3').first()).toBeVisible()
+  const previewExercises = await page.locator('.exercise-plan-list h3').allTextContents()
+  expect(previewExercises.length).toBeGreaterThan(0)
+  await page.getByRole('link', { name: /^(?:Nyt|Tänään)$/u }).click()
+  await page.getByRole('link', { name: 'Aloita treeni' }).click()
+  await page.getByRole('button', { name: 'Ei mitään poikkeavaa' }).click()
+  await page.getByRole('link', { name: 'Avaa päivän harjoitus' }).click()
+  await expect(page.locator('.exercise-plan-list h3')).toHaveText(previewExercises)
+  await completeCompactStrengthWorkout(page, 10, 20)
+  await page.goto('/viikko')
+  await expect(page.getByText(/Toteutunut \d+(?:[.,]\d+)? · suunniteltu/u)).toBeVisible()
+  const summary = await page
+    .getByText(/Toteutunut \d+(?:[.,]\d+)? · suunniteltu/u)
+    .textContent()
+  await page.reload()
+  await expect(page.getByText(summary!)).toBeVisible()
+})
 
 test('tauolta paluun päätös näkyy oikeassa käyttäjäpolussa ja säilyy latauksessa', async ({
   page,
@@ -96,10 +367,27 @@ function repetitionsFromDose(value: string, useMaximum: boolean) {
 
 async function verifyProgressionSurvivesReload(
   page: Page,
+  exerciseName: string,
   guidance: RegExp,
   expectedRepetitions: string,
   expectedLoad: string,
 ) {
+  const openExercise = async () => {
+    for (let index = 0; index < 10; index += 1) {
+      if (
+        await page
+          .locator('.active-exercise-card h2')
+          .filter({ hasText: exerciseName })
+          .isVisible()
+      ) {
+        return
+      }
+      await page.getByRole('button', { name: 'Seuraava liike' }).click()
+    }
+    throw new Error(`Aktiivista liikettä ei löytynyt: ${exerciseName}`)
+  }
+
+  await openExercise()
   await expect(page.getByText(guidance)).toBeVisible()
   const firstRow = page.locator('.active-exercise-card .set-row').first()
   await expect(firstRow.getByLabel('Toistot')).toHaveValue(expectedRepetitions)
@@ -110,6 +398,7 @@ async function verifyProgressionSurvivesReload(
       .locator('input'),
   ).toHaveValue(expectedLoad)
   await page.reload()
+  await openExercise()
   await expect(page.getByText(guidance)).toBeVisible()
   await expect(
     page.locator('.active-exercise-card .set-row').first().getByLabel('Toistot'),
@@ -126,12 +415,17 @@ async function verifyProgressionSurvivesReload(
 
 async function completeCompactStrengthWorkout(
   page: Page,
-  gobletRepetitions: number,
-  gobletLoadKg: number,
+  targetRepetitions: number,
+  targetLoadKg: number,
+  options: {
+    minutes?: 10 | 20 | 30
+    exerciseName?: string
+  } = {},
 ) {
+  const exerciseNameTarget = options.exerciseName ?? 'Maljakyykky'
   await page
     .locator('.choice-card')
-    .filter({ hasText: '10 min' })
+    .filter({ hasText: `${options.minutes ?? 10} min` })
     .getByRole('radio')
     .check()
   await page.getByRole('button', { name: 'Aloita harjoitus' }).click()
@@ -144,13 +438,13 @@ async function completeCompactStrengthWorkout(
       const repetitions = row.getByLabel('Toistot')
       if (await repetitions.count()) {
         await repetitions.fill(
-          exerciseName === 'Maljakyykky' ? String(gobletRepetitions) : '8',
+          exerciseName === exerciseNameTarget ? String(targetRepetitions) : '8',
         )
       }
       const rir = row.getByLabel('RIR (toistoa varastossa)')
       if (await rir.count()) await rir.fill('3')
-      if (exerciseName === 'Maljakyykky') {
-        await row.getByLabel('Kuorma kg / käsipaino').fill(String(gobletLoadKg))
+      if (exerciseName === exerciseNameTarget) {
+        await row.getByLabel('Kuorma kg / käsipaino').fill(String(targetLoadKg))
       }
       await completeSetSafely(row)
     }
@@ -162,7 +456,7 @@ async function completeCompactStrengthWorkout(
   await page.getByRole('button', { name: 'Siirry palautteeseen' }).click()
   await expect(page.getByLabel('Toteuma')).toHaveValue('COMPLETED')
   await page.getByRole('button', { name: 'Tallenna harjoitus ja palaute' }).click()
-  await expect(page).toHaveURL(/\/historia\/[0-9a-f-]+$/u)
+  await expect(page).toHaveURL(/\/historia\/[0-9a-f-]+$/u, { timeout: 20_000 })
 }
 
 test('ydinpolku toimii pienillä mobiileilla ja työpöydällä', async ({
@@ -217,7 +511,10 @@ test('käynnissä oleva harjoitus säilyy offline-latauksessa', async ({
     testInfo.project.name !== 'android-small',
     'Offline-polku ajetaan Chromium-mobiililla.',
   )
-  await completeOnboarding(page, { withStrengthSafetyContext: true })
+  await completeOnboarding(page, {
+    withStrengthSafetyContext: true,
+    equipmentPreset: 'Koti',
+  })
   await page.getByRole('link', { name: 'Vko', exact: true }).click()
   const weekday = await page.evaluate(() => new Date().getDay() || 7)
   await expect(
@@ -257,7 +554,10 @@ test('kartoituksesta syntynyt harjoitus voidaan suorittaa ja avata palautteineen
     testInfo.project.name !== 'android-small',
     'Koko aktiivisen harjoituksen polku ajetaan kerran Chromium-mobiililla.',
   )
-  await completeOnboarding(page, { withStrengthSafetyContext: true })
+  await completeOnboarding(page, {
+    withStrengthSafetyContext: true,
+    equipmentPreset: 'Koti',
+  })
   await page.getByRole('link', { name: 'Aloita treeni' }).click()
   await expect(
     page.getByRole('heading', { name: 'Onko jokin tänään poikkeavaa?' }),
@@ -322,31 +622,52 @@ test('tallennetut voimaharjoituskerrat ohjaavat seuraavan käyttäjänäkymän p
   page,
 }) => {
   test.setTimeout(180_000)
+  await page.clock.install({ time: new Date('2026-08-24T08:00:00.000Z') })
   await completeOnboarding(page, {
     withStrengthSafetyContext: true,
     strengthProgressionScenario: true,
+    availableDayCount: 2,
   })
-  await page.getByRole('link', { name: 'Aloita treeni' }).click()
-  await page.getByRole('button', { name: 'Ei mitään poikkeavaa' }).click()
-  await page.getByRole('link', { name: 'Avaa päivän harjoitus' }).click()
-  await expect(page.getByRole('heading', { name: 'Maljakyykky' })).toBeVisible()
+
+  const openTodayWorkout = async () => {
+    await page.goto('/')
+    const start = page.getByRole('link', { name: 'Aloita treeni' })
+    await expect(start).toBeVisible({ timeout: 15_000 })
+    await start.click()
+    if (/\/kuntotarkistus$/u.test(page.url())) {
+      await page.getByRole('button', { name: 'Ei mitään poikkeavaa' }).click()
+      await page.getByRole('link', { name: 'Avaa päivän harjoitus' }).click()
+    }
+  }
+  const advanceToNextTrainingDay = async (days: number) => {
+    await page.clock.fastForward(days * 86_400_000)
+    await openTodayWorkout()
+  }
+
+  await openTodayWorkout()
+  await expect(page.getByRole('heading', { name: 'Yhden käden soutu' })).toBeVisible()
   const firstDose = await page
     .locator('.exercise-plan-list li')
-    .filter({ hasText: 'Maljakyykky' })
+    .filter({ hasText: 'Yhden käden soutu' })
     .locator('.exercise-dose strong')
     .textContent()
   const maximumRepetitions = repetitionsFromDose(firstDose ?? '', true)
-  await completeCompactStrengthWorkout(page, maximumRepetitions, 5)
-  await page.goto('/harjoitus')
-  await expect(page.getByText('Seuraava askel: säilytä nykyinen kuorma.')).toBeVisible()
-  await completeCompactStrengthWorkout(page, maximumRepetitions, 5)
+  await completeCompactStrengthWorkout(page, maximumRepetitions, 5, {
+    minutes: 20,
+    exerciseName: 'Yhden käden soutu',
+  })
+  await advanceToNextTrainingDay(1)
+  await completeCompactStrengthWorkout(page, maximumRepetitions, 5, {
+    minutes: 20,
+    exerciseName: 'Yhden käden soutu',
+  })
 
-  await page.goto('/harjoitus')
+  await advanceToNextTrainingDay(6)
   await expect(
     page.getByText('Vahvista seuraava käytettävissä oleva kuorma'),
   ).toBeVisible()
   await expect(page.getByText('Nykyinen kuorma: 5 kg')).toBeVisible()
-  const nextLoad = page.getByLabel('Seuraava kuorma liikkeelle Maljakyykky')
+  const nextLoad = page.getByLabel('Seuraava kuorma liikkeelle Yhden käden soutu')
   await nextLoad.fill('6')
   await page.getByRole('button', { name: 'Vahvista kuorma' }).click()
   await expect(
@@ -356,17 +677,22 @@ test('tallennetut voimaharjoituskerrat ohjaavat seuraavan käyttäjänäkymän p
     page.getByText(/Seuraava askel: säilytä kuorma ja vahvista pienin/u),
   ).toBeVisible()
 
-  await completeCompactStrengthWorkout(page, maximumRepetitions, 20)
-  await page.goto('/harjoitus')
-  await expect(page.getByText('Seuraava askel: säilytä nykyinen kuorma.')).toBeVisible()
-  await completeCompactStrengthWorkout(page, maximumRepetitions, 20)
+  await completeCompactStrengthWorkout(page, maximumRepetitions, 20, {
+    minutes: 20,
+    exerciseName: 'Yhden käden soutu',
+  })
+  await advanceToNextTrainingDay(1)
+  await completeCompactStrengthWorkout(page, maximumRepetitions, 20, {
+    minutes: 20,
+    exerciseName: 'Yhden käden soutu',
+  })
 
-  await page.goto('/harjoitus')
+  await advanceToNextTrainingDay(6)
   await expect(
     page.getByText('Vahvista seuraava käytettävissä oleva kuorma'),
   ).toBeVisible()
   await expect(page.getByText('Nykyinen kuorma: 20 kg')).toBeVisible()
-  const validNextLoad = page.getByLabel('Seuraava kuorma liikkeelle Maljakyykky')
+  const validNextLoad = page.getByLabel('Seuraava kuorma liikkeelle Yhden käden soutu')
   await validNextLoad.fill('21')
   await page.getByRole('button', { name: 'Vahvista kuorma' }).click()
   await expect(
@@ -378,6 +704,7 @@ test('tallennetut voimaharjoituskerrat ohjaavat seuraavan käyttäjänäkymän p
   await page.getByRole('button', { name: 'Aloita harjoitus' }).click()
   await verifyProgressionSurvivesReload(
     page,
+    'Yhden käden soutu',
     /Seuraava askel: nosta kuorma vahvistettuun seuraavaan portaaseen \(21 kg\)\./u,
     String(maximumRepetitions),
     '21',
@@ -391,7 +718,10 @@ test('voimakas kipu keskeyttää harjoituksen ja estää progression', async ({
     testInfo.project.name !== 'android-small',
     'Oirepolku ajetaan kerran Chromium-mobiililla.',
   )
-  await completeOnboarding(page, { withStrengthSafetyContext: true })
+  await completeOnboarding(page, {
+    withStrengthSafetyContext: true,
+    equipmentPreset: 'Koti',
+  })
   await page.getByRole('link', { name: 'Aloita treeni' }).click()
   await page.getByRole('button', { name: 'Ei mitään poikkeavaa' }).click()
   await page.getByRole('link', { name: 'Avaa päivän harjoitus' }).click()

@@ -1380,7 +1380,29 @@ export type Database = {
       [_ in never]: never
     }
     Functions: {
+      assert_weekly_materialization_preconditions: {
+        Args: never
+        Returns: undefined
+      }
       dispatch_push_reminders: { Args: never; Returns: number }
+      materialize_weekly_training_plan: {
+        Args: {
+          p_calendar_policy_version: string
+          p_goal_period_id: string
+          p_idempotency_key: string
+          p_plan: Json
+          p_plan_version_id: string
+          p_snapshot: Json
+          p_strength_week_policy_version: string
+          p_training_plan_id: string
+          p_week_anchor_date: string
+        }
+        Returns: {
+          plan_version: Json
+          reason_code: string
+          training_plan: Json
+        }[]
+      }
     }
     Enums: {
       goal_type:

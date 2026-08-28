@@ -15,6 +15,7 @@ export {
   nextAutomaticLoadKg,
   prescribeAdultResistanceSession,
   prescribeResistanceDose,
+  refreshAdultResistanceProgression,
   scoreExerciseCandidates,
 } from './AdultResistanceEngine'
 export type {
@@ -105,10 +106,40 @@ export {
   SECONDARY_MUSCLE_SET_WEIGHT,
   STRENGTH_VOLUME_POLICY_VERSION,
   addPlannedSets,
+  calculatePlannedMuscleVolume,
   calculateRollingMuscleVolume,
+  mergeMuscleVolume,
   maximumAdditionalSets,
 } from './StrengthVolumePolicy'
 export type { MuscleVolume, VersionedStrengthSet } from './StrengthVolumePolicy'
+export {
+  LEGACY_CALENDAR_TIME_ZONE,
+  LOCAL_CALENDAR_POLICY_VERSION,
+  createLocalCalendarContext,
+  instantForLocalDateTime,
+  localCalendarDate,
+  mondayWeekAnchor,
+  validateCalendarTimeZone,
+  weekdayForLocalDate,
+  weekdayInTimeZone,
+} from './LocalCalendarPolicy'
+export type { LocalCalendarContext } from './LocalCalendarPolicy'
+export {
+  STRENGTH_WEEK_POLICY_VERSION,
+  STRENGTH_WEEK_REASON_CODES,
+  createStrengthWeekBlueprint,
+  finalizeStrengthWeekPlan,
+  initialStrengthWeekMaterializationState,
+  maximumWeeklySetProgression,
+  materializeStrengthWeekSession,
+  movementPatternsForRole,
+  strengthGoalRange,
+} from './StrengthWeekPolicy'
+export type {
+  StrengthWeekBlueprint,
+  StrengthWeekGoalRange,
+  StrengthWeekMaterializationState,
+} from './StrengthWeekPolicy'
 export {
   ADULT_STRENGTH_TIME_POLICY,
   ADULT_STRENGTH_TIME_POLICY_VERSION,

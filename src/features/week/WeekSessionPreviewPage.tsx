@@ -2,7 +2,12 @@ import { Link, useParams } from 'react-router-dom'
 import { doseLabelFi } from '../../domain/coaching'
 import { useAppData } from '../app-data/appDataContextValue'
 import { activeTrainingPlan } from '../coaching/coachingActions'
-import { planSessions, sessionLabels } from '../coaching/coachingData'
+import {
+  calendarContextForProfile,
+  planSessions,
+  planStrengthWeek,
+  sessionLabels,
+} from '../coaching/coachingData'
 
 const weekdays = [
   'Maanantai',
@@ -31,9 +36,10 @@ const variantLabels = {
 export function WeekSessionPreviewPage() {
   const data = useAppData()
   const { sessionId = '' } = useParams()
-  const session = planSessions(activeTrainingPlan(data)).find(
-    (candidate) => candidate.id === sessionId,
-  )
+  const clock = calendarContextForProfile(data.latest('profiles'))
+  const activePlan = activeTrainingPlan(data)
+  const weekDecision = planStrengthWeek(activePlan)
+  const session = planSessions(activePlan).find((candidate) => candidate.id === sessionId)
 
   if (!session) {
     return (
@@ -53,8 +59,9 @@ export function WeekSessionPreviewPage() {
   }
 
   const prescription = session.prescriptionDetail
+  const strengthWeek = session.strengthWeekContext
   const title = session.title ?? sessionLabels[session.kind]
-  const isToday = session.day === (new Date().getDay() || 7)
+  const isToday = session.day === clock.weekday
 
   return (
     <div className="page-stack workout-page week-session-preview">
@@ -76,6 +83,52 @@ export function WeekSessionPreviewPage() {
         <strong>Tämä on ennakkonäkymä.</strong> Ohjelman katsominen ei käynnistä
         harjoitusta eikä merkitse sitä suoritetuksi.
       </div>
+
+      {weekDecision && (
+        <section
+          className={`status-banner ${
+            weekDecision.status === 'SUPPORTED'
+              ? 'status-banner-success'
+              : 'status-banner-warning'
+          }`}
+          aria-label="Voimaviikon tukitila"
+        >
+          <strong>
+            {weekDecision.status === 'SUPPORTED'
+              ? 'Viikko on tuettu.'
+              : weekDecision.status === 'PARTIAL'
+                ? 'Viikko on osittainen.'
+                : 'Viikkoa ei voida muodostaa tuettuna.'}
+          </strong>
+          <p>{weekDecision.supportDecision?.messageFi}</p>
+          <p>
+            <strong>Seuraava askel:</strong> {weekDecision.supportDecision?.actionFi}
+          </p>
+          {weekDecision.supportDecision?.reasonCode ===
+            'PULL_PATTERN_EQUIPMENT_REQUIRED' && (
+            <Link className="button button-secondary" to="/asetukset#harjoitusvalineet">
+              Päivitä harjoitusvälineet
+            </Link>
+          )}
+        </section>
+      )}
+
+      {strengthWeek && (
+        <section className="surface-card">
+          <p className="eyebrow">
+            Voimaviikon harjoitus {strengthWeek.sequenceIndex + 1}
+          </p>
+          <h2>{strengthWeek.role.replaceAll('_', ' ')}</h2>
+          <p>
+            Tämä sama versionoitu harjoitusrunko avautuu suoritukseen. Päivän
+            kuntotarkistus voi vain keventää, lyhentää tai estää sen ja kertoo silloin
+            muutoksen syyn.
+          </p>
+          {session.notes?.map((note) => (
+            <p key={note}>{note}</p>
+          ))}
+        </section>
+      )}
 
       {session.variants && session.variants.length > 0 && (
         <section className="surface-card">
@@ -149,6 +202,14 @@ export function WeekSessionPreviewPage() {
               <p>{prescription.progression}</p>
             </details>
           </>
+        ) : session.unsupportedPrescription ? (
+          <div className="page-stack compact-stack status-banner status-banner-warning">
+            <strong>Harjoitusta ei voitu muodostaa turvallisesti.</strong>
+            <p>{session.unsupportedPrescription.userMessage}</p>
+            <small>
+              Syy: {session.unsupportedPrescription.reasonCode.replaceAll('_', ' ')}
+            </small>
+          </div>
         ) : (
           <div className="page-stack compact-stack">
             <p>

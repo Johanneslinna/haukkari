@@ -432,6 +432,9 @@ describe('return policy in the production prescription route', () => {
 
   it('kuljettaa versionoidun paluupäätöksen PlanGeneratorin oikeaan suunnitelmasnapshotiin', () => {
     const plan = generatePlan({
+      weekAnchorDate: '2026-08-24',
+      calendarTimeZone: 'Europe/Helsinki',
+      localDate: '2026-08-25',
       goal: { primary: 'MUSCLE_GAIN', secondary: [], inputs: {} },
       experience: 'INTERMEDIATE',
       availableDays: [1, 3, 5],

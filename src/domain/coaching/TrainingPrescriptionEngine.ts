@@ -11,6 +11,7 @@ import type {
   ConfirmedLimitationTag,
   PrescriptionDose,
   VerifiedNextLoad,
+  StrengthWeekSessionRole,
 } from './types'
 import {
   doseDurationSeconds,
@@ -75,6 +76,7 @@ export type PrescriptionProfile = {
   /** Käyttäjän vahvistamat kuormakohtaiset seuraavat vaihtoehdot. */
   verifiedNextLoads?: VerifiedNextLoad[]
   strengthTrainingBackground?: StrengthTrainingBackground
+  strengthWeekRole?: StrengthWeekSessionRole
   contentReleaseId?: string
   ruleVersion?: string
 }
@@ -275,6 +277,7 @@ function prescribeStrength(
       supervisionAvailable: profile.supervisionAvailable ?? false,
       verifiedNextLoads: profile.verifiedNextLoads,
       strengthTrainingBackground: profile.strengthTrainingBackground,
+      strengthWeekRole: profile.strengthWeekRole,
     },
     history: profile.strengthHistory,
   })
@@ -923,9 +926,28 @@ export function adaptPrescription(
             message: 'Päivän valmius sallii suunnitellun version.',
             evidenceIds: ['APP-READINESS-RULE'],
           }
-    const exercises = prescriptionBlocks(normalized).map((exercise) =>
-      light ? lightenStrengthExercise(exercise) : { ...exercise },
+    const normalizedExercises = prescriptionBlocks(normalized)
+    const compactKeyExerciseIds = new Set(
+      normalizedExercises
+        .filter((exercise) => exercise.keyExercise)
+        .slice(0, 2)
+        .map((exercise) => exercise.id),
     )
+    if (compact && compactKeyExerciseIds.size < Math.min(2, normalizedExercises.length)) {
+      for (const exercise of normalizedExercises) {
+        compactKeyExerciseIds.add(exercise.id)
+        if (compactKeyExerciseIds.size === Math.min(2, normalizedExercises.length)) break
+      }
+    }
+    const exercises = normalizedExercises.map((exercise) => {
+      const adaptedExercise = light ? lightenStrengthExercise(exercise) : { ...exercise }
+      return compact
+        ? {
+            ...adaptedExercise,
+            keyExercise: compactKeyExerciseIds.has(exercise.id),
+          }
+        : adaptedExercise
+    })
     const candidate: PrescribedSession = {
       ...normalized,
       title: compact

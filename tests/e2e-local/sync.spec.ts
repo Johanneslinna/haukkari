@@ -16,6 +16,10 @@ const userClient = createClient(apiUrl, anonKey, {
 })
 
 let userId = ''
+const goalProfileId = randomUUID()
+const goalPeriodId = randomUUID()
+let weeklyPlanVersionId = ''
+let weeklyTrainingPlanId = ''
 
 async function signIn(page: Page) {
   await page.goto('/kirjaudu')
@@ -49,6 +53,20 @@ test.beforeAll(async () => {
   if (prepared.error) throw new Error(prepared.error.message)
   const signedIn = await userClient.auth.signInWithPassword({ email, password })
   if (signedIn.error) throw new Error(signedIn.error.message)
+  const goalProfile = await userClient.from('goal_profiles').insert({
+    id: goalProfileId,
+    user_id: userId,
+    primary_goal: 'MAX_STRENGTH',
+  })
+  if (goalProfile.error) throw new Error(goalProfile.error.message)
+  const goalPeriod = await userClient.from('goal_periods').insert({
+    id: goalPeriodId,
+    user_id: userId,
+    goal_profile_id: goalProfileId,
+    starts_on: '2026-08-24',
+    status: 'ACTIVE',
+  })
+  if (goalPeriod.error) throw new Error(goalPeriod.error.message)
 })
 
 test.afterAll(async () => {
@@ -66,6 +84,78 @@ test('offline-uudelleenkäynnistys, kaksi selainkontekstia, konflikti ja tombsto
   try {
     await signIn(pageA)
     await signIn(pageB)
+    await contextA.setOffline(true)
+    await contextB.setOffline(true)
+    const weeklyInput = {
+      goalPeriodId,
+      weekAnchorDate: '2026-08-24',
+    }
+    const deviceAIds = await pageA.evaluate(
+      ({ id, input }) =>
+        window.__treenikompassiSyncTest!.createWeeklyMaterialization(id, input),
+      { id: userId, input: { ...weeklyInput, writer: 'device-a' } },
+    )
+    const deviceBIds = await pageB.evaluate(
+      ({ id, input }) =>
+        window.__treenikompassiSyncTest!.createWeeklyMaterialization(id, input),
+      { id: userId, input: { ...weeklyInput, writer: 'device-b' } },
+    )
+    expect(deviceBIds).toEqual(deviceAIds)
+    weeklyPlanVersionId = deviceAIds.planVersionId
+    weeklyTrainingPlanId = deviceAIds.trainingPlanId
+    await Promise.all([contextA.setOffline(false), contextB.setOffline(false)])
+    await Promise.all([
+      pageA.getByRole('button', { name: 'Synkronoi nyt' }).click(),
+      pageB.getByRole('button', { name: 'Synkronoi nyt' }).click(),
+    ])
+    await Promise.all([
+      expect(pageA.getByRole('heading', { name: 'Synkronoitu' })).toBeVisible(),
+      expect(pageB.getByRole('heading', { name: 'Synkronoitu' })).toBeVisible(),
+    ])
+    await expect(pageB.getByRole('link', { name: /Ratkaise ristiriidat/u })).toHaveCount(
+      0,
+    )
+    const remoteVersions = await userClient
+      .from('plan_versions')
+      .select('id')
+      .eq('goal_period_id', goalPeriodId)
+      .eq('change_reason', 'WEEKLY_MATERIALIZATION')
+    expect(remoteVersions.error).toBeNull()
+    expect(remoteVersions.data).toEqual([{ id: weeklyPlanVersionId }])
+    const remotePlans = await userClient
+      .from('training_plans')
+      .select('id,status,plan')
+      .eq('plan_version_id', weeklyPlanVersionId)
+    expect(remotePlans.error).toBeNull()
+    expect(remotePlans.data).toHaveLength(1)
+    expect(remotePlans.data?.[0]).toMatchObject({
+      id: weeklyTrainingPlanId,
+      status: 'ACTIVE',
+    })
+    const canonicalWriter = remotePlans.data?.[0]?.plan.writer
+    expect(['device-a', 'device-b']).toContain(canonicalWriter)
+    for (const page of [pageA, pageB]) {
+      await expect
+        .poll(() =>
+          page.evaluate(
+            ({ id, versionId, planId }) =>
+              window.__treenikompassiSyncTest!.getWeeklyMaterialization(
+                id,
+                versionId,
+                planId,
+              ),
+            { id: userId, versionId: weeklyPlanVersionId, planId: weeklyTrainingPlanId },
+          ),
+        )
+        .toMatchObject({
+          version: { id: weeklyPlanVersionId },
+          plan: {
+            id: weeklyTrainingPlanId,
+            data: { status: 'ACTIVE', plan: { writer: canonicalWriter } },
+          },
+        })
+    }
+
     await pageA.evaluate(() => navigator.serviceWorker.ready)
     await pageA.goto('/')
     await pageA.reload()

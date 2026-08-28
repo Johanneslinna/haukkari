@@ -11,6 +11,7 @@ test('Tänään-näkymän responsiiviset koot ja keskeiset tilat', async ({
     testInfo.project.name !== 'desktop-keyboard',
     'Visuaaliset kuvat tuotetaan kerran Chromiumilla.',
   )
+  await page.clock.install({ time: new Date('2026-08-27T08:00:00.000Z') })
   await mkdir(outputDirectory, { recursive: true })
   await page.addInitScript(() => {
     localStorage.setItem('treenikompassi.theme', 'LIGHT')
@@ -96,6 +97,7 @@ test('Tänään-näkymän responsiiviset koot ja keskeiset tilat', async ({
 
   for (const state of states) {
     await page.goto(`/?today-state=${state.query}`)
+    await expect(page.locator('.today-page')).toBeVisible()
     if (state.query === 'red-stop') {
       await expect(page.getByText('Harjoittelua ei suositella')).toBeVisible()
       await expect(page.getByRole('link', { name: 'Aloita treeni' })).toHaveCount(0)

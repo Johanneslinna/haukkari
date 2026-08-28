@@ -11,6 +11,7 @@ import {
   legacyDose,
   normalizePrescriptionV2,
   resolvePrescription,
+  refreshAdultResistanceProgression,
   refreshStrengthPrescriptionTimeEstimate,
   strengthTrainingBackgroundFrom,
   verifiedNextLoadsFrom,
@@ -24,6 +25,7 @@ import {
   type WorkoutVariant,
   type SetPainResponse,
 } from '../../domain/coaching'
+import { localCalendarDate } from '../../domain/coaching/LocalCalendarPolicy'
 import type { LocalRecord } from '../../domain/sync/types'
 import { useAppData } from '../app-data/appDataContextValue'
 import {
@@ -37,12 +39,12 @@ import {
 } from '../coaching/coachingActions'
 import {
   objectValue,
+  calendarContextForProfile,
   numberValue,
   planSessions,
   readinessLabels,
   sessionLabels,
   stringValue,
-  todayIso,
 } from '../coaching/coachingData'
 import { canResumeWorkout, isLockedSafetyOutcome } from './WorkoutSafetyState'
 import {
@@ -104,6 +106,11 @@ function doseUnitLabel(exercise: ExercisePrescription, count: number) {
   return `Sarja ${count}`
 }
 
+function repetitionRangeMaximum(exercise: ExercisePrescription) {
+  const values = exercise.repetitions?.match(/\d+/gu)?.map(Number) ?? []
+  return values.length > 0 ? Math.max(...values) : null
+}
+
 function createSetRows(
   prescription: PrescribedSession | null,
   persistedSets: LocalRecord[] = [],
@@ -150,7 +157,9 @@ function createSetRows(
         exercise.progressionDecision?.action === 'INCREASE_REPETITIONS' &&
         exercise.progressionDecision.nextRepetitions !== undefined
           ? exercise.progressionDecision.nextRepetitions
-          : repetitions
+          : !persisted && exercise.progressionDecision?.action === 'INCREASE_LOAD'
+            ? repetitionRangeMaximum(exercise)
+            : repetitions
       const rir =
         typeof persisted?.data.rir === 'number'
           ? persisted.data.rir
@@ -259,14 +268,15 @@ export function WorkoutPage() {
   const data = useAppData()
   const navigate = useNavigate()
   const [searchParams] = useSearchParams()
-  const weekday = new Date().getDay() || 7
+  const currentProfile = data.latest('profiles')
+  const clock = calendarContextForProfile(currentProfile)
+  const weekday = clock.weekday
   const session = planSessions(activeTrainingPlan(data)).find(
     (item) => item.day === weekday,
   )
   const todayCheckIn = data
     .list('daily_checkins')
-    .find((record) => record.data.checkin_date === todayIso())
-  const currentProfile = data.latest('profiles')
+    .find((record) => record.data.checkin_date === clock.localDate)
   const profileSettings = objectValue(currentProfile?.data.app_settings)
   const onboardingScreening = data.latest('health_screenings')
   const screeningAnswers = objectValue(onboardingScreening?.data.answers)
@@ -277,12 +287,17 @@ export function WorkoutPage() {
     profile: currentProfile,
     screening: onboardingScreening,
     readiness: todayCheckIn?.data.readiness,
+    today: clock.localDate,
   })
   const persistedWorkout = data
     .list('workouts')
     .find(
       (record) =>
-        stringValue(record.data.scheduled_for).slice(0, 10) === todayIso() &&
+        Boolean(stringValue(record.data.scheduled_for)) &&
+        localCalendarDate(
+          stringValue(record.data.scheduled_for),
+          clock.calendarTimeZone,
+        ) === clock.localDate &&
         record.data.status === 'PLANNED',
     )
   const [activeWorkout, setActiveWorkout] = useState<LocalRecord | null>(
@@ -338,12 +353,11 @@ export function WorkoutPage() {
   const prescriptionResolution: PrescriptionResult | null = (() => {
     if (!session) return null
     if (session.unsupportedPrescription) return session.unsupportedPrescription
-    if (
-      session.prescriptionDetail &&
-      effectiveSessionKind === session.kind &&
-      session.kind !== 'STRENGTH'
-    ) {
-      return { status: 'SUPPORTED', prescription: session.prescriptionDetail }
+    if (session.prescriptionDetail && effectiveSessionKind === session.kind) {
+      return {
+        status: 'SUPPORTED',
+        prescription: session.prescriptionDetail,
+      }
     }
     const goalRecord = activeGoalRecord(data)
     const preferences = objectValue(goalRecord?.data.preferences)
@@ -416,6 +430,7 @@ export function WorkoutPage() {
           profile: currentProfile,
           screening: onboardingScreening,
           readiness: todayCheckIn?.data.readiness,
+          today: clock.localDate,
         })
         if (adapted.status !== 'SUPPORTED') return []
         return [
@@ -463,11 +478,20 @@ export function WorkoutPage() {
       readiness: priorResponseRequiresRecovery
         ? 'ORANGE_RECOVERY'
         : todayCheckIn?.data.readiness,
+      today: clock.localDate,
     })
   })()
   const previewPrescription =
     previewAdaptation?.status === 'SUPPORTED'
-      ? applyWorkoutProgression(previewAdaptation.prescription, feedbackDecision)
+      ? applyWorkoutProgression(
+          refreshAdultResistanceProgression({
+            prescription: previewAdaptation.prescription,
+            history: strengthHistoryFromLogs(workoutLogs),
+            verifiedNextLoads: verifiedNextLoadsFrom(profileSettings.verifiedNextLoads),
+            generatedAt: new Date().toISOString(),
+          }),
+          feedbackDecision,
+        )
       : null
   const storedResumedPrescription = savedPrescription(persistedWorkout ?? null)
   const resumedAuthorization = storedResumedPrescription
@@ -476,6 +500,7 @@ export function WorkoutPage() {
         profile: currentProfile,
         screening: onboardingScreening,
         readiness: todayCheckIn?.data.readiness,
+        today: clock.localDate,
       })
     : null
   const resumedPrescription =
@@ -538,6 +563,7 @@ export function WorkoutPage() {
         profile: currentProfile,
         screening: onboardingScreening,
         readiness: todayCheckIn?.data.readiness,
+        today: clock.localDate,
       })
     : null
   const unsupportedPrescription =
@@ -1258,6 +1284,21 @@ export function WorkoutPage() {
       </header>
 
       <StrengthReturnNotice prescription={prescription} />
+
+      {!activeWorkout &&
+        session?.strengthWeekContext &&
+        (variantKind !== 'FULL' ||
+          readiness !== 'GREEN' ||
+          effectiveSessionKind !== session.kind) && (
+          <div className="status-banner" role="status">
+            <strong>Päivän ohjelmaa sovitettiin ennakkonäkymästä.</strong>{' '}
+            {effectiveSessionKind !== session.kind
+              ? 'Kuntotarkistus vaihtoi harjoitustyypin tämän päivän turvallisen päätöksen perusteella.'
+              : variantKind !== 'FULL'
+                ? 'Käytössä oleva aika tai päivän valmius valitsi lyhyemmän tai kevennetyn version samasta viikkorungosta.'
+                : 'Päivän valmius kevensi samaa viikkorunkoa.'}
+          </div>
+        )}
 
       {!activeWorkout && (
         <>

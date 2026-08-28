@@ -25,6 +25,18 @@ import type {
 import type { AdultResistanceSetHistory } from './AdultResistanceEngine'
 import { applyHockeyMicrocycle } from './sports/iceHockeyAdapter'
 import type { StrengthTrainingBackground } from './ReturnToStrengthPolicy'
+import { evaluateStrengthReturn } from './ReturnToStrengthPolicy'
+import {
+  createStrengthWeekBlueprint,
+  finalizeStrengthWeekPlan,
+  initialStrengthWeekMaterializationState,
+  materializeStrengthWeekSession,
+  STRENGTH_WEEK_REASON_CODES,
+  type StrengthWeekBlueprint,
+} from './StrengthWeekPolicy'
+import { calculatePlannedMuscleVolume } from './StrengthVolumePolicy'
+import { createLocalCalendarContext } from './LocalCalendarPolicy'
+import { ADULT_STRENGTH_TIME_POLICY } from './TimeBudgetPolicy'
 
 export type PlanGenerationInput = {
   goal: GoalProfile
@@ -47,11 +59,19 @@ export type PlanGenerationInput = {
   medicationAffectsHeartRate?: boolean
   hockeyBeta?: boolean
   age?: number
-  generatedAt?: string
+  generatedAt: string
+  calendarTimeZone: string
+  localDate: string
   /** Toteutunut, WorkoutRecord-tunnisteilla yksilöity voimaharjoitteluhistoria. */
   strengthHistory?: AdultResistanceSetHistory[]
   verifiedNextLoads?: VerifiedNextLoad[]
   strengthTrainingBackground?: StrengthTrainingBackground
+  /** Maanantain ISO-päivä (YYYY-MM-DD), johon versionoitu viikkorakenne sidotaan. */
+  weekAnchorDate: string
+  /** Väliin jäänyt snapshot-harjoitus poistetaan ilman sarjojen takaisinmaksua. */
+  missedSessionId?: string
+  /** Jo toteutuneiden saman viikon blueprintien id:t; niitä ei suunnitella uudelleen. */
+  completedStrengthSessionIds?: string[]
 }
 
 const sessionDefaults: Record<
@@ -187,7 +207,11 @@ function createWorkoutVariants(durationMinutes: number): WorkoutVariant[] {
   ]
 }
 
-function createAppSessions(input: PlanGenerationInput, athleteState: AthleteState) {
+function createAppSessions(
+  input: PlanGenerationInput,
+  athleteState: AthleteState,
+  strengthWeek?: StrengthWeekBlueprint,
+) {
   const strategy = getGoalStrategy(input.goal.primary)
   const sessions: PlannedSession[] = []
   const occupiedDays = new Set(
@@ -204,45 +228,58 @@ function createAppSessions(input: PlanGenerationInput, athleteState: AthleteStat
     const fixedCount = input.fixedSessions.filter(
       (session) => session.kind === kind,
     ).length
-    remaining.set(kind, Math.max(0, range.min - fixedCount))
+    remaining.set(
+      kind,
+      kind === 'STRENGTH' && strengthWeek
+        ? strengthWeek.appSessionCount
+        : Math.max(0, range.min - fixedCount),
+    )
   }
   const orderedKinds = [
     ...strategy.keyWorkouts,
     ...[...remaining.keys()].filter((kind) => !strategy.keyWorkouts.includes(kind)),
   ]
   const produced = new Map<SessionKind, number>()
+  const pushNextSession = (kind: SessionKind) => {
+    const count = remaining.get(kind) ?? 0
+    if (count <= 0 || sessions.length >= openDays.length) return false
+    const index = (produced.get(kind) ?? 0) + 1
+    const defaults = sessionDefaults[kind]
+    const day = openDays[sessions.length] ?? 1
+    const recommendedDuration = ConstraintEngine.capSessionMinutes(
+      athleteState,
+      day,
+      defaults.durationMinutes,
+    )
+    sessions.push({
+      id: `generated-${kind.toLocaleLowerCase('fi-FI')}-${index}`,
+      day,
+      kind,
+      title: defaults.title,
+      prescription: defaults.prescription,
+      durationMinutes: recommendedDuration,
+      ...(kind === 'STRENGTH' ? { timeBudgetMinutes: recommendedDuration } : {}),
+      intensity: defaults.intensity,
+      loadRegion: defaults.loadRegion,
+      fixed: false,
+      source: 'APP',
+      isNewStimulus: true,
+      notes: [],
+      variants: createWorkoutVariants(recommendedDuration),
+    })
+    produced.set(kind, index)
+    remaining.set(kind, count - 1)
+    return true
+  }
+  // Voimatavoitteen versionoitu viikkorakenne materialisoidaan ensin. Näin
+  // muiden tavoitteiden minimimäärä ei hiljaisesti pudota A/B/C-jaksoa.
+  while (strengthWeek && pushNextSession('STRENGTH')) {
+    // Tyhjä runko: pushNextSession rajaa määrän ja käytettävissä olevat päivät.
+  }
   while (sessions.length < openDays.length) {
     let added = false
     for (const kind of orderedKinds) {
-      const count = remaining.get(kind) ?? 0
-      if (count <= 0 || sessions.length >= openDays.length) continue
-      const index = (produced.get(kind) ?? 0) + 1
-      const defaults = sessionDefaults[kind]
-      const day = openDays[sessions.length] ?? 1
-      const recommendedDuration = ConstraintEngine.capSessionMinutes(
-        athleteState,
-        day,
-        defaults.durationMinutes,
-      )
-      sessions.push({
-        id: `generated-${kind.toLocaleLowerCase('fi-FI')}-${index}`,
-        day,
-        kind,
-        title: defaults.title,
-        prescription: defaults.prescription,
-        durationMinutes: recommendedDuration,
-        ...(kind === 'STRENGTH' ? { timeBudgetMinutes: recommendedDuration } : {}),
-        intensity: defaults.intensity,
-        loadRegion: defaults.loadRegion,
-        fixed: false,
-        source: 'APP',
-        isNewStimulus: true,
-        notes: [],
-        variants: createWorkoutVariants(recommendedDuration),
-      })
-      produced.set(kind, index)
-      remaining.set(kind, count - 1)
-      added = true
+      if (pushNextSession(kind)) added = true
     }
     if (!added) break
   }
@@ -293,10 +330,78 @@ export function generatePlan(
       'Ohjelman muodostaminen vaatii vähintään yhden käytettävissä olevan päivän.',
     )
   }
+  const calendar = createLocalCalendarContext(input.generatedAt, input.calendarTimeZone)
+  if (
+    calendar.localDate !== input.localDate ||
+    calendar.weekAnchorDate !== input.weekAnchorDate
+  ) {
+    throw new Error('INCONSISTENT_LOCAL_CALENDAR_CONTEXT')
+  }
 
   const strategy = getGoalStrategy(input.goal.primary)
   const athleteState = AthleteStateBuilder.build(input)
-  const appSessions = createAppSessions(input, athleteState)
+  const fixedStrengthSessions = input.fixedSessions.filter(
+    (session) => session.kind === 'STRENGTH',
+  )
+  const occupiedDays = new Set(
+    input.fixedSessions.filter((session) => session.fixed).map((session) => session.day),
+  )
+  for (const competition of input.competitions) occupiedDays.add(competition.day)
+  const availableAppDays = [...new Set(input.availableDays)].filter(
+    (day) => !occupiedDays.has(day),
+  ).length
+  const strengthReturn = evaluateStrengthReturn({
+    history: input.strengthHistory ?? [],
+    generatedAt: input.generatedAt,
+    background: input.strengthTrainingBackground,
+  })
+  const generatedAtForWeek = input.generatedAt
+  const backgroundLastAt = input.strengthTrainingBackground?.lastStrengthWorkoutAt
+  const confirmedBackgroundAgeDays = backgroundLastAt
+    ? (Date.parse(generatedAtForWeek) - Date.parse(backgroundLastAt)) / 86_400_000
+    : Number.POSITIVE_INFINITY
+  const strengthWeekEligibleGoal = [
+    'GENERAL_FITNESS',
+    'MAX_STRENGTH',
+    'MUSCLE_GAIN',
+    'BODY_RECOMPOSITION',
+    'FAT_LOSS',
+  ].includes(input.goal.primary)
+  const strengthWeek =
+    strategy.weeklyStructure.STRENGTH && strengthWeekEligibleGoal
+      ? createStrengthWeekBlueprint({
+          weekAnchorDate: input.weekAnchorDate,
+          goal: input.goal.primary,
+          experience: input.experience,
+          availableAppDays,
+          fixedStrengthExposureCount: fixedStrengthSessions.length,
+          fixedStrengthVolumeKnown: fixedStrengthSessions.every(
+            (session) => session.prescriptionDetail?.kind === 'STRENGTH',
+          ),
+          returning:
+            strengthReturn.state !== 'ACTIVE' &&
+            strengthReturn.state !== 'NOVICE_COLD_START',
+          equipment: athleteState.longTerm.equipment,
+          history: input.strengthHistory ?? [],
+          trainingContinuityConfirmed:
+            strengthReturn.state === 'ACTIVE' ||
+            (input.strengthTrainingBackground?.regularTrainingAtLeast12Weeks === true &&
+              confirmedBackgroundAgeDays >= 0 &&
+              confirmedBackgroundAgeDays <= 7),
+          generatedAt: input.generatedAt,
+        })
+      : undefined
+  const allAppSessions = createAppSessions(input, athleteState, strengthWeek)
+  const strengthRoleIndexBySessionId = new Map(
+    allAppSessions
+      .filter((session) => session.kind === 'STRENGTH')
+      .map((session, index) => [session.id, index] as const),
+  )
+  const completedStrengthSessionIds = new Set(input.completedStrengthSessionIds ?? [])
+  const appSessions = allAppSessions.filter(
+    (session) =>
+      session.kind !== 'STRENGTH' || !completedStrengthSessionIds.has(session.id),
+  )
   let unallocatedEnduranceMinutes = 0
   if (input.goal.primary === 'ENDURANCE') {
     const fixedEnduranceMinutes = input.fixedSessions
@@ -327,6 +432,7 @@ export function generatePlan(
     sessions: [...input.fixedSessions, ...competitionSessions, ...appSessions],
     competitions: input.competitions,
     allowedDays: input.availableDays,
+    missedSessionId: input.missedSessionId,
   })
   const hockeyAdjustment =
     input.hockeyBeta && input.sportDiscipline === 'ice-hockey-adult-amateur-skater'
@@ -354,8 +460,61 @@ export function generatePlan(
     verifiedNextLoads: input.verifiedNextLoads,
     strengthTrainingBackground: input.strengthTrainingBackground,
   }
+  let strengthSequenceIndex = 0
+  let strengthWeekState = initialStrengthWeekMaterializationState(strengthWeek)
+  const unsupportedStrengthSessionReasons: string[] = []
+  for (const fixedSession of fixedStrengthSessions) {
+    if (fixedSession.prescriptionDetail?.kind !== 'STRENGTH') continue
+    const fixedVolume = calculatePlannedMuscleVolume(
+      fixedSession.prescriptionDetail.exercises,
+    )
+    for (const [muscle, amount] of Object.entries(fixedVolume)) {
+      strengthWeekState.plannedVolume[muscle] =
+        (strengthWeekState.plannedVolume[muscle] ?? 0) + amount
+    }
+  }
   const prescribedSessions = hockeyAdjustment.sessions.map((session) => {
     if (session.source !== 'APP') return session
+    const strengthRole =
+      session.kind === 'STRENGTH'
+        ? strengthWeek?.roles[
+            strengthRoleIndexBySessionId.get(session.id) ?? strengthSequenceIndex
+          ]
+        : undefined
+    if (session.kind === 'STRENGTH' && strengthWeek?.bodyweightPullUnsupported) {
+      const safetyResolution = resolvePrescription({
+        sessionId: session.id,
+        title: session.title ?? sessionDefaults[session.kind].title,
+        kind: session.kind,
+        durationMinutes: session.timeBudgetMinutes ?? session.durationMinutes,
+        profile: {
+          ...profile,
+          strengthWeekRole: strengthRole,
+          minutesPerSession:
+            input.minutesByDay?.[String(session.day)] ?? profile.minutesPerSession,
+        },
+      })
+      if (safetyResolution.status === 'UNSUPPORTED') {
+        unsupportedStrengthSessionReasons.push(safetyResolution.reasonCode)
+        strengthSequenceIndex += 1
+        return { ...session, unsupportedPrescription: safetyResolution }
+      }
+      unsupportedStrengthSessionReasons.push(
+        STRENGTH_WEEK_REASON_CODES.PULL_EQUIPMENT_REQUIRED,
+      )
+      strengthSequenceIndex += 1
+      return {
+        ...session,
+        title: 'Voimaharjoitus – vetävä liikesuunta tarvitsee välineen',
+        unsupportedPrescription: {
+          status: 'UNSUPPORTED' as const,
+          sessionKind: 'STRENGTH' as const,
+          reasonCode: 'PULL_PATTERN_EQUIPMENT_REQUIRED' as const,
+          userMessage:
+            'Tuettua koko viikon voimaharjoittelua ei muodosteta pelkällä kehonpainolla. Lisää pitkä vastuskuminauha tai muu tuettu vetoväline.',
+        },
+      }
+    }
     const resolved = resolvePrescription({
       sessionId: session.id,
       title: session.title ?? sessionDefaults[session.kind].title,
@@ -363,18 +522,59 @@ export function generatePlan(
       durationMinutes: session.timeBudgetMinutes ?? session.durationMinutes,
       profile: {
         ...profile,
+        strengthWeekRole: strengthRole,
         minutesPerSession:
           input.minutesByDay?.[String(session.day)] ?? profile.minutesPerSession,
       },
     })
     if (resolved.status !== 'SUPPORTED') {
+      if (session.kind === 'STRENGTH') {
+        unsupportedStrengthSessionReasons.push(resolved.reasonCode)
+        strengthSequenceIndex += 1
+      }
       return { ...session, unsupportedPrescription: resolved }
     }
     if (resolved.prescription.kind !== 'STRENGTH') {
       return { ...session, prescriptionDetail: resolved.prescription }
     }
+    if (!strengthWeek || !strengthRole) {
+      return { ...session, prescriptionDetail: resolved.prescription }
+    }
+    let materialized
+    try {
+      materialized = materializeStrengthWeekSession({
+        prescription: resolved.prescription,
+        blueprint: strengthWeek,
+        state: strengthWeekState,
+        sequenceIndex:
+          strengthRoleIndexBySessionId.get(session.id) ?? strengthSequenceIndex,
+        history: input.strengthHistory ?? [],
+      })
+    } catch (error) {
+      if (
+        error instanceof Error &&
+        (error.message === 'TIME_MINIMUM_SAFE_DOSE_UNAVAILABLE' ||
+          error.message === 'NO_SAFE_STRENGTH_DOSE_AVAILABLE')
+      ) {
+        unsupportedStrengthSessionReasons.push(STRENGTH_WEEK_REASON_CODES.NO_SAFE_SESSION)
+        strengthSequenceIndex += 1
+        return {
+          ...session,
+          unsupportedPrescription: {
+            status: 'UNSUPPORTED' as const,
+            sessionKind: 'STRENGTH' as const,
+            reasonCode: 'NO_SAFE_STRENGTH_DOSE_AVAILABLE' as const,
+            userMessage:
+              'Seitsemän vuorokauden volyymikattoon ja aikabudjettiin ei mahdu turvallista lisäannosta.',
+          },
+        }
+      }
+      throw error
+    }
+    strengthWeekState = materialized.state
+    strengthSequenceIndex += 1
     const variants = (session.variants ?? []).flatMap((variant) => {
-      const adapted = adaptPrescription(resolved.prescription, variant, {
+      const adapted = adaptPrescription(materialized.prescription, variant, {
         age: profile.age,
         readiness: 'GREEN',
         healthBlocked: Boolean(profile.healthBlocked),
@@ -391,8 +591,20 @@ export function generatePlan(
     })
     return {
       ...session,
-      durationMinutes: resolved.prescription.durationMinutes,
-      prescriptionDetail: resolved.prescription,
+      title: strengthWeek.bodyweightPullUnsupported
+        ? 'Voimaharjoitus – vetävä liikesuunta puuttuu'
+        : session.title,
+      durationMinutes: materialized.prescription.durationMinutes,
+      prescriptionDetail: materialized.prescription,
+      strengthWeekContext: materialized.context,
+      notes: [
+        ...(session.notes ?? []),
+        ...(strengthWeek.bodyweightPullUnsupported
+          ? [
+              'Täysi kotivoimaohjelma tarvitsee vetoliikettä varten vähintään pitkän vastuskuminauhan tai muun Haukkarin tukeman välineen.',
+            ]
+          : []),
+      ],
       variants,
     }
   })
@@ -456,6 +668,23 @@ export function generatePlan(
     })
   }
 
+  if (strengthWeek?.bodyweightPullUnsupported) {
+    reasons.push({
+      code: STRENGTH_WEEK_REASON_CODES.PULL_EQUIPMENT_REQUIRED,
+      message:
+        'Täysi kotivoimaohjelma tarvitsee vetoliikettä varten vähintään pitkän vastuskuminauhan tai muun Haukkarin tukeman välineen.',
+      priority: 'TIME',
+    })
+  }
+  if (strengthWeek?.externalStrengthVolumeUnknown) {
+    reasons.push({
+      code: STRENGTH_WEEK_REASON_CODES.EXTERNAL_VOLUME_UNKNOWN,
+      message:
+        'Ulkopuolinen voimaharjoitus lasketaan harjoituskerraksi, mutta sarjaprogressio pidätetään, koska sen lihas- ja sarjatietoja ei tunneta.',
+      priority: 'COACH_FIXED',
+    })
+  }
+
   if (input.goal.primary === 'SPORT_PERFORMANCE' || input.sportDiscipline) {
     const match = getSportAdapter(input.sportDiscipline ?? '', {
       hockeyBeta: input.hockeyBeta,
@@ -472,6 +701,33 @@ export function generatePlan(
     if (match.adapter.warning) warnings.push(match.adapter.warning)
   }
 
+  const strengthSessions = prescribedSessions.filter(
+    (session) => session.source === 'APP' && session.kind === 'STRENGTH',
+  )
+  const maximumRemainingStrengthTimeSeconds = strengthSessions.reduce(
+    (maximum, session) => {
+      const budgetSeconds = (session.timeBudgetMinutes ?? session.durationMinutes) * 60
+      const usedSeconds = session.prescriptionDetail?.calculatedTotalSeconds ?? 0
+      return Math.max(maximum, Math.max(0, budgetSeconds - usedSeconds))
+    },
+    0,
+  )
+  const minimumPolicyAdditionSubtotal =
+    ADULT_STRENGTH_TIME_POLICY.workSetSeconds +
+    ADULT_STRENGTH_TIME_POLICY.transitionSeconds +
+    Math.min(...Object.values(ADULT_STRENGTH_TIME_POLICY.equipmentSetupSeconds))
+  const minimumPolicyAdditionSeconds =
+    minimumPolicyAdditionSubtotal +
+    Math.ceil(minimumPolicyAdditionSubtotal * ADULT_STRENGTH_TIME_POLICY.bufferRatio)
+  const finalizedStrengthWeek = strengthWeek
+    ? finalizeStrengthWeekPlan(strengthWeek, strengthWeekState, {
+        unsupportedSessionReasons: unsupportedStrengthSessionReasons,
+        expectedMaterializedSessionCount: strengthSessions.length,
+        remainingTimeSeconds: maximumRemainingStrengthTimeSeconds,
+        minimumPolicyAdditionSeconds,
+      })
+    : undefined
+
   return {
     decision: {
       goal: input.goal.primary,
@@ -480,6 +736,21 @@ export function generatePlan(
         input.goal.primary === 'ENDURANCE' ? input.currentEnduranceMinutes : 0,
       assessments,
       ruleVersion: TRAINING_RULE_VERSION,
+      ...(finalizedStrengthWeek
+        ? {
+            strengthWeek: {
+              ...finalizedStrengthWeek,
+              reasonCodes: [
+                ...new Set([
+                  ...finalizedStrengthWeek.reasonCodes,
+                  ...(input.missedSessionId
+                    ? [STRENGTH_WEEK_REASON_CODES.MISSED_SESSION_NOT_DOUBLED]
+                    : []),
+                ]),
+              ],
+            },
+          }
+        : {}),
     },
     reasons,
     warnings,

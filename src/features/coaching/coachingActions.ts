@@ -14,6 +14,13 @@ import {
   verifyNextLoad,
   strengthTrainingBackgroundFrom,
   STRENGTH_RETURN_POLICY_VERSION,
+  createLocalCalendarContext,
+  instantForLocalDateTime,
+  LEGACY_CALENDAR_TIME_ZONE,
+  localCalendarDate,
+  LOCAL_CALENDAR_POLICY_VERSION,
+  STRENGTH_WEEK_POLICY_VERSION,
+  weekdayInTimeZone,
 } from '../../domain/coaching'
 import type {
   CompletedSet,
@@ -32,13 +39,23 @@ import type {
   ExerciseLoadType,
 } from '../../domain/coaching/types'
 import type { LocalRecord } from '../../domain/sync/types'
+import type { LocalCalendarContext } from '../../domain/coaching/LocalCalendarPolicy'
 import { featureFlags } from '../../config/featureFlags'
 import type {
   AppDataContextValue,
   GoalChangeDraft,
 } from '../app-data/appDataContextValue'
-import { objectValue, stringValue, toJsonObject, todayIso } from './coachingData'
+import {
+  calendarContextForProfile,
+  objectValue,
+  stringValue,
+  toJsonObject,
+} from './coachingData'
 import { strengthHistoryFromLogs } from '../workout/WorkoutHistory'
+import {
+  deterministicWeeklyPlanIds,
+  weeklyMaterializationIdempotencyKey,
+} from '../../domain/sync/DeterministicUuid'
 
 export type OnboardingInput = {
   displayName: string
@@ -93,6 +110,23 @@ export function hasMeaningfulRestrictionText(value: string) {
   return !/^(?:-|ei|ei ole|ei mitään|ei rajoitteita|ei sairauksia|ei vammoja|terve|none)$/u.test(
     normalized,
   )
+}
+
+function runtimeCalendarContext(at: Date | string = new Date()) {
+  const resolved = Intl.DateTimeFormat().resolvedOptions().timeZone
+  return createLocalCalendarContext(at, resolved || LEGACY_CALENDAR_TIME_ZONE)
+}
+
+function weeklyMaterializationClock(
+  profile: LocalRecord | null,
+  at: Date | string = new Date(),
+) {
+  const current = calendarContextForProfile(profile, at)
+  const effectiveInstant = instantForLocalDateTime(
+    current.localDate,
+    current.calendarTimeZone,
+  )
+  return createLocalCalendarContext(effectiveInstant, current.calendarTimeZone)
 }
 
 const confirmedLimitationTagValues = new Set<ConfirmedLimitationTag>([
@@ -160,11 +194,12 @@ export function classifyOnboardingHealth(
   }
 }
 
-function birthDateFromAge(age: number) {
-  return `${new Date().getFullYear() - age}-01-01`
+function birthDateFromAge(age: number, localDate: string) {
+  return `${Number(localDate.slice(0, 4)) - age}-01-01`
 }
 
 function currentHistory(data: AppDataContextValue): GoalHistory {
+  const calendar = calendarContextForProfile(data.latest('profiles'))
   const planVersions = data.list('plan_versions')
   const periods = data.list('goal_periods').flatMap((record) => {
     const summary = objectValue(record.data.summary)
@@ -186,7 +221,7 @@ function currentHistory(data: AppDataContextValue): GoalHistory {
             : [],
           inputs: objectValue(goal.inputs),
         },
-        startsOn: stringValue(record.data.starts_on, todayIso()),
+        startsOn: stringValue(record.data.starts_on, calendar.localDate),
         endsOn: stringValue(record.data.ends_on) || null,
         planVersionId: plan?.id ?? stringValue(summary.plan_version_id),
       },
@@ -228,7 +263,8 @@ function currentHistory(data: AppDataContextValue): GoalHistory {
 function planFromPreferences(
   goal: GoalProfile,
   preferences: OnboardingInput | Record<string, unknown>,
-  healthBlocked = false,
+  healthBlocked: boolean,
+  clock: LocalCalendarContext,
   calendar: {
     fixedSessions?: PlannedSession[]
     competitions?: Array<{
@@ -240,6 +276,7 @@ function planFromPreferences(
     }>
   } = {},
   strengthHistory = [] as ReturnType<typeof strengthHistoryFromLogs>,
+  completedStrengthSessionIds: string[] = [],
 ) {
   const sportDiscipline =
     'sportDiscipline' in preferences && typeof preferences.sportDiscipline === 'string'
@@ -359,11 +396,15 @@ function planFromPreferences(
     medicationAffectsHeartRate: preferences.medicationAffectsHeartRate === true,
     hockeyBeta: 'hockeyBeta' in preferences && preferences.hockeyBeta === true,
     age: typeof preferences.age === 'number' ? preferences.age : undefined,
-    generatedAt: new Date().toISOString(),
+    generatedAt: clock.generatedAt,
+    calendarTimeZone: clock.calendarTimeZone,
+    localDate: clock.localDate,
+    weekAnchorDate: clock.weekAnchorDate,
     verifiedNextLoads: verifiedNextLoadsFrom(
       (preferences as Record<string, unknown>).verifiedNextLoads,
     ),
     strengthHistory,
+    completedStrengthSessionIds,
     strengthTrainingBackground: strengthTrainingBackgroundFrom(
       (preferences as Record<string, unknown>).strengthTrainingBackground,
     ),
@@ -391,7 +432,8 @@ export async function completeOnboarding(
   data: AppDataContextValue,
   input: OnboardingInput,
 ) {
-  const createdAt = new Date().toISOString()
+  const clock = runtimeCalendarContext()
+  const createdAt = clock.generatedAt
   const strengthTrainingBackground =
     input.previousRegularStrengthTraining && input.lastStrengthWorkoutDate
       ? {
@@ -414,7 +456,7 @@ export async function completeOnboarding(
     { activePeriodId: null, periods: [], planVersions: [] },
     goal,
     {
-      today: todayIso(),
+      today: clock.localDate,
       providedInputs: getGoalStrategy(goal.primary).requiredInputs,
     },
   )
@@ -432,6 +474,7 @@ export async function completeOnboarding(
     goal,
     { ...input, strengthTrainingBackground },
     highIntensityBlocked,
+    clock,
   )
   const profileId = crypto.randomUUID()
   const goalProfileId = crypto.randomUUID()
@@ -440,13 +483,15 @@ export async function completeOnboarding(
   const profilePayload = toJsonObject({
     display_name: input.displayName,
     locale: 'fi-FI',
-    timezone: Intl.DateTimeFormat().resolvedOptions().timeZone || 'Europe/Helsinki',
-    birth_date: birthDateFromAge(input.age),
+    timezone: clock.calendarTimeZone,
+    birth_date: birthDateFromAge(input.age, clock.localDate),
     height_cm: input.heightCm,
     weight_kg: input.weightKg,
     onboarding_completed: false,
     sensitive_data_consent_at: consentAt,
     app_settings: {
+      calendarTimeZone: clock.calendarTimeZone,
+      calendarPolicyVersion: clock.policyVersion,
       availableDays: input.availableDays,
       minutesPerSession: input.minutesPerSession,
       minutesByDay: input.minutesByDay,
@@ -477,7 +522,7 @@ export async function completeOnboarding(
     await data.create(
       'health_screenings',
       toJsonObject({
-        screened_on: todayIso(),
+        screened_on: clock.localDate,
         status: safetyReviewRequired
           ? 'NEEDS_REVIEW'
           : highIntensityBlocked
@@ -562,8 +607,9 @@ export function createGoalChangeDraft(
   data: AppDataContextValue,
   profile: GoalProfile,
 ): GoalChangeDraft {
+  const clock = calendarContextForProfile(data.latest('profiles'))
   const preview = previewGoalChange(currentHistory(data), profile, {
-    today: todayIso(),
+    today: clock.localDate,
     providedInputs: getGoalStrategy(profile.primary).requiredInputs,
     conflictContext: {
       maximalMuscleGainRequested:
@@ -576,7 +622,10 @@ export function createGoalChangeDraft(
 export function createPreviousGoalRestoreDraft(
   data: AppDataContextValue,
 ): GoalChangeDraft {
-  const preview = previewPreviousGoalRestore(currentHistory(data), { today: todayIso() })
+  const clock = calendarContextForProfile(data.latest('profiles'))
+  const preview = previewPreviousGoalRestore(currentHistory(data), {
+    today: clock.localDate,
+  })
   return { profile: preview.decision.proposedGoal, preview: preview.decision }
 }
 
@@ -585,6 +634,7 @@ export async function activateGoalDraft(
   draft: GoalChangeDraft,
   conflictChoices: Partial<Record<GoalConflictCode, string>>,
 ) {
+  const clock = calendarContextForProfile(data.latest('profiles'))
   const history = currentHistory(data)
   const goalPeriodId = crypto.randomUUID()
   const planVersionId = crypto.randomUUID()
@@ -603,6 +653,7 @@ export async function activateGoalDraft(
     draft.profile,
     planningPreferencesWithScreening(settings, screening),
     screeningStatus === 'HIGH_INTENSITY_BLOCKED' || screeningStatus === 'NEEDS_REVIEW',
+    clock,
     {},
     strengthHistoryFromLogs(data.list('workout_logs')),
   )
@@ -664,12 +715,13 @@ export async function activateGoalDraft(
 }
 
 export async function saveDailyCheckIn(data: AppDataContextValue, input: ReadinessInput) {
+  const clock = calendarContextForProfile(data.latest('profiles'))
   const result = evaluateReadiness(input)
   const existing = data
     .list('daily_checkins')
-    .find((record) => record.data.checkin_date === todayIso())
+    .find((record) => record.data.checkin_date === clock.localDate)
   const payload = toJsonObject({
-    checkin_date: todayIso(),
+    checkin_date: clock.localDate,
     readiness: result.decision.state,
     answers: { ...input, recommendation: result.decision },
     reasons: result.reasons.map((reason) => reason.message),
@@ -721,6 +773,24 @@ export async function confirmNextAvailableLoad(
   return result
 }
 
+export async function saveEquipmentSettings(
+  data: AppDataContextValue,
+  equipment: string[],
+) {
+  const profile = data.latest('profiles')
+  if (!profile) throw new Error('Profiilia ei löytynyt.')
+  const appSettings = objectValue(profile.data.app_settings)
+  return data.update(
+    profile,
+    toJsonObject({
+      app_settings: {
+        ...appSettings,
+        equipment: [...new Set(equipment)],
+      },
+    }),
+  )
+}
+
 export async function logWorkout(
   data: AppDataContextValue,
   input: {
@@ -757,11 +827,16 @@ export async function startWorkout(
     prescription: PrescribedSession
   },
 ) {
+  const clock = calendarContextForProfile(data.latest('profiles'))
   const existing = data
     .list('workouts')
     .find(
       (record) =>
-        stringValue(record.data.scheduled_for).slice(0, 10) === todayIso() &&
+        Boolean(stringValue(record.data.scheduled_for)) &&
+        localCalendarDate(
+          stringValue(record.data.scheduled_for),
+          clock.calendarTimeZone,
+        ) === clock.localDate &&
         record.data.status === 'PLANNED',
     )
   if (existing) {
@@ -785,7 +860,7 @@ export async function startWorkout(
     toJsonObject({
       training_plan_id: trainingPlan?.id ?? null,
       workout_template_id: null,
-      scheduled_for: new Date().toISOString(),
+      scheduled_for: clock.generatedAt,
       title: input.title,
       duration_minutes: Math.max(5, input.durationMinutes),
       intensity: input.intensity === 'RECOVERY' ? 'RECOVERY' : input.intensity,
@@ -986,7 +1061,238 @@ export async function completeWorkout(
       status: input.feedback.completionStatus === 'STOPPED' ? 'CANCELLED' : 'COMPLETED',
     }),
   )
+  await refreshStrengthWeekAfterWorkout(data, {
+    latestWorkoutLog: workoutLog,
+    completedPrescriptionId:
+      input.prescription.kind === 'STRENGTH' ? input.prescription.id : undefined,
+  })
   return workoutLog
+}
+
+async function refreshStrengthWeekAfterWorkout(
+  data: AppDataContextValue,
+  latest: {
+    latestWorkoutLog: LocalRecord
+    completedPrescriptionId?: string
+  },
+) {
+  const profile = data.latest('profiles')
+  const clock = calendarContextForProfile(profile)
+  const goalRecord = activeGoalRecord(data)
+  if (!goalRecord) return
+  const primary = stringValue(goalRecord.data.primary_goal) as GoalProfile['primary']
+  if (!primary) return
+  const secondary = Array.isArray(goalRecord.data.secondary_goals)
+    ? (goalRecord.data.secondary_goals.filter(
+        (value): value is GoalProfile['primary'] => typeof value === 'string',
+      ) as GoalProfile['secondary'])
+    : []
+  const profileSettings = objectValue(profile?.data.app_settings)
+  const basePreferences = objectValue(goalRecord.data.preferences)
+  const screening = data.latest('health_screenings')
+  const preferences = planningPreferencesWithScreening(
+    { ...profileSettings, ...basePreferences },
+    screening,
+  )
+  const weekAnchorDate = clock.weekAnchorDate
+  const completedStrengthSessionIds = data
+    .list('workouts')
+    .filter(
+      (record) =>
+        record.data.status !== 'PLANNED' &&
+        localCalendarDate(
+          stringValue(record.data.scheduled_for),
+          clock.calendarTimeZone,
+        ) >= weekAnchorDate,
+    )
+    .flatMap((record) => {
+      const prescription = objectValue(record.data.prescription)
+      return prescription.kind === 'STRENGTH' && typeof prescription.id === 'string'
+        ? [prescription.id]
+        : []
+    })
+  if (latest.completedPrescriptionId) {
+    completedStrengthSessionIds.push(latest.completedPrescriptionId)
+  }
+  const uniqueCompletedStrengthSessionIds = [...new Set(completedStrengthSessionIds)]
+  if (uniqueCompletedStrengthSessionIds.length === 0) return
+  const currentWorkoutLogs = data
+    .list('workout_logs')
+    .filter((record) => record.id !== latest.latestWorkoutLog.id)
+  const currentStrengthHistory = strengthHistoryFromLogs([
+    ...currentWorkoutLogs,
+    latest.latestWorkoutLog,
+  ])
+  const screeningStatus = stringValue(screening?.data.status)
+  const plan = planFromPreferences(
+    { primary, secondary, inputs: preferences },
+    preferences,
+    screeningStatus === 'HIGH_INTENSITY_BLOCKED' || screeningStatus === 'NEEDS_REVIEW',
+    clock,
+    calendarPlanningInputs(data),
+    currentStrengthHistory,
+    uniqueCompletedStrengthSessionIds,
+  )
+  const activePlan = [...data.list('training_plans')]
+    .reverse()
+    .find((record) => record.data.status === 'ACTIVE')
+  if (!activePlan) return
+  await data.update(
+    activePlan,
+    toJsonObject({
+      status: 'ACTIVE',
+      plan: plan.decision,
+      change_reason: 'WORKOUT_COMPLETED_WEEK_RECALCULATION',
+    }),
+  )
+}
+
+const strengthWeekMaterializationInFlight = new WeakMap<
+  AppDataContextValue,
+  Promise<boolean>
+>()
+
+export function ensureCurrentStrengthWeekPlan(
+  data: AppDataContextValue,
+  at: Date | string = new Date(),
+) {
+  const existing = strengthWeekMaterializationInFlight.get(data)
+  if (existing) return existing
+  const operation = ensureCurrentStrengthWeekPlanOnce(data, at).finally(() => {
+    if (strengthWeekMaterializationInFlight.get(data) === operation) {
+      strengthWeekMaterializationInFlight.delete(data)
+    }
+  })
+  strengthWeekMaterializationInFlight.set(data, operation)
+  return operation
+}
+
+async function ensureCurrentStrengthWeekPlanOnce(
+  data: AppDataContextValue,
+  at: Date | string,
+) {
+  const activePlan = [...data.list('training_plans')]
+    .reverse()
+    .find((record) => record.data.status === 'ACTIVE')
+  if (!activePlan) return false
+  const currentPlan = objectValue(activePlan.data.plan)
+  const strengthWeek = objectValue(currentPlan.strengthWeek)
+  if (typeof strengthWeek.policyVersion !== 'string') return false
+  const profile = data.latest('profiles')
+  const clock = weeklyMaterializationClock(profile, at)
+  if (strengthWeek.weekAnchorDate === clock.weekAnchorDate) return false
+
+  const goalRecord = activeGoalRecord(data)
+  const goalPeriod = [...data.list('goal_periods')]
+    .reverse()
+    .find((record) => record.data.status === 'ACTIVE')
+  if (!goalRecord || !goalPeriod) return false
+  const primary = stringValue(goalRecord.data.primary_goal) as GoalProfile['primary']
+  if (!primary) return false
+  const secondary = Array.isArray(goalRecord.data.secondary_goals)
+    ? (goalRecord.data.secondary_goals.filter(
+        (value): value is GoalProfile['primary'] => typeof value === 'string',
+      ) as GoalProfile['secondary'])
+    : []
+  const profileSettings = objectValue(profile?.data.app_settings)
+  const basePreferences = objectValue(goalRecord.data.preferences)
+  const screening = data.latest('health_screenings')
+  const preferences = planningPreferencesWithScreening(
+    { ...profileSettings, ...basePreferences },
+    screening,
+  )
+  const screeningStatus = stringValue(screening?.data.status)
+  const plan = planFromPreferences(
+    { primary, secondary, inputs: preferences },
+    preferences,
+    screeningStatus === 'HIGH_INTENSITY_BLOCKED' || screeningStatus === 'NEEDS_REVIEW',
+    clock,
+    calendarPlanningInputs(data),
+    strengthHistoryFromLogs(data.list('workout_logs')),
+  )
+  const ids = await deterministicWeeklyPlanIds({
+    userId: activePlan.userId,
+    goalPeriodId: goalPeriod.id,
+    weekAnchorDate: clock.weekAnchorDate,
+    calendarPolicyVersion: LOCAL_CALENDAR_POLICY_VERSION,
+    strengthWeekPolicyVersion: STRENGTH_WEEK_POLICY_VERSION,
+  })
+  const idempotencyKey = weeklyMaterializationIdempotencyKey({
+    goalPeriodId: goalPeriod.id,
+    weekAnchorDate: clock.weekAnchorDate,
+    calendarPolicyVersion: LOCAL_CALENDAR_POLICY_VERSION,
+    strengthWeekPolicyVersion: STRENGTH_WEEK_POLICY_VERSION,
+  })
+  const existingVersion = data
+    .list('plan_versions')
+    .find((record) => record.id === ids.planVersionId)
+  const existingTrainingPlan = data
+    .list('training_plans')
+    .find((record) => record.id === ids.trainingPlanId)
+  const previousVersionId = stringValue(activePlan.data.plan_version_id) || null
+  const previousVersions = data
+    .list('plan_versions')
+    .filter((record) => record.data.goal_period_id === goalPeriod.id)
+  const versionNumber =
+    Math.max(
+      0,
+      ...previousVersions.map((record) =>
+        typeof record.data.version_number === 'number' ? record.data.version_number : 0,
+      ),
+    ) + 1
+  if (!existingVersion) {
+    await data.create(
+      'plan_versions',
+      toJsonObject({
+        goal_period_id: goalPeriod.id,
+        previous_plan_version_id: previousVersionId,
+        version_number: versionNumber,
+        effective_from: clock.weekAnchorDate,
+        change_reason: 'WEEKLY_MATERIALIZATION',
+        snapshot: {
+          goal: { primary, secondary, inputs: preferences },
+          startsOn: clock.weekAnchorDate,
+          transitionWeek: false,
+          strategyId: primary,
+          plan: plan.decision,
+          materialization: {
+            idempotencyKey,
+            trainingPlanId: ids.trainingPlanId,
+            generatedAt: clock.generatedAt,
+            localDate: clock.localDate,
+            weekAnchorDate: clock.weekAnchorDate,
+            calendarTimeZone: clock.calendarTimeZone,
+            calendarPolicyVersion: clock.policyVersion,
+            strengthWeekPolicyVersion: STRENGTH_WEEK_POLICY_VERSION,
+            changeReason: 'WEEKLY_MATERIALIZATION',
+          },
+        },
+      }),
+      ids.planVersionId,
+    )
+  }
+  for (const planRecord of data.list('training_plans')) {
+    if (planRecord.data.status === 'ACTIVE' && planRecord.id !== ids.trainingPlanId) {
+      await data.update(planRecord, toJsonObject({ status: 'ARCHIVED' }))
+    }
+  }
+  if (existingTrainingPlan) {
+    if (existingTrainingPlan.data.status !== 'ACTIVE') {
+      await data.update(existingTrainingPlan, toJsonObject({ status: 'ACTIVE' }))
+    }
+  } else {
+    await data.create(
+      'training_plans',
+      toJsonObject({
+        plan_version_id: ids.planVersionId,
+        week_count: 1,
+        status: 'ACTIVE',
+        plan: plan.decision,
+      }),
+      ids.trainingPlanId,
+    )
+  }
+  return true
 }
 
 export async function logNutrition(
@@ -1025,10 +1331,11 @@ export async function addBodyMetric(
   data: AppDataContextValue,
   input: { weightKg?: number; waistCm?: number },
 ) {
+  const clock = calendarContextForProfile(data.latest('profiles'))
   return data.create(
     'body_metrics',
     toJsonObject({
-      measured_on: todayIso(),
+      measured_on: clock.localDate,
       weight_kg: input.weightKg ?? null,
       waist_cm: input.waistCm ?? null,
       body_fat_percent: null,
@@ -1047,6 +1354,7 @@ export function calendarPlanningInputs(
   mutation?: CalendarPlanMutation,
 ) {
   const now = new Date()
+  const clock = calendarContextForProfile(data.latest('profiles'), now)
   const fixedRecords = data.list('fixed_sport_sessions').filter((record) => {
     if (record.id === mutation?.remove?.id) return false
     const recurrence = objectValue(objectValue(record.data.session_data).recurrence)
@@ -1066,7 +1374,7 @@ export function calendarPlanningInputs(
     const rpe = typeof record.data.rpe === 'number' ? record.data.rpe : 6
     return {
       id: `calendar-${record.id}`,
-      day: startsAt.getDay() || 7,
+      day: weekdayInTimeZone(startsAt, clock.calendarTimeZone),
       kind: 'SPORT',
       title:
         stringValue(sessionData.title) ||
@@ -1114,7 +1422,7 @@ export function calendarPlanningInputs(
     const priority = stringValue(record.data.priority)
     return {
       id: record.id,
-      day: startsAt.getDay() || 7,
+      day: weekdayInTimeZone(startsAt, clock.calendarTimeZone),
       name: stringValue(record.data.name, 'Ottelu tai kilpailu'),
       priority: priority === 'B' || priority === 'TRAINING' ? priority : ('A' as const),
       daysUntil: Math.ceil((startsAt.getTime() - now.getTime()) / 86_400_000),
@@ -1134,6 +1442,7 @@ async function createCalendarPlanVersion(
     | 'COMPETITION_CANCELLED',
   mutation?: CalendarPlanMutation,
 ) {
+  const clock = calendarContextForProfile(data.latest('profiles'))
   const goalRecord = activeGoalRecord(data)
   const goalPeriod = data
     .list('goal_periods')
@@ -1169,6 +1478,7 @@ async function createCalendarPlanVersion(
     goal,
     preferences,
     screeningStatus === 'HIGH_INTENSITY_BLOCKED' || screeningStatus === 'NEEDS_REVIEW',
+    clock,
     calendarPlanningInputs(data, mutation),
     strengthHistoryFromLogs(data.list('workout_logs')),
   )
@@ -1183,11 +1493,11 @@ async function createCalendarPlanVersion(
         data
           .list('plan_versions')
           .filter((record) => record.data.goal_period_id === goalPeriod.id).length + 1,
-      effective_from: todayIso(),
+      effective_from: clock.localDate,
       change_reason: changeReason,
       snapshot: {
         goal,
-        startsOn: todayIso(),
+        startsOn: clock.localDate,
         transitionWeek: false,
         strategyId: primary,
         plan: plan.decision,

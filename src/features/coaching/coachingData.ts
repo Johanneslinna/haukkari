@@ -3,7 +3,14 @@ import type {
   GoalType,
   PlannedSession,
   ReadinessState,
+  StrengthWeekPlan,
 } from '../../domain/coaching/types'
+import {
+  createLocalCalendarContext,
+  LEGACY_CALENDAR_TIME_ZONE,
+  localCalendarDate,
+  validateCalendarTimeZone,
+} from '../../domain/coaching/LocalCalendarPolicy'
 
 export const goalLabels: Record<GoalType, string> = {
   BODY_RECOMPOSITION: 'Yleiskunto ja kehonkoostumus',
@@ -74,8 +81,26 @@ export function latestByDate(records: LocalRecord[], field: string) {
   )
 }
 
-export function todayIso() {
-  return new Date().toISOString().slice(0, 10)
+export function calendarTimeZoneFromProfile(profile: LocalRecord | null) {
+  const appSettings = objectValue(profile?.data.app_settings)
+  const configured = stringValue(appSettings.calendarTimeZone)
+  const legacyProfileTimeZone = stringValue(profile?.data.timezone)
+  const selected = configured || legacyProfileTimeZone || LEGACY_CALENDAR_TIME_ZONE
+  return validateCalendarTimeZone(selected)
+}
+
+export function calendarContextForProfile(
+  profile: LocalRecord | null,
+  at: Date | string = new Date(),
+) {
+  return createLocalCalendarContext(at, calendarTimeZoneFromProfile(profile))
+}
+
+export function todayIso(
+  timeZone = LEGACY_CALENDAR_TIME_ZONE,
+  at: Date | string = new Date(),
+) {
+  return localCalendarDate(at, timeZone)
 }
 
 export function fiDate(value: string) {
@@ -90,4 +115,18 @@ export function planSessions(plan: JsonObject | null): PlannedSession[] {
     (value): value is JsonObject =>
       value !== null && typeof value === 'object' && !Array.isArray(value),
   ) as unknown as PlannedSession[]
+}
+
+export function planStrengthWeek(plan: JsonObject | null): StrengthWeekPlan | null {
+  if (!plan || !plan.strengthWeek || typeof plan.strengthWeek !== 'object') return null
+  const value = plan.strengthWeek as JsonObject
+  if (
+    typeof value.policyVersion !== 'string' ||
+    typeof value.weekAnchorDate !== 'string' ||
+    typeof value.targetSessions !== 'number' ||
+    !Array.isArray(value.reasonCodes)
+  ) {
+    return null
+  }
+  return value as unknown as StrengthWeekPlan
 }

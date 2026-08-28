@@ -282,7 +282,7 @@ describe('P0-1: keskitetty fail-closed beta- ja turvallisuusportti', () => {
       profile: {
         goal: 'GENERAL_FITNESS',
         experience: 'BEGINNER',
-        equipment: ['Kehonpaino'],
+        equipment: ['Kehonpaino', 'Vastuskuminauhat'],
         physicalLoad: 'MODERATE',
         minutesPerSession: 45,
         age: 65,
@@ -302,10 +302,13 @@ describe('P0-1: keskitetty fail-closed beta- ja turvallisuusportti', () => {
       currentEnduranceMinutes: 0,
       fixedSessions: [],
       competitions: [],
-      equipment: ['Kehonpaino'],
+      equipment: ['Kehonpaino', 'Vastuskuminauhat'],
       physicalLoad: 'MODERATE' as const,
       minutesPerSession: 45,
       generatedAt,
+      calendarTimeZone: 'Europe/Helsinki',
+      localDate: '2026-08-27',
+      weekAnchorDate: '2026-08-24',
     }
     const blockedPlan = generatePlan({ ...planInput, age: 65 })
     expect(

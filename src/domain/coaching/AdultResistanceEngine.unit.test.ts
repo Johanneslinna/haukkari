@@ -819,6 +819,9 @@ describe('AdultResistanceEngine', () => {
     )
 
     const plan = generatePlan({
+      weekAnchorDate: '2026-08-24',
+      calendarTimeZone: 'Europe/Helsinki',
+      localDate: '2026-08-25',
       goal: { primary: 'MAX_STRENGTH', secondary: [], inputs: {} },
       experience: 'INTERMEDIATE',
       availableDays: [1, 3, 5],

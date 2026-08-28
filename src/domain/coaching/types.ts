@@ -74,6 +74,8 @@ export type DecisionTrace = {
   }[]
   /** Versionoitu voimaharjoittelun tauolta paluun päätös. */
   strengthReturn?: StrengthReturnDecisionTrace
+  /** Versionoitu viikkosuunnittelun tila, jolla harjoitusrunko muodostettiin. */
+  strengthWeek?: StrengthWeekContext
 }
 
 export type StrengthReturnState =
@@ -231,6 +233,62 @@ export type GoalChangePreview = {
   }
 }
 
+export type StrengthWeekSessionRole =
+  | 'FULL_BODY'
+  | 'FULL_BODY_A'
+  | 'FULL_BODY_B'
+  | 'FULL_BODY_C'
+  | 'UPPER_A'
+  | 'LOWER_A'
+  | 'UPPER_B'
+  | 'LOWER_B'
+
+export type StrengthMovementPattern =
+  'SQUAT' | 'HINGE' | 'HORIZONTAL_PUSH' | 'HORIZONTAL_PULL' | 'CORE'
+
+export type StrengthWeekContext = {
+  policyVersion: string
+  weekAnchorDate: string
+  role: StrengthWeekSessionRole
+  sequenceIndex: number
+  plannedExposureCount: number
+  completedVolume: Record<string, number>
+  plannedVolumeBefore: Record<string, number>
+  plannedVolumeAfter: Record<string, number>
+  remainingTargetVolume: Record<string, number>
+  hardCapRemaining: Record<string, number>
+  movementPatternCoverage: StrengthMovementPattern[]
+  missingMovementPatterns: StrengthMovementPattern[]
+  reasonCodes: string[]
+}
+
+export type StrengthWeekPlan = {
+  policyVersion: string
+  weekAnchorDate: string
+  status: 'SUPPORTED' | 'PARTIAL' | 'UNSUPPORTED'
+  supportDecision: {
+    reasonCode: string
+    messageFi: string
+    actionFi: string
+    evidence: {
+      remainingTimeSeconds: number
+      minimumPolicyAdditionSeconds: number
+      unsupportedSessionCount: number
+    }
+  }
+  targetSessions: number
+  appSessionCount: number
+  fixedStrengthExposureCount: number
+  sessionExposureCount: number
+  completedVolume: Record<string, number>
+  plannedVolume: Record<string, number>
+  remainingTargetVolume: Record<string, number>
+  hardCapRemaining: Record<string, number>
+  movementPatternCoverage: StrengthMovementPattern[]
+  missingMovementPatterns: StrengthMovementPattern[]
+  reasonCodes: string[]
+}
+
 export type PlannedSession = {
   id: string
   day: number
@@ -249,6 +307,8 @@ export type PlannedSession = {
   variants?: WorkoutVariant[]
   prescriptionDetail?: PrescribedSession
   unsupportedPrescription?: UnsupportedPrescription
+  /** Sama viikkokonteksti säilyy esikatselusta harjoituksen suorittamiseen. */
+  strengthWeekContext?: StrengthWeekContext
 }
 
 export type WorkoutVariant = {
@@ -367,12 +427,18 @@ export type CapabilityEstimate = {
 }
 
 export type ExerciseProgressionDecision = {
-  action: 'RECALIBRATE_LOAD' | 'KEEP_LOAD' | 'INCREASE_REPETITIONS' | 'INCREASE_LOAD'
+  action:
+    | 'RECALIBRATE_LOAD'
+    | 'KEEP_LOAD'
+    | 'INCREASE_REPETITIONS'
+    | 'INCREASE_LOAD'
+    | 'INCREASE_SETS'
   /** Viimeisimpien vertailukelpoisten harjoitusten toteutunut kuorma. */
   currentLoadKg?: number
   nextLoadKg?: number
   nextRepetitions?: number
-  changedVariable: 'NONE' | 'LOAD' | 'REPETITIONS'
+  nextSets?: number
+  changedVariable: 'NONE' | 'LOAD' | 'REPETITIONS' | 'SETS'
   reasonCodes: string[]
   /** Eri WorkoutRecord-tunnisteet, joihin progression päätös perustuu. */
   supportingSessionIds: string[]
@@ -405,6 +471,7 @@ export type UnsupportedPrescription = {
     | 'READINESS_RED_STOP'
     | 'READINESS_RECOVERY_ONLY'
     | 'NO_SAFE_STRENGTH_DOSE_AVAILABLE'
+    | 'PULL_PATTERN_EQUIPMENT_REQUIRED'
     | 'HEALTH_ENGINE_NOT_AVAILABLE'
     | 'SPEED_POWER_ENGINE_NOT_REVIEWED'
     | 'SPORT_ENGINE_NOT_REVIEWED'
@@ -589,6 +656,7 @@ export type TrainingPlan = {
   startingEnduranceMinutes: number
   assessments: string[]
   ruleVersion: string
+  strengthWeek?: StrengthWeekPlan
 }
 
 export type ReadinessState = 'GREEN' | 'YELLOW' | 'ORANGE_RECOVERY' | 'RED_STOP'

@@ -1,10 +1,35 @@
 import { describe, expect, it, vi } from 'vitest'
-import { generatePlan } from './PlanGenerator'
+import {
+  generatePlan as generateCanonicalPlan,
+  type PlanGenerationInput,
+} from './PlanGenerator'
 import { adaptPrescription } from './TrainingPrescriptionEngine'
 import { optimizeSchedule } from './ScheduleOptimizer'
 import { getSportAdapter, listFullySupportedDisciplines } from './SportAdapterRegistry'
 import { generalSportSupportWarning } from './sports/generalSportSupportAdapter'
 import type { PlannedSession } from './types'
+
+function generatePlan(
+  input: Omit<
+    PlanGenerationInput,
+    'weekAnchorDate' | 'generatedAt' | 'calendarTimeZone' | 'localDate'
+  > &
+    Partial<
+      Pick<
+        PlanGenerationInput,
+        'weekAnchorDate' | 'generatedAt' | 'calendarTimeZone' | 'localDate'
+      >
+    >,
+) {
+  const generatedAt = input.generatedAt ?? '2026-08-27T08:00:00.000Z'
+  return generateCanonicalPlan({
+    generatedAt,
+    calendarTimeZone: 'Europe/Helsinki',
+    localDate: generatedAt.slice(0, 10),
+    weekAnchorDate: '2026-08-24',
+    ...input,
+  })
+}
 
 function appInterval(): PlannedSession {
   return {

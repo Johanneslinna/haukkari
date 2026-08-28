@@ -24,17 +24,20 @@ function session(
 
 describe('PlannerEvent ja jääkiekon suljettu beta', () => {
   it('normalisoi toistuvan jääharjoituksen kiinteäksi PlannerEvent-istunnoksi', () => {
-    const planned = plannerEventToSession({
-      id: 'ice-1',
-      kind: 'ICE_PRACTICE',
-      title: 'Jääharjoitus',
-      startsAt: '2026-08-26T18:00:00+03:00',
-      durationMinutes: 75,
-      intensity: 'HARD',
-      fixed: true,
-      recurrence: { frequency: 'WEEKLY', interval: 1 },
-      metadata: {},
-    })
+    const planned = plannerEventToSession(
+      {
+        id: 'ice-1',
+        kind: 'ICE_PRACTICE',
+        title: 'Jääharjoitus',
+        startsAt: '2026-08-26T18:00:00+03:00',
+        durationMinutes: 75,
+        intensity: 'HARD',
+        fixed: true,
+        recurrence: { frequency: 'WEEKLY', interval: 1 },
+        metadata: {},
+      },
+      'Europe/Helsinki',
+    )
     expect(planned?.kind).toBe('SPORT')
     expect(planned?.fixed).toBe(true)
     expect(planned?.notes).toContain('Toistuva viikkotapahtuma')
