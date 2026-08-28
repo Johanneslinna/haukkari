@@ -26,6 +26,19 @@ const safetyLabels: Record<SafetySymptom, string> = {
 const calfAssessmentAction =
   'Älä harjoittele. Hakeudu nopeasti terveydenhuollon arvioon toispuoleisen, lisääntyvän pohjeturvotuksen ja levossa tuntuvan kivun vuoksi.'
 
+/**
+ * Konservatiivinen INTERNAL_BETA-tuotepolitiikka, ei lääketieteellinen raja-arvo.
+ * HIGH tarkoittaa käyttöliittymässä voimakasta, liikkumista haittaavaa lihasarkuutta.
+ */
+export const SEVERE_DOMS_STRENGTH_POLICY_VERSION = 'adult-strength-severe-doms-1.0.0'
+export const SEVERE_DOMS_STRENGTH_VOLUME_MULTIPLIER = 0.5
+export const SEVERE_DOMS_STRENGTH_REASON_CODE = 'SEVERE_DOMS_STRENGTH_DELOAD'
+export const SEVERE_DOMS_STRENGTH_PROGRESSION_REASON_CODE =
+  'SEVERE_DOMS_STRENGTH_PROGRESSION_FROZEN'
+export const SEVERE_DOMS_STRENGTH_MAXIMUM_RPE = 6
+export const SEVERE_DOMS_STRENGTH_ROUNDING_RULE =
+  'CEILING_HALF_WITH_MINIMUM_ONE_SET_PER_PRESCRIBED_STRENGTH_EXERCISE'
+
 function compactVariant(availableMinutes: number): 10 | 20 | 30 | null {
   if (availableMinutes < 10) return null
   if (availableMinutes < 20) return 10
@@ -219,6 +232,31 @@ export function evaluateReadiness(
         {
           code: 'MULTIPLE_RECOVERY_FLAGS',
           message: `${recoveryFlags} samanaikaista palautumistekijää muuttaa päivän harjoituksen palauttavaksi.`,
+          priority: 'RECOVERY',
+        },
+        ...recoveryReasons,
+      ],
+      warnings: [],
+    }
+  }
+
+  if (input.plannedSession === 'STRENGTH' && input.soreness === 'HIGH') {
+    return {
+      decision: {
+        state: 'YELLOW',
+        allowedSession: input.plannedSession,
+        volumeMultiplier: SEVERE_DOMS_STRENGTH_VOLUME_MULTIPLIER,
+        maximumAttemptsAllowed: false,
+        compactVariantMinutes: compactVariant(input.availableMinutes),
+        goalChanged: false,
+        action:
+          'Tee voimaharjoitus 50 % pienemmällä sarjamäärällä, pidä teho selvästi hallittuna äläkä tee maksimiyrityksiä.',
+      },
+      reasons: [
+        {
+          code: SEVERE_DOMS_STRENGTH_REASON_CODE,
+          message:
+            'Voimakas, liikkumista haittaava lihasarkuus keventää voimaharjoituksen sarjamäärän puoleen.',
           priority: 'RECOVERY',
         },
         ...recoveryReasons,

@@ -2,8 +2,6 @@ import { expect, test } from '@playwright/test'
 import { mkdir } from 'node:fs/promises'
 import path from 'node:path'
 
-const outputDirectory = path.resolve('docs/ui-validation/haukkari-today')
-
 test('Tänään-näkymän responsiiviset koot ja keskeiset tilat', async ({
   page,
 }, testInfo) => {
@@ -11,6 +9,7 @@ test('Tänään-näkymän responsiiviset koot ja keskeiset tilat', async ({
     testInfo.project.name !== 'desktop-keyboard',
     'Visuaaliset kuvat tuotetaan kerran Chromiumilla.',
   )
+  const outputDirectory = testInfo.outputPath('haukkari-today')
   await page.clock.install({ time: new Date('2026-08-27T08:00:00.000Z') })
   await mkdir(outputDirectory, { recursive: true })
   await page.addInitScript(() => {

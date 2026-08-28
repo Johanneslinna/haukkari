@@ -723,7 +723,13 @@ export async function saveDailyCheckIn(data: AppDataContextValue, input: Readine
   const payload = toJsonObject({
     checkin_date: clock.localDate,
     readiness: result.decision.state,
-    answers: { ...input, recommendation: result.decision },
+    answers: {
+      ...input,
+      recommendation: {
+        ...result.decision,
+        reasonCodes: result.reasons.map((reason) => reason.code),
+      },
+    },
     reasons: result.reasons.map((reason) => reason.message),
   })
   if (existing) await data.update(existing, payload)

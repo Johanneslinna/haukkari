@@ -164,8 +164,30 @@ test('offline-uudelleenkäynnistys, kaksi selainkontekstia, konflikti ja tombsto
 
     await contextA.setOffline(true)
     const workoutId = await pageA.evaluate(
-      ({ id, notes }) => window.__treenikompassiSyncTest!.createWorkout(id, notes),
-      { id: userId, notes: 'Offline-selaimen merkintä' },
+      ({ id, notes, decisionTrace }) =>
+        window.__treenikompassiSyncTest!.createWorkout(id, notes, decisionTrace),
+      {
+        id: userId,
+        notes: 'Offline-selaimen merkintä',
+        decisionTrace: {
+          ruleIds: ['adult-strength-severe-doms-1.0.0'],
+          rules: [{ ruleId: 'READINESS-SEVERE-DOMS-001', outcome: 'MODIFY' }],
+          adaptations: [
+            {
+              original: { workingSetCount: 10 },
+              adjusted: {
+                workingSetCount: 5,
+                maximumTargetRpe: 6,
+                policyVersion: 'adult-strength-severe-doms-1.0.0',
+              },
+              reasonCodes: [
+                'SEVERE_DOMS_STRENGTH_DELOAD',
+                'SEVERE_DOMS_STRENGTH_PROGRESSION_FROZEN',
+              ],
+            },
+          ],
+        },
+      },
     )
     expect(
       await pageA.evaluate(
@@ -182,7 +204,28 @@ test('offline-uudelleenkäynnistys, kaksi selainkontekstia, konflikti ja tombsto
         window.__treenikompassiSyncTest!.getWorkout(id, recordId),
       { userId, workoutId },
     )
-    expect(persisted).toMatchObject({ data: { notes: 'Offline-selaimen merkintä' } })
+    expect(persisted).toMatchObject({
+      data: {
+        notes: 'Offline-selaimen merkintä',
+        decision_trace: {
+          ruleIds: ['adult-strength-severe-doms-1.0.0'],
+          adaptations: [
+            {
+              original: { workingSetCount: 10 },
+              adjusted: {
+                workingSetCount: 5,
+                maximumTargetRpe: 6,
+                policyVersion: 'adult-strength-severe-doms-1.0.0',
+              },
+              reasonCodes: [
+                'SEVERE_DOMS_STRENGTH_DELOAD',
+                'SEVERE_DOMS_STRENGTH_PROGRESSION_FROZEN',
+              ],
+            },
+          ],
+        },
+      },
+    })
 
     await contextA.setOffline(false)
     await pageA.goto('/synkronointi')
@@ -197,7 +240,27 @@ test('offline-uudelleenkäynnistys, kaksi selainkontekstia, konflikti ja tombsto
           { userId, workoutId },
         ),
       )
-      .toMatchObject({ data: { notes: 'Offline-selaimen merkintä' } })
+      .toMatchObject({
+        data: {
+          notes: 'Offline-selaimen merkintä',
+          decision_trace: {
+            ruleIds: ['adult-strength-severe-doms-1.0.0'],
+            adaptations: [
+              {
+                adjusted: {
+                  workingSetCount: 5,
+                  maximumTargetRpe: 6,
+                  policyVersion: 'adult-strength-severe-doms-1.0.0',
+                },
+                reasonCodes: [
+                  'SEVERE_DOMS_STRENGTH_DELOAD',
+                  'SEVERE_DOMS_STRENGTH_PROGRESSION_FROZEN',
+                ],
+              },
+            ],
+          },
+        },
+      })
 
     await contextA.setOffline(true)
     await contextB.setOffline(true)

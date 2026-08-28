@@ -1,6 +1,10 @@
-import type { AdultResistanceSetHistory, WorkoutFeedback } from '../../domain/coaching'
+import {
+  SEVERE_DOMS_STRENGTH_REASON_CODE,
+  type AdultResistanceSetHistory,
+  type WorkoutFeedback,
+} from '../../domain/coaching'
 import type { LocalRecord } from '../../domain/sync/types'
-import { objectValue, stringValue } from '../coaching/coachingData'
+import { arrayValue, objectValue, stringValue } from '../coaching/coachingData'
 
 function savedFeedback(record: LocalRecord) {
   const value = objectValue(record.data.feedback)
@@ -9,12 +13,27 @@ function savedFeedback(record: LocalRecord) {
     : null
 }
 
+function hasSevereDomsDeload(record: LocalRecord) {
+  const trace = objectValue(record.data.decision_trace)
+  return (
+    arrayValue(trace.rules).some(
+      (value) => objectValue(value).ruleId === 'READINESS-SEVERE-DOMS-001',
+    ) ||
+    arrayValue(trace.adaptations).some((value) =>
+      arrayValue(objectValue(value).reasonCodes).includes(
+        SEVERE_DOMS_STRENGTH_REASON_CODE,
+      ),
+    )
+  )
+}
+
 export function strengthHistoryFromLogs(
   records: LocalRecord[],
 ): AdultResistanceSetHistory[] {
   return records.flatMap((record) => {
     const feedback = savedFeedback(record)
     if (!feedback?.exerciseResults) return []
+    const severeDomsDeload = hasSevereDomsDeload(record)
     const completedAt = stringValue(record.data.performed_at, record.createdAt)
     const sessionId = stringValue(record.data.workout_id) || undefined
     return feedback.exerciseResults.flatMap((result) => {
@@ -57,6 +76,7 @@ export function strengthHistoryFromLogs(
             difficultyTooHard: feedback.difficulty === 'TOO_HARD',
             feltWorse: feedback.felt === 'WORSE',
             sessionRpeNineOrMore: feedback.sessionRpe >= 9,
+            severeDomsDeload,
           },
         ]
       })
@@ -92,6 +112,7 @@ export function strengthHistoryFromLogs(
           difficultyTooHard: feedback.difficulty === 'TOO_HARD',
           feltWorse: feedback.felt === 'WORSE',
           sessionRpeNineOrMore: feedback.sessionRpe >= 9,
+          severeDomsDeload,
         },
       ]
     })

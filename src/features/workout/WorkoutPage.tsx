@@ -1,4 +1,4 @@
-import { useEffect, useState, type FormEvent } from 'react'
+import { useEffect, useRef, useState, type FormEvent } from 'react'
 import { Link, useNavigate, useSearchParams } from 'react-router-dom'
 import {
   adaptNextSet,
@@ -13,6 +13,7 @@ import {
   resolvePrescription,
   refreshAdultResistanceProgression,
   refreshStrengthPrescriptionTimeEstimate,
+  SEVERE_DOMS_STRENGTH_REASON_CODE,
   strengthTrainingBackgroundFrom,
   verifiedNextLoadsFrom,
   type CompletedSet,
@@ -38,6 +39,7 @@ import {
   startWorkout,
 } from '../coaching/coachingActions'
 import {
+  arrayValue,
   objectValue,
   calendarContextForProfile,
   numberValue,
@@ -281,12 +283,19 @@ export function WorkoutPage() {
   const onboardingScreening = data.latest('health_screenings')
   const screeningAnswers = objectValue(onboardingScreening?.data.answers)
   const screeningReviewRequired = onboardingScreening?.data.status === 'NEEDS_REVIEW'
+  const checkInAnswers = objectValue(todayCheckIn?.data.answers)
+  const checkInRecommendation = objectValue(checkInAnswers.recommendation)
+  const readinessReasonCodes = arrayValue(checkInRecommendation.reasonCodes).filter(
+    (value): value is string => typeof value === 'string',
+  )
+  const severeDomsDeload = readinessReasonCodes.includes(SEVERE_DOMS_STRENGTH_REASON_CODE)
   const currentReadiness = storedReadiness(todayCheckIn?.data.readiness)
   const readiness = currentReadiness ?? 'GREEN'
   const safetyContext = currentWorkoutSafetyContext({
     profile: currentProfile,
     screening: onboardingScreening,
     readiness: todayCheckIn?.data.readiness,
+    readinessReasonCodes,
     today: clock.localDate,
   })
   const persistedWorkout = data
@@ -304,8 +313,6 @@ export function WorkoutPage() {
     persistedWorkout ?? null,
   )
   const variants = session?.variants ?? []
-  const checkInAnswers = objectValue(todayCheckIn?.data.answers)
-  const checkInRecommendation = objectValue(checkInAnswers.recommendation)
   const allowedSession = stringValue(
     checkInRecommendation.allowedSession,
     session?.kind ?? 'REST',
@@ -430,6 +437,7 @@ export function WorkoutPage() {
           profile: currentProfile,
           screening: onboardingScreening,
           readiness: todayCheckIn?.data.readiness,
+          readinessReasonCodes,
           today: clock.localDate,
         })
         if (adapted.status !== 'SUPPORTED') return []
@@ -478,6 +486,7 @@ export function WorkoutPage() {
       readiness: priorResponseRequiresRecovery
         ? 'ORANGE_RECOVERY'
         : todayCheckIn?.data.readiness,
+      readinessReasonCodes,
       today: clock.localDate,
     })
   })()
@@ -494,22 +503,6 @@ export function WorkoutPage() {
         )
       : null
   const storedResumedPrescription = savedPrescription(persistedWorkout ?? null)
-  const resumedAuthorization = storedResumedPrescription
-    ? authorizeWorkoutPrescriptionForCurrentAthlete({
-        prescription: storedResumedPrescription,
-        profile: currentProfile,
-        screening: onboardingScreening,
-        readiness: todayCheckIn?.data.readiness,
-        today: clock.localDate,
-      })
-    : null
-  const resumedPrescription =
-    resumedAuthorization?.status === 'SUPPORTED' &&
-    prescriptionResolution?.status === 'SUPPORTED' &&
-    (storedResumedPrescription?.kind !== 'STRENGTH' ||
-      prescriptionResolution.prescription.kind === 'STRENGTH')
-      ? resumedAuthorization.prescription
-      : null
   const resumedWorkoutLog = data
     .list('workout_logs')
     .find(
@@ -520,6 +513,35 @@ export function WorkoutPage() {
   const resumedSetLogs = data
     .list('exercise_set_logs')
     .filter((record) => record.data.workout_log_id === resumedWorkoutLog?.id)
+  const completedUnitsByExerciseId = resumedSetLogs.reduce<Record<string, number>>(
+    (counts, record) => {
+      const details = objectValue(record.data.data)
+      if (details.completed !== true || typeof details.exercise_id !== 'string') {
+        return counts
+      }
+      counts[details.exercise_id] = (counts[details.exercise_id] ?? 0) + 1
+      return counts
+    },
+    {},
+  )
+  const resumedAuthorization = storedResumedPrescription
+    ? authorizeWorkoutPrescriptionForCurrentAthlete({
+        prescription: storedResumedPrescription,
+        profile: currentProfile,
+        screening: onboardingScreening,
+        readiness: todayCheckIn?.data.readiness,
+        readinessReasonCodes,
+        completedUnitsByExerciseId,
+        today: clock.localDate,
+      })
+    : null
+  const resumedPrescription =
+    resumedAuthorization?.status === 'SUPPORTED' &&
+    prescriptionResolution?.status === 'SUPPORTED' &&
+    (storedResumedPrescription?.kind !== 'STRENGTH' ||
+      prescriptionResolution.prescription.kind === 'STRENGTH')
+      ? resumedAuthorization.prescription
+      : null
   const [runningPrescription, setRunningPrescription] =
     useState<PrescribedSession | null>(resumedPrescription)
   const [sets, setSets] = useState<EditableSet[]>(() =>
@@ -557,12 +579,14 @@ export function WorkoutPage() {
   const [nextLoadMessages, setNextLoadMessages] = useState<
     Record<string, { kind: 'error' | 'success'; text: string }>
   >({})
+  const persistedDomsAdaptationWorkoutId = useRef<string | null>(null)
   const runningAuthorization = runningPrescription
     ? authorizeWorkoutPrescriptionForCurrentAthlete({
         prescription: runningPrescription,
         profile: currentProfile,
         screening: onboardingScreening,
         readiness: todayCheckIn?.data.readiness,
+        readinessReasonCodes,
         today: clock.localDate,
       })
     : null
@@ -580,6 +604,36 @@ export function WorkoutPage() {
     )
     return () => window.clearInterval(timer)
   }, [restSeconds])
+
+  useEffect(() => {
+    if (
+      !persistedWorkout ||
+      persistedDomsAdaptationWorkoutId.current === persistedWorkout.id ||
+      !storedResumedPrescription ||
+      resumedAuthorization?.status !== 'SUPPORTED' ||
+      storedResumedPrescription.decisionTrace.rules.some(
+        (rule) => rule.ruleId === 'READINESS-SEVERE-DOMS-001',
+      ) ||
+      !resumedAuthorization.prescription.decisionTrace.rules.some(
+        (rule) => rule.ruleId === 'READINESS-SEVERE-DOMS-001',
+      )
+    ) {
+      return
+    }
+    persistedDomsAdaptationWorkoutId.current = persistedWorkout.id
+    void saveWorkoutAdaptation(
+      data,
+      persistedWorkout,
+      resumedAuthorization.prescription,
+    ).catch((reason: unknown) => {
+      persistedDomsAdaptationWorkoutId.current = null
+      setError(
+        reason instanceof Error
+          ? reason.message
+          : 'Lihasarkuuden harjoitussovitusta ei voitu tallentaa.',
+      )
+    })
+  }, [data, persistedWorkout, resumedAuthorization, storedResumedPrescription])
 
   if (screeningReviewRequired) {
     return (
@@ -1292,11 +1346,13 @@ export function WorkoutPage() {
           effectiveSessionKind !== session.kind) && (
           <div className="status-banner" role="status">
             <strong>Päivän ohjelmaa sovitettiin ennakkonäkymästä.</strong>{' '}
-            {effectiveSessionKind !== session.kind
-              ? 'Kuntotarkistus vaihtoi harjoitustyypin tämän päivän turvallisen päätöksen perusteella.'
-              : variantKind !== 'FULL'
-                ? 'Käytössä oleva aika tai päivän valmius valitsi lyhyemmän tai kevennetyn version samasta viikkorungosta.'
-                : 'Päivän valmius kevensi samaa viikkorunkoa.'}
+            {severeDomsDeload
+              ? 'Voimakas, liikkumista haittaava lihasarkuus puolitti työsarjojen määrän ja rajasi tehon hallituksi.'
+              : effectiveSessionKind !== session.kind
+                ? 'Kuntotarkistus vaihtoi harjoitustyypin tämän päivän turvallisen päätöksen perusteella.'
+                : variantKind !== 'FULL'
+                  ? 'Käytössä oleva aika tai päivän valmius valitsi lyhyemmän tai kevennetyn version samasta viikkorungosta.'
+                  : 'Päivän valmius kevensi samaa viikkorunkoa.'}
           </div>
         )}
 

@@ -2,7 +2,9 @@ import { describe, expect, it } from 'vitest'
 import {
   adaptPrescription,
   applyWorkoutProgression,
+  calculatePlannedMuscleVolume,
   evaluateWorkoutFeedback,
+  mergeMuscleVolume,
   normalizePrescriptionV2,
   prescriptionDurationSeconds,
   prescribeSession,
@@ -126,6 +128,266 @@ describe('TrainingPrescriptionEngine – kultaiset käyttäjäprofiilit', () => 
     expect(high.exercises[0]!.sets).toBe(normal.exercises[0]!.sets - 1)
     expect(high.exercises[0]!.targetRpe).toBe(normal.exercises[0]!.targetRpe - 1)
     expect(high.decisionTrace.safetyOutcome).toBe('MODIFY')
+  })
+
+  it('31: tuotannon adaptPrescription puolittaa voimakkaan DOMS:n työsarjat mutta säilyttää palautukset', () => {
+    const full = prescribeSession({
+      sessionId: 'severe-doms-strength',
+      title: 'Voima',
+      kind: 'STRENGTH',
+      durationMinutes: 60,
+      profile: profile({
+        experience: 'INTERMEDIATE',
+        equipment: ['Kehonpaino', 'Käsipainot'],
+        minutesPerSession: 60,
+      }),
+    })
+    const originalSets = full.exercises.reduce((sum, exercise) => sum + exercise.sets, 0)
+    const originalRests = new Map(
+      full.exercises.map((exercise) => [exercise.id, exercise.restSeconds]),
+    )
+    const result = adaptPrescription(
+      full,
+      { kind: 'FULL', durationMinutes: 60, volumeMultiplier: 1 },
+      {
+        ...adaptationSafety,
+        readiness: 'YELLOW',
+        readinessReasonCodes: ['SEVERE_DOMS_STRENGTH_DELOAD'],
+      },
+    )
+
+    expect(result.status).toBe('SUPPORTED')
+    if (result.status !== 'SUPPORTED') throw new Error(result.reasonCode)
+    const adaptedSets = result.prescription.exercises.reduce(
+      (sum, exercise) => sum + exercise.sets,
+      0,
+    )
+    expect(adaptedSets).toBe(Math.ceil(originalSets * 0.5))
+    expect(
+      result.prescription.exercises.every((exercise) => exercise.targetRpe <= 6),
+    ).toBe(true)
+    expect(
+      result.prescription.exercises.every(
+        (exercise) => exercise.restSeconds === originalRests.get(exercise.id),
+      ),
+    ).toBe(true)
+    expect(result.prescription.decisionTrace.rules.map((rule) => rule.ruleId)).toContain(
+      'READINESS-SEVERE-DOMS-001',
+    )
+    expect(
+      result.prescription.exercises.every(
+        (exercise) =>
+          exercise.progressionDecision?.action === 'KEEP_LOAD' &&
+          exercise.progressionDecision.reasonCodes.includes(
+            'SEVERE_DOMS_STRENGTH_PROGRESSION_FROZEN',
+          ),
+      ),
+    ).toBe(true)
+  })
+
+  it.each([
+    [1, 1],
+    [2, 1],
+    [3, 2],
+    [4, 2],
+    [5, 3],
+  ])('DOMS-puolitus pyöristää %i sarjaa ylöspäin arvoon %i', (sets, expected) => {
+    const full = prescribeSession({
+      sessionId: `severe-doms-rounding-${sets}`,
+      title: 'Voima',
+      kind: 'STRENGTH',
+      durationMinutes: 45,
+      profile: profile({ experience: 'INTERMEDIATE' }),
+    })
+    const source = full.exercises[0]!
+    const exercise = {
+      ...source,
+      sets,
+      dose:
+        source.dose?.kind === 'STRENGTH_SETS' ? { ...source.dose, sets } : source.dose,
+    }
+    const result = adaptPrescription(
+      { ...full, exercises: [exercise], blocks: [exercise] },
+      { kind: 'FULL', durationMinutes: 45, volumeMultiplier: 1 },
+      {
+        ...adaptationSafety,
+        readiness: 'YELLOW',
+        readinessReasonCodes: ['SEVERE_DOMS_STRENGTH_DELOAD'],
+      },
+    )
+
+    expect(result.status).toBe('SUPPORTED')
+    if (result.status !== 'SUPPORTED') throw new Error(result.reasonCode)
+    expect(result.prescription.exercises).toHaveLength(1)
+    expect(result.prescription.exercises[0]?.sets).toBe(expected)
+    expect(result.prescription.exercises[0]?.sets).toBeGreaterThan(0)
+    expect(result.prescription.decisionTrace.adaptations).toContainEqual({
+      original: { workingSetCount: sets },
+      adjusted: expect.objectContaining({
+        workingSetCount: expected,
+        maximumTargetRpe: 6,
+        policyVersion: 'adult-strength-severe-doms-1.0.0',
+        roundingRule:
+          'CEILING_HALF_WITH_MINIMUM_ONE_SET_PER_PRESCRIBED_STRENGTH_EXERCISE',
+      }),
+      reasonCodes: [
+        'SEVERE_DOMS_STRENGTH_DELOAD',
+        'SEVERE_DOMS_STRENGTH_PROGRESSION_FROZEN',
+      ],
+    })
+  })
+
+  it('DOMS-sovitus ei palauta tyhjää SUPPORTED-harjoitusta', () => {
+    const full = prescribeSession({
+      sessionId: 'severe-doms-empty',
+      title: 'Voima',
+      kind: 'STRENGTH',
+      durationMinutes: 45,
+      profile: profile(),
+    })
+    const result = adaptPrescription(
+      { ...full, exercises: [], blocks: [] },
+      { kind: 'FULL', durationMinutes: 45, volumeMultiplier: 1 },
+      {
+        ...adaptationSafety,
+        readiness: 'YELLOW',
+        readinessReasonCodes: ['SEVERE_DOMS_STRENGTH_DELOAD'],
+      },
+    )
+
+    expect(result).toMatchObject({
+      status: 'UNSUPPORTED',
+      reasonCode: 'NO_SAFE_STRENGTH_DOSE_AVAILABLE',
+    })
+  })
+
+  it('DOMS-sovitus päivittää aika-arvion ja viikkovolyymin mukautettuun annokseen', () => {
+    const full = prescribeSession({
+      sessionId: 'severe-doms-week-context',
+      title: 'Voima',
+      kind: 'STRENGTH',
+      durationMinutes: 60,
+      profile: profile({
+        experience: 'INTERMEDIATE',
+        equipment: ['Kehonpaino', 'Käsipainot'],
+        minutesPerSession: 60,
+      }),
+    })
+    const plannedVolumeBefore = { QUADS: 2 }
+    const withWeekContext = {
+      ...full,
+      decisionTrace: {
+        ...full.decisionTrace,
+        strengthWeek: {
+          policyVersion: 'adult-strength-week-1.0.0',
+          weekAnchorDate: '2026-08-24',
+          role: 'FULL_BODY' as const,
+          sequenceIndex: 0,
+          plannedExposureCount: 2,
+          completedVolume: {},
+          plannedVolumeBefore,
+          plannedVolumeAfter: mergeMuscleVolume(
+            plannedVolumeBefore,
+            calculatePlannedMuscleVolume(full.exercises),
+          ),
+          remainingTargetVolume: {},
+          hardCapRemaining: {},
+          movementPatternCoverage: [],
+          missingMovementPatterns: [],
+          reasonCodes: [],
+        },
+      },
+    }
+    const result = adaptPrescription(
+      withWeekContext,
+      { kind: 'FULL', durationMinutes: 60, volumeMultiplier: 1 },
+      {
+        ...adaptationSafety,
+        readiness: 'YELLOW',
+        readinessReasonCodes: ['SEVERE_DOMS_STRENGTH_DELOAD'],
+      },
+    )
+
+    expect(result.status).toBe('SUPPORTED')
+    if (result.status !== 'SUPPORTED') throw new Error(result.reasonCode)
+    expect(result.prescription.decisionTrace.strengthWeek?.plannedVolumeAfter).toEqual(
+      mergeMuscleVolume(
+        plannedVolumeBefore,
+        calculatePlannedMuscleVolume(result.prescription.exercises),
+      ),
+    )
+    expect(result.prescription.calculatedTotalSeconds).toBe(
+      result.prescription.timeBreakdown?.totalSeconds,
+    )
+    expect(result.prescription.calculatedTotalSeconds).toBeLessThanOrEqual(
+      (result.prescription.timeBudgetMinutes ?? result.prescription.durationMinutes) * 60,
+    )
+  })
+
+  it.each([
+    {
+      label: 'RED_STOP',
+      context: { readiness: 'RED_STOP' as const, healthBlocked: false },
+      expected: { status: 'UNSUPPORTED', reasonCode: 'READINESS_RED_STOP' },
+    },
+    {
+      label: 'terveysesto',
+      context: { readiness: 'YELLOW' as const, healthBlocked: true },
+      expected: { status: 'UNSUPPORTED', reasonCode: 'HEALTH_ENGINE_NOT_AVAILABLE' },
+    },
+    {
+      label: 'ORANGE_RECOVERY',
+      context: { readiness: 'ORANGE_RECOVERY' as const, healthBlocked: false },
+      expected: { status: 'SUPPORTED', prescription: { kind: 'RECOVERY' } },
+    },
+  ])('P0-portti voittaa DOMS-reason coden: $label', ({ context, expected }) => {
+    const full = prescribeSession({
+      sessionId: 'severe-doms-safety-precedence',
+      title: 'Voima',
+      kind: 'STRENGTH',
+      durationMinutes: 45,
+      profile: profile(),
+    })
+    const result = adaptPrescription(
+      full,
+      { kind: 'FULL', durationMinutes: 45, volumeMultiplier: 1 },
+      {
+        ...adaptationSafety,
+        ...context,
+        readinessReasonCodes: ['SEVERE_DOMS_STRENGTH_DELOAD'],
+      },
+    )
+
+    expect(result).toMatchObject(expected)
+    if (result.status === 'SUPPORTED') {
+      expect(
+        result.prescription.decisionTrace.rules.map((rule) => rule.ruleId),
+      ).not.toContain('READINESS-SEVERE-DOMS-001')
+    }
+  })
+
+  it('YELLOW ilman voimakkaan DOMS:n reason codea säilyttää tavallisen kevennyksen', () => {
+    const full = prescribeSession({
+      sessionId: 'ordinary-yellow-strength',
+      title: 'Voima',
+      kind: 'STRENGTH',
+      durationMinutes: 60,
+      profile: profile({ experience: 'INTERMEDIATE', minutesPerSession: 60 }),
+    })
+    const result = adaptPrescription(
+      full,
+      { kind: 'LIGHT', durationMinutes: 60, volumeMultiplier: 0.65 },
+      { ...adaptationSafety, readiness: 'YELLOW', readinessReasonCodes: [] },
+    )
+
+    expect(result.status).toBe('SUPPORTED')
+    if (result.status !== 'SUPPORTED') throw new Error(result.reasonCode)
+    expect(result.prescription.decisionTrace.rules.map((rule) => rule.ruleId)).toContain(
+      'READINESS-YELLOW-001',
+    )
+    expect(
+      result.prescription.decisionTrace.rules.map((rule) => rule.ruleId),
+    ).not.toContain('READINESS-SEVERE-DOMS-001')
   })
 
   it('10 minuutin versio säilyttää kaksi priorisoitua avainliikettä myös viikon kattavuussnapshotista', () => {

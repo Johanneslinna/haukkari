@@ -329,7 +329,7 @@ export function DailyCheckInPage() {
           >
             <option value="LOW">Vähäinen</option>
             <option value="NORMAL">Tavallinen</option>
-            <option value="HIGH">Voimakas</option>
+            <option value="HIGH">Voimakas ja haittaa liikkumista</option>
           </select>
         </label>
         <label className="field">

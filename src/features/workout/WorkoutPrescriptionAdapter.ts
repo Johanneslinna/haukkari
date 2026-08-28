@@ -1,10 +1,12 @@
 import {
   ADULT_STRENGTH_TIME_POLICY_VERSION,
+  SEVERE_DOMS_STRENGTH_REASON_CODE,
   adaptPrescription,
   evaluatePrescriptionAdaptationSafety,
   strengthSafetyGateMessage,
   type ConfirmedLimitationTag,
   type PrescribedSession,
+  type PrescriptionAdaptationProgressContext,
   type PrescriptionAdaptationSafetyContext,
   type PrescriptionResult,
   type ReadinessState,
@@ -66,6 +68,7 @@ export function currentWorkoutSafetyContext(input: {
   profile: LocalRecord | null
   screening: LocalRecord | null
   readiness: unknown
+  readinessReasonCodes?: unknown
   today?: string
 }): PrescriptionAdaptationSafetyContext {
   const screeningStatus = stringValue(input.screening?.data.status)
@@ -90,6 +93,15 @@ export function currentWorkoutSafetyContext(input: {
     safetyInformationComplete:
       typeof healthBlocked === 'boolean' &&
       (!hasLegacyLimitationText || hasConfirmedLimitation),
+    ...(input.readinessReasonCodes === undefined
+      ? {}
+      : {
+          readinessReasonCodes: Array.isArray(input.readinessReasonCodes)
+            ? input.readinessReasonCodes.filter(
+                (value): value is string => typeof value === 'string',
+              )
+            : [],
+        }),
   }
 }
 
@@ -103,6 +115,7 @@ export function adaptWorkoutPrescriptionForCurrentAthlete(input: {
   profile: LocalRecord | null
   screening: LocalRecord | null
   readiness: unknown
+  readinessReasonCodes?: unknown
   today?: string
 }): PrescriptionResult {
   return adaptPrescription(
@@ -118,15 +131,26 @@ export function authorizeWorkoutPrescriptionForCurrentAthlete(input: {
   profile: LocalRecord | null
   screening: LocalRecord | null
   readiness: unknown
+  readinessReasonCodes?: unknown
+  completedUnitsByExerciseId?: PrescriptionAdaptationProgressContext['completedUnitsByExerciseId']
   today?: string
 }): PrescriptionResult {
   const safetyContext = currentWorkoutSafetyContext(input)
   const gate = evaluatePrescriptionAdaptationSafety(input.prescription, safetyContext)
   if (gate.allowed) {
-    if (
+    const severeDomsAdaptationRequired =
       input.prescription.kind === 'STRENGTH' &&
-      (input.prescription.timePolicyVersion !== ADULT_STRENGTH_TIME_POLICY_VERSION ||
-        !input.prescription.timeBreakdown)
+      safetyContext.readiness === 'YELLOW' &&
+      safetyContext.readinessReasonCodes?.includes(SEVERE_DOMS_STRENGTH_REASON_CODE) ===
+        true &&
+      !input.prescription.decisionTrace.rules.some(
+        (rule) => rule.ruleId === 'READINESS-SEVERE-DOMS-001',
+      )
+    if (
+      severeDomsAdaptationRequired ||
+      (input.prescription.kind === 'STRENGTH' &&
+        (input.prescription.timePolicyVersion !== ADULT_STRENGTH_TIME_POLICY_VERSION ||
+          !input.prescription.timeBreakdown))
     ) {
       const timeBudgetMinutes =
         input.prescription.timeBudgetMinutes ?? input.prescription.durationMinutes
@@ -139,6 +163,7 @@ export function authorizeWorkoutPrescriptionForCurrentAthlete(input: {
           volumeMultiplier: 1,
         },
         safetyContext,
+        { completedUnitsByExerciseId: input.completedUnitsByExerciseId },
       )
     }
     return { status: 'SUPPORTED', prescription: input.prescription }

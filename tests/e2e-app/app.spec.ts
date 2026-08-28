@@ -358,6 +358,77 @@ test('tauolta paluun päätös näkyy oikeassa käyttäjäpolussa ja säilyy lat
   await expect(page.getByText(/Hyväksyttyjä paluuharjoituksia: 0\/6/u)).toBeVisible()
 })
 
+test('voimakas DOMS puolittaa voimaharjoituksen sarjat oikeassa käyttäjäpolussa', async ({
+  page,
+}) => {
+  await completeOnboarding(page, {
+    strengthProgressionScenario: true,
+    returningStrengthDays: 1,
+    experience: 'INTERMEDIATE',
+    equipmentPreset: 'Koti',
+    withStrengthSafetyContext: true,
+  })
+  const weekday = await page.evaluate(() => new Date().getDay() || 7)
+  await page.goto('/viikko')
+  await page
+    .locator('.week-day')
+    .nth(weekday - 1)
+    .locator('.session-block')
+    .click()
+  const plannedDoses = page.locator('.exercise-plan-list .exercise-dose strong')
+  await expect(plannedDoses.first()).toBeVisible()
+  const plannedDoseLabels = await plannedDoses.allTextContents()
+  const plannedSets = plannedDoseLabels.reduce(
+    (sum, label) => sum + Number(label.match(/\d+/u)?.[0] ?? 0),
+    0,
+  )
+  expect(plannedSets).toBeGreaterThan(0)
+
+  await page.getByRole('link', { name: /^(?:Nyt|Tänään)$/u }).click()
+  await page.getByRole('link', { name: 'Aloita treeni' }).click()
+  await page.getByRole('button', { name: 'Haluan kertoa tarkemmin' }).click()
+  await page.getByLabel('Lihasarkuus').selectOption('HIGH')
+  await page.getByLabel('Toivottu harjoitustyyppi').selectOption('STRENGTH')
+  await page.getByRole('button', { name: 'Näytä päivän suositus' }).click()
+
+  await expect(
+    page.getByRole('heading', { name: 'Keltainen – kevennä määrää' }),
+  ).toBeVisible()
+  await expect(page.getByText(/50 % pienemmällä sarjamäärällä/u)).toBeVisible()
+  await page.getByRole('link', { name: 'Avaa päivän harjoitus' }).click()
+
+  const adaptedDoses = page.locator('.exercise-plan-list .exercise-dose strong')
+  await expect(adaptedDoses.first()).toBeVisible()
+  const adaptedDoseLabels = await adaptedDoses.allTextContents()
+  const adaptedSets = adaptedDoseLabels.reduce(
+    (sum, label) => sum + Number(label.match(/\d+/u)?.[0] ?? 0),
+    0,
+  )
+  expect(adaptedSets).toBe(Math.ceil(plannedSets * 0.5))
+  await expect(page.getByText(/lihasarkuus puolitti työsarjojen määrän/iu)).toBeVisible()
+
+  await page.reload()
+  const reloadedDoses = page.locator('.exercise-plan-list .exercise-dose strong')
+  await expect(reloadedDoses.first()).toBeVisible()
+  const reloadedDoseLabels = await reloadedDoses.allTextContents()
+  const reloadedSets = reloadedDoseLabels.reduce(
+    (sum, label) => sum + Number(label.match(/\d+/u)?.[0] ?? 0),
+    0,
+  )
+  expect(reloadedSets).toBe(adaptedSets)
+
+  await page.getByRole('button', { name: 'Aloita harjoitus' }).click()
+  await expect(page.locator('.active-exercise-card .load-guidance')).toContainText(
+    /säilytä kuorma ja toistot; voimakkaan lihasarkuuden/iu,
+  )
+  await expect(page.getByText(`0/${adaptedSets} sarjaa/osiota kirjattu`)).toBeVisible()
+  await page.reload()
+  await expect(page.locator('.active-exercise-card .load-guidance')).toContainText(
+    /säilytä kuorma ja toistot; voimakkaan lihasarkuuden/iu,
+  )
+  await expect(page.getByText(`0/${adaptedSets} sarjaa/osiota kirjattu`)).toBeVisible()
+})
+
 function repetitionsFromDose(value: string, useMaximum: boolean) {
   const numbers = [...value.matchAll(/\d+/gu)].map((match) => Number(match[0]))
   const maximum = numbers.at(-1)

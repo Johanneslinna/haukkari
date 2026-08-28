@@ -20,7 +20,11 @@ async function deviceId(userId: string) {
 }
 
 export type BrowserSyncHarness = {
-  createWorkout: (userId: string, notes: string) => Promise<string>
+  createWorkout: (
+    userId: string,
+    notes: string,
+    decisionTrace?: JsonObject,
+  ) => Promise<string>
   updateWorkout: (userId: string, id: string, notes: string) => Promise<void>
   deleteWorkout: (userId: string, id: string) => Promise<void>
   getWorkout: (userId: string, id: string) => Promise<unknown>
@@ -42,12 +46,16 @@ export type BrowserSyncHarness = {
 
 export function installBrowserSyncHarness() {
   const harness: BrowserSyncHarness = {
-    async createWorkout(userId, notes) {
+    async createWorkout(userId, notes, decisionTrace) {
       const record = await writes.create({
         userId,
         deviceId: await deviceId(userId),
         table: 'workout_logs',
-        data: { performed_at: new Date().toISOString(), notes },
+        data: {
+          performed_at: new Date().toISOString(),
+          notes,
+          ...(decisionTrace ? { decision_trace: decisionTrace } : {}),
+        },
       })
       return record.id
     },

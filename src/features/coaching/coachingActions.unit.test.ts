@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest'
+import { resolvePrescription } from '../../domain/coaching'
 import type { JsonObject, LocalRecord, SyncableTable } from '../../domain/sync/types'
 import type { AppDataContextValue } from '../app-data/appDataContextValue'
 import {
@@ -7,6 +8,8 @@ import {
   classifyOnboardingHealth,
   confirmNextAvailableLoad,
   ensureCurrentStrengthWeekPlan,
+  saveDailyCheckIn,
+  saveWorkoutAdaptation,
 } from './coachingActions'
 
 const userId = '00000000-0000-4000-8000-000000000001'
@@ -260,6 +263,127 @@ describe('aloituskartoituksen terveysrajat', () => {
         doctorRestrictions: 'Vältä raskasta alavartalokuormaa',
       }).highIntensityBlocked,
     ).toBe(true)
+  })
+})
+
+describe('päivän kuntotarkistuksen päätöksen tallennus', () => {
+  it('säilyttää voimakkaan DOMS:n vakaan reason coden prescription-sovitusta varten', async () => {
+    const data = mutableData([])
+
+    const result = await saveDailyCheckIn(data, {
+      goal: 'GENERAL_FITNESS',
+      plannedSession: 'STRENGTH',
+      safetySymptoms: [],
+      sleep: 'NORMAL',
+      energy: 'NORMAL',
+      stress: 'NORMAL',
+      motivation: 'NORMAL',
+      soreness: 'HIGH',
+      illnessSymptoms: false,
+      availableMinutes: 45,
+    })
+
+    expect(result.decision.volumeMultiplier).toBe(0.5)
+    expect(data.list('daily_checkins')).toHaveLength(1)
+    expect(data.list('daily_checkins')[0]?.data).toMatchObject({
+      readiness: 'YELLOW',
+      answers: {
+        soreness: 'HIGH',
+        recommendation: {
+          volumeMultiplier: 0.5,
+          reasonCodes: ['SEVERE_DOMS_STRENGTH_DELOAD', 'HIGH_SORENESS'],
+        },
+      },
+    })
+  })
+
+  it('säilyttää DOMS-politiikan ja sarjamäärät workout- sekä logisnapshotissa', async () => {
+    const workout = storedRecord('workouts', crypto.randomUUID(), {
+      status: 'IN_PROGRESS',
+    })
+    const workoutLog = storedRecord('workout_logs', crypto.randomUUID(), {
+      workout_id: workout.id,
+      completion_status: 'IN_PROGRESS',
+      decision_trace: {},
+    })
+    const data = mutableData([workout, workoutLog])
+    const resolved = resolvePrescription({
+      sessionId: 'persisted-doms-trace',
+      title: 'Voima',
+      kind: 'STRENGTH',
+      durationMinutes: 45,
+      profile: {
+        goal: 'GENERAL_FITNESS',
+        experience: 'INTERMEDIATE',
+        equipment: ['Kehonpaino', 'Käsipainot'],
+        physicalLoad: 'MODERATE',
+        minutesPerSession: 45,
+        age: 35,
+        readiness: 'GREEN',
+        healthBlocked: false,
+        generatedAt: '2026-08-28T10:00:00.000Z',
+      },
+    })
+    if (resolved.status !== 'SUPPORTED') throw new Error(resolved.reasonCode)
+    const prescription = {
+      ...resolved.prescription,
+      decisionTrace: {
+        ...resolved.prescription.decisionTrace,
+        ruleIds: ['adult-strength-severe-doms-1.0.0'],
+        rules: [
+          ...resolved.prescription.decisionTrace.rules,
+          {
+            ruleId: 'READINESS-SEVERE-DOMS-001',
+            outcome: 'MODIFY' as const,
+            message: 'DOMS-kevennys',
+            evidenceIds: ['APP-CONSERVATIVE-LOAD-RULE'],
+          },
+        ],
+        adaptations: [
+          {
+            original: { workingSetCount: 10 },
+            adjusted: {
+              workingSetCount: 5,
+              maximumTargetRpe: 6,
+              policyVersion: 'adult-strength-severe-doms-1.0.0',
+            },
+            reasonCodes: [
+              'SEVERE_DOMS_STRENGTH_DELOAD',
+              'SEVERE_DOMS_STRENGTH_PROGRESSION_FROZEN',
+            ],
+          },
+        ],
+      },
+    }
+
+    await saveWorkoutAdaptation(data, workout, prescription)
+
+    expect(data.latest('workouts')?.data.prescription).toMatchObject({
+      decisionTrace: {
+        ruleIds: ['adult-strength-severe-doms-1.0.0'],
+        adaptations: [
+          {
+            original: { workingSetCount: 10 },
+            adjusted: {
+              workingSetCount: 5,
+              maximumTargetRpe: 6,
+              policyVersion: 'adult-strength-severe-doms-1.0.0',
+            },
+          },
+        ],
+      },
+    })
+    expect(data.latest('workout_logs')?.data.decision_trace).toMatchObject({
+      ruleIds: ['adult-strength-severe-doms-1.0.0'],
+      adaptations: [
+        {
+          reasonCodes: [
+            'SEVERE_DOMS_STRENGTH_DELOAD',
+            'SEVERE_DOMS_STRENGTH_PROGRESSION_FROZEN',
+          ],
+        },
+      ],
+    })
   })
 })
 

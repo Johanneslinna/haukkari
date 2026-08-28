@@ -44,6 +44,10 @@ import {
   type StrengthTrainingBackground,
 } from './ReturnToStrengthPolicy'
 import { movementPatternsForRole } from './StrengthWeekPolicy'
+import {
+  SEVERE_DOMS_STRENGTH_PROGRESSION_REASON_CODE,
+  SEVERE_DOMS_STRENGTH_REASON_CODE,
+} from './ReadinessEngine'
 
 export const ADULT_RESISTANCE_ENGINE_VERSION = 'adult-resistance-1.4.0'
 export const ADULT_RESISTANCE_RULE_VERSION = 'adult-resistance-rules-1.4.0'
@@ -84,6 +88,12 @@ export type AdultResistanceSetHistory = {
   difficultyTooHard?: boolean
   feltWorse?: boolean
   sessionRpeNineOrMore?: boolean
+  /**
+   * Harjoitus tehtiin voimakkaan DOMS:n vuoksi kevennetyllä annoksella.
+   * Tällainen toteuma lasketaan tehdyksi volyymiksi, mutta se ei valtuuta
+   * capability-arviota, kalibrointia tai progressiota.
+   */
+  severeDomsDeload?: boolean
 }
 
 export type AdultResistanceAthleteContext = {
@@ -447,6 +457,7 @@ export function estimateAdultResistanceCapability(
       item.loadContextId === requiredLoadContextId &&
       item.completionStatus === 'COMPLETED' &&
       item.doseCompleted === true &&
+      item.severeDomsDeload !== true &&
       item.loadKg &&
       item.loadKg > 0 &&
       item.repetitions > 0 &&
@@ -474,6 +485,7 @@ export function estimateAdultResistanceCapability(
       const ageDays = historyAgeDays(item.completedAt, now)
       return (
         item.exerciseCode !== exercise.code &&
+        item.severeDomsDeload !== true &&
         primaryMovementPattern !== undefined &&
         item.movementPatterns?.includes(primaryMovementPattern) &&
         item.repetitions > 0 &&
@@ -693,6 +705,39 @@ function progressionGuidanceFi(decision: InterSessionProgressionDecision) {
   }
 }
 
+function severeDomsProgressionDecision(
+  exercise: ExercisePrescription,
+): ExerciseProgressionDecision {
+  return {
+    action: 'KEEP_LOAD',
+    ...(exercise.progressionDecision?.currentLoadKg === undefined
+      ? {}
+      : {
+          currentLoadKg: exercise.progressionDecision.currentLoadKg,
+          nextLoadKg: exercise.progressionDecision.currentLoadKg,
+        }),
+    changedVariable: 'NONE',
+    reasonCodes: [
+      ...new Set([
+        ...(exercise.progressionDecision?.reasonCodes ?? []),
+        SEVERE_DOMS_STRENGTH_REASON_CODE,
+        SEVERE_DOMS_STRENGTH_PROGRESSION_REASON_CODE,
+      ]),
+    ],
+    supportingSessionIds: exercise.progressionDecision?.supportingSessionIds ?? [],
+  }
+}
+
+export function freezeSevereDomsProgression(exercise: ExercisePrescription) {
+  const decision = severeDomsProgressionDecision(exercise)
+  const baseGuidance = exercise.loadGuidance.replace(/\s*Seuraava askel:.*$/u, '')
+  return {
+    ...exercise,
+    loadGuidance: `${baseGuidance} Seuraava askel: säilytä kuorma ja toistot; voimakkaan lihasarkuuden kevennetty harjoitus ei valtuuta progressiota.`,
+    progressionDecision: decision,
+  }
+}
+
 export function refreshAdultResistanceProgression(input: {
   prescription: PrescribedSession
   history: readonly AdultResistanceSetHistory[]
@@ -700,6 +745,14 @@ export function refreshAdultResistanceProgression(input: {
   generatedAt: string
 }): PrescribedSession {
   if (input.prescription.kind !== 'STRENGTH') return input.prescription
+  if (
+    input.prescription.decisionTrace.rules.some(
+      (rule) => rule.ruleId === 'READINESS-SEVERE-DOMS-001',
+    )
+  ) {
+    const exercises = input.prescription.exercises.map(freezeSevereDomsProgression)
+    return { ...input.prescription, exercises, blocks: exercises }
+  }
   const adaptations: NonNullable<PrescribedSession['decisionTrace']['adaptations']> = []
   const exercises = input.prescription.exercises.map((exercise) => {
     const maximumRepetitions = Math.max(
@@ -808,6 +861,7 @@ function isApprovedCalibrationRow(row: AdultResistanceSetHistory) {
     row.techniqueOk === true &&
     row.stopped !== true &&
     row.severeRecoveryProblem !== true &&
+    row.severeDomsDeload !== true &&
     typeof row.rir === 'number' &&
     typeof row.targetRirMin === 'number' &&
     typeof row.targetRirMax === 'number' &&
@@ -1544,7 +1598,8 @@ export function decideInterSessionProgression(input: {
           typeof item.rir === 'number' &&
           item.rir >= input.targetRir[0] &&
           item.rir <= input.targetRir[1] &&
-          item.repetitions > 0,
+          item.repetitions > 0 &&
+          item.severeDomsDeload !== true,
       )
       const sameLoad =
         !kilogramLoad || (loads.length === sorted.length && new Set(loads).size === 1)

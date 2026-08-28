@@ -15,6 +15,7 @@ function workoutLog(
     felt?: 'WORSE' | 'SAME' | 'BETTER'
     sessionRpe?: number
   } = {},
+  severeDomsDeload = false,
 ): LocalRecord {
   const timestamp = '2026-08-26T10:00:00.000Z'
   return {
@@ -58,6 +59,22 @@ function workoutLog(
           },
         ],
       },
+      decision_trace: severeDomsDeload
+        ? {
+            ruleVersion: 'adult-resistance-rules-1.4.0',
+            rules: [
+              {
+                ruleId: 'READINESS-SEVERE-DOMS-001',
+                outcome: 'MODIFY',
+              },
+            ],
+            adaptations: [
+              {
+                reasonCodes: ['SEVERE_DOMS_STRENGTH_DELOAD'],
+              },
+            ],
+          }
+        : {},
       created_at: timestamp,
       updated_at: timestamp,
       deleted_at: null,
@@ -124,6 +141,15 @@ describe('WorkoutPage.strengthHistoryFromLogs', () => {
     expect(
       [...tooHard, ...worse, ...highRpe].every((row) => row.severeRecoveryProblem),
     ).toBe(true)
+  })
+
+  it('säilyttää synkronoidusta decision tracesta DOMS-progression eston', () => {
+    const history = strengthHistoryFromLogs([
+      workoutLog('doms-workout', [true, true], {}, true),
+    ])
+
+    expect(history).toHaveLength(2)
+    expect(history.every((row) => row.severeDomsDeload === true)).toBe(true)
   })
 })
 

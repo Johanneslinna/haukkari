@@ -17,6 +17,7 @@ export {
   prescribeResistanceDose,
   refreshAdultResistanceProgression,
   scoreExerciseCandidates,
+  freezeSevereDomsProgression,
 } from './AdultResistanceEngine'
 export type {
   AdultResistanceAthleteContext,
@@ -88,7 +89,16 @@ export {
   withV2Blocks,
   withExerciseDose,
 } from './PrescriptionContract'
-export { ReadinessEngine, evaluateReadiness } from './ReadinessEngine'
+export {
+  ReadinessEngine,
+  SEVERE_DOMS_STRENGTH_POLICY_VERSION,
+  SEVERE_DOMS_STRENGTH_PROGRESSION_REASON_CODE,
+  SEVERE_DOMS_STRENGTH_REASON_CODE,
+  SEVERE_DOMS_STRENGTH_MAXIMUM_RPE,
+  SEVERE_DOMS_STRENGTH_ROUNDING_RULE,
+  SEVERE_DOMS_STRENGTH_VOLUME_MULTIPLIER,
+  evaluateReadiness,
+} from './ReadinessEngine'
 export {
   evaluateStrengthSafetyGate,
   strengthSafetyGateMessage,
@@ -194,6 +204,7 @@ export {
   TRAINING_RULE_VERSION,
 } from './TrainingPrescriptionEngine'
 export type {
+  PrescriptionAdaptationProgressContext,
   PrescriptionAdaptationSafetyContext,
   PrescriptionProfile,
 } from './TrainingPrescriptionEngine'

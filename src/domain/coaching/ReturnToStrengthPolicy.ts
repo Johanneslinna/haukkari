@@ -71,6 +71,9 @@ function returnSessionReasonCodes(rows: readonly AdultResistanceSetHistory[]) {
   if (rows.some((row) => row.sessionRpeNineOrMore === true)) {
     reasonCodes.push('RETURN_SESSION_REJECTED_RPE_NINE_OR_MORE')
   }
+  if (rows.some((row) => row.severeDomsDeload === true)) {
+    reasonCodes.push('RETURN_SESSION_REJECTED_SEVERE_DOMS_DELOAD')
+  }
   if (
     reasonCodes.length === 0 &&
     rows.some((row) => row.severeRecoveryProblem === true)
@@ -121,7 +124,8 @@ function collapseSessions(
           row.severeRecoveryProblem !== true &&
           row.difficultyTooHard !== true &&
           row.feltWorse !== true &&
-          row.sessionRpeNineOrMore !== true,
+          row.sessionRpeNineOrMore !== true &&
+          row.severeDomsDeload !== true,
       )
       const reasonCodes = returnSessionReasonCodes(rows)
       const approvedReturnWorkout = reasonCodes.includes('RETURN_SESSION_ACCEPTED')

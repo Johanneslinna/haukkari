@@ -26,6 +26,7 @@ import { DecisionRecorder } from './engine'
 import {
   ADULT_RESISTANCE_RULE_VERSION,
   defaultResistanceLoadContextId,
+  freezeSevereDomsProgression,
   prescribeAdultResistanceSession,
   type AdultResistanceSetHistory,
 } from './AdultResistanceEngine'
@@ -41,8 +42,10 @@ import {
 } from './StrengthSafetyGate'
 import {
   addPlannedSets,
+  calculatePlannedMuscleVolume,
   calculateRollingMuscleVolume,
   maximumAdditionalSets,
+  mergeMuscleVolume,
   type MuscleVolume,
 } from './StrengthVolumePolicy'
 import {
@@ -51,6 +54,14 @@ import {
   fitStrengthPrescriptionToTimeBudget,
 } from './TimeBudgetPolicy'
 import type { StrengthTrainingBackground } from './ReturnToStrengthPolicy'
+import {
+  SEVERE_DOMS_STRENGTH_MAXIMUM_RPE,
+  SEVERE_DOMS_STRENGTH_REASON_CODE,
+  SEVERE_DOMS_STRENGTH_POLICY_VERSION,
+  SEVERE_DOMS_STRENGTH_PROGRESSION_REASON_CODE,
+  SEVERE_DOMS_STRENGTH_ROUNDING_RULE,
+  SEVERE_DOMS_STRENGTH_VOLUME_MULTIPLIER,
+} from './ReadinessEngine'
 
 export const TRAINING_RULE_VERSION = '2026.08.25-v2'
 
@@ -90,6 +101,13 @@ export type PrescriptionAdaptationSafetyContext = {
   healthBlocked: boolean | undefined
   /** True vain, kun nykyiset turvallisuus- ja legacy-rajoitetiedot on vahvistettu. */
   safetyInformationComplete: boolean | undefined
+  /** Nykyisen kuntotarkistuksen vakaat reason codet; vanha snapshot ei saa keksiä niitä. */
+  readinessReasonCodes?: readonly string[]
+}
+
+export type PrescriptionAdaptationProgressContext = {
+  /** Jo pysyvästi kirjatut sarjat liike-id:n mukaan käynnissä olevaa harjoitusta varten. */
+  completedUnitsByExerciseId?: Readonly<Record<string, number>>
 }
 
 function strengthSafetyInformationComplete(profile: PrescriptionProfile) {
@@ -827,6 +845,114 @@ function lightenStrengthExercise(exercise: ExercisePrescription) {
   })
 }
 
+function completedStrengthUnits(
+  exercise: ExercisePrescription,
+  progressContext: PrescriptionAdaptationProgressContext,
+) {
+  const prescribed = legacyDose(exercise)
+  if (prescribed.kind !== 'STRENGTH_SETS') return 0
+  const value = progressContext.completedUnitsByExerciseId?.[exercise.id]
+  if (typeof value !== 'number' || !Number.isFinite(value) || value <= 0) return 0
+  return Math.min(prescribed.sets, Math.floor(value))
+}
+
+function severeDomsDeloadStrengthExercises(
+  exercises: readonly ExercisePrescription[],
+  progressContext: PrescriptionAdaptationProgressContext,
+) {
+  const strengthExercises = exercises.filter(
+    (exercise) => legacyDose(exercise).kind === 'STRENGTH_SETS',
+  )
+  const originalSets = strengthExercises.reduce((sum, exercise) => {
+    const dose = legacyDose(exercise)
+    return sum + (dose.kind === 'STRENGTH_SETS' ? dose.sets : 0)
+  }, 0)
+  const completedSets = strengthExercises.reduce(
+    (sum, exercise) => sum + completedStrengthUnits(exercise, progressContext),
+    0,
+  )
+  const targetSets = Math.max(
+    strengthExercises.length,
+    Math.ceil(originalSets * SEVERE_DOMS_STRENGTH_VOLUME_MULTIPLIER),
+    completedSets,
+  )
+  const allocatedSets = new Map(
+    strengthExercises.map((exercise) => [
+      exercise.id,
+      Math.max(1, completedStrengthUnits(exercise, progressContext)),
+    ]),
+  )
+  const priorityOrder = [...strengthExercises].sort(
+    (left, right) => Number(right.keyExercise) - Number(left.keyExercise),
+  )
+  let remainingSets =
+    targetSets - [...allocatedSets.values()].reduce((sum, sets) => sum + sets, 0)
+  while (remainingSets > 0) {
+    let allocatedThisPass = false
+    for (const exercise of priorityOrder) {
+      const dose = legacyDose(exercise)
+      if (dose.kind !== 'STRENGTH_SETS') continue
+      const current = allocatedSets.get(exercise.id) ?? 1
+      if (current >= dose.sets) continue
+      allocatedSets.set(exercise.id, current + 1)
+      remainingSets -= 1
+      allocatedThisPass = true
+      if (remainingSets === 0) break
+    }
+    if (!allocatedThisPass) break
+  }
+
+  return exercises.map((exercise) => {
+    const dose = legacyDose(exercise)
+    if (dose.kind !== 'STRENGTH_SETS') return exercise
+    return freezeSevereDomsProgression(
+      withExerciseDose(exercise, {
+        ...dose,
+        sets: allocatedSets.get(exercise.id) ?? 1,
+        targetRpe: Math.min(SEVERE_DOMS_STRENGTH_MAXIMUM_RPE, dose.targetRpe),
+        targetRir: Math.min(5, (dose.targetRir ?? 2) + 1),
+      }),
+    )
+  })
+}
+
+function severeDomsStrengthWeekContext(
+  prescription: PrescribedSession,
+  originalExercises: readonly ExercisePrescription[],
+) {
+  const context = prescription.decisionTrace.strengthWeek
+  if (!context) return undefined
+  const originalSessionVolume = calculatePlannedMuscleVolume(originalExercises)
+  const adaptedSessionVolume = calculatePlannedMuscleVolume(prescription.exercises)
+  const plannedVolumeAfter = mergeMuscleVolume(
+    context.plannedVolumeBefore,
+    adaptedSessionVolume,
+  )
+  const removedVolume = [
+    ...new Set([
+      ...Object.keys(originalSessionVolume),
+      ...Object.keys(adaptedSessionVolume),
+    ]),
+  ].reduce<Record<string, number>>((volume, muscle) => {
+    const removed = Math.max(
+      0,
+      (originalSessionVolume[muscle] ?? 0) - (adaptedSessionVolume[muscle] ?? 0),
+    )
+    if (removed > 0) volume[muscle] = removed
+    return volume
+  }, {})
+  return {
+    ...context,
+    plannedVolumeAfter,
+    remainingTargetVolume: mergeMuscleVolume(
+      context.remainingTargetVolume,
+      removedVolume,
+    ),
+    hardCapRemaining: mergeMuscleVolume(context.hardCapRemaining, removedVolume),
+    reasonCodes: [...new Set([...context.reasonCodes, SEVERE_DOMS_STRENGTH_REASON_CODE])],
+  }
+}
+
 export function evaluatePrescriptionAdaptationSafety(
   prescription: PrescribedSession,
   safetyContext: PrescriptionAdaptationSafetyContext,
@@ -862,6 +988,7 @@ export function adaptPrescription(
   prescription: PrescribedSession,
   variant: WorkoutVariant,
   safetyContext: PrescriptionAdaptationSafetyContext,
+  progressContext: PrescriptionAdaptationProgressContext = {},
 ): PrescriptionResult {
   const readiness = safetyContext.readiness
   const adaptationGate = evaluatePrescriptionAdaptationSafety(prescription, safetyContext)
@@ -903,8 +1030,25 @@ export function adaptPrescription(
   const normalized = normalizePrescriptionV2(prescription)
   const compact = variant.kind.startsWith('COMPACT')
   const light = variant.kind === 'LIGHT' || readiness === 'YELLOW'
+  const severeDomsCurrent =
+    normalized.kind === 'STRENGTH' &&
+    readiness === 'YELLOW' &&
+    safetyContext.readinessReasonCodes?.includes(SEVERE_DOMS_STRENGTH_REASON_CODE) ===
+      true
+  const severeDomsAlreadyApplied = normalized.decisionTrace.rules.some(
+    (rule) => rule.ruleId === 'READINESS-SEVERE-DOMS-001',
+  )
+  const severeDomsDeload = severeDomsCurrent && !severeDomsAlreadyApplied
+  const ordinaryLight = light && !severeDomsCurrent
   const variantTimeBudgetMinutes = variant.timeBudgetMinutes ?? variant.durationMinutes
   if (normalized.kind === 'STRENGTH') {
+    const severeDomsRule = {
+      ruleId: 'READINESS-SEVERE-DOMS-001',
+      outcome: 'MODIFY' as const,
+      message:
+        'Voimakas, liikkumista haittaava lihasarkuus puolittaa työsarjojen kokonaismäärän, säilyttää palautukset ja rajaa tavoite-RPE:n enintään kuuteen.',
+      evidenceIds: ['APP-CONSERVATIVE-LOAD-RULE'],
+    }
     const adaptationRule = compact
       ? {
           ruleId: 'TIME-COMPACT-001',
@@ -912,20 +1056,22 @@ export function adaptPrescription(
           message: `Aikaraja säilyttää avainliikkeet ensin ja rajaa harjoituksen enintään ${variantTimeBudgetMinutes} minuuttiin.`,
           evidenceIds: ['APP-KEY-DOSE-RULE'],
         }
-      : light
-        ? {
-            ruleId: 'READINESS-YELLOW-001',
-            outcome: 'MODIFY' as const,
-            message:
-              'Keltainen valmius vähentää sarjoja, säilyttää palautukset ja rajaa tavoite-RPE:n enintään kuuteen.',
-            evidenceIds: ['APP-CONSERVATIVE-LOAD-RULE'],
-          }
-        : {
-            ruleId: 'READINESS-GREEN-001',
-            outcome: 'PROCEED' as const,
-            message: 'Päivän valmius sallii suunnitellun version.',
-            evidenceIds: ['APP-READINESS-RULE'],
-          }
+      : severeDomsCurrent
+        ? severeDomsRule
+        : light
+          ? {
+              ruleId: 'READINESS-YELLOW-001',
+              outcome: 'MODIFY' as const,
+              message:
+                'Keltainen valmius vähentää sarjoja, säilyttää palautukset ja rajaa tavoite-RPE:n enintään kuuteen.',
+              evidenceIds: ['APP-CONSERVATIVE-LOAD-RULE'],
+            }
+          : {
+              ruleId: 'READINESS-GREEN-001',
+              outcome: 'PROCEED' as const,
+              message: 'Päivän valmius sallii suunnitellun version.',
+              evidenceIds: ['APP-READINESS-RULE'],
+            }
     const normalizedExercises = prescriptionBlocks(normalized)
     const compactKeyExerciseIds = new Set(
       normalizedExercises
@@ -939,12 +1085,16 @@ export function adaptPrescription(
         if (compactKeyExerciseIds.size === Math.min(2, normalizedExercises.length)) break
       }
     }
-    const exercises = normalizedExercises.map((exercise) => {
-      const adaptedExercise = light ? lightenStrengthExercise(exercise) : { ...exercise }
+    const readinessAdaptedExercises = severeDomsDeload
+      ? severeDomsDeloadStrengthExercises(normalizedExercises, progressContext)
+      : normalizedExercises.map((exercise) =>
+          ordinaryLight ? lightenStrengthExercise(exercise) : { ...exercise },
+        )
+    const exercises = readinessAdaptedExercises.map((adaptedExercise) => {
       return compact
         ? {
             ...adaptedExercise,
-            keyExercise: compactKeyExerciseIds.has(exercise.id),
+            keyExercise: compactKeyExerciseIds.has(adaptedExercise.id),
           }
         : adaptedExercise
     })
@@ -972,7 +1122,13 @@ export function adaptPrescription(
         ...normalized.decisionTrace,
         safetyOutcome:
           light || compact ? 'MODIFY' : normalized.decisionTrace.safetyOutcome,
-        rules: [...normalized.decisionTrace.rules, adaptationRule],
+        rules: [
+          ...normalized.decisionTrace.rules,
+          ...(severeDomsAlreadyApplied && severeDomsCurrent && !compact
+            ? []
+            : [adaptationRule]),
+          ...(compact && severeDomsDeload ? [severeDomsRule] : []),
+        ],
       },
     }
     const fitted = fitStrengthPrescriptionToTimeBudget({
@@ -994,7 +1150,66 @@ export function adaptPrescription(
           'Turvallinen voimaharjoituksen vähimmäisannos ei mahdu valittuun aikabudjettiin palautuksia tai turvallisuuspuskuria lyhentämättä.',
       }
     }
-    return { status: 'SUPPORTED', prescription: fitted.prescription }
+    if (!severeDomsDeload) {
+      return { status: 'SUPPORTED', prescription: fitted.prescription }
+    }
+    const originalWorkingSets = normalizedExercises.reduce(
+      (sum, exercise) =>
+        sum + (legacyDose(exercise).kind === 'STRENGTH_SETS' ? exercise.sets : 0),
+      0,
+    )
+    const adaptedWorkingSets = fitted.prescription.exercises.reduce(
+      (sum, exercise) =>
+        sum + (legacyDose(exercise).kind === 'STRENGTH_SETS' ? exercise.sets : 0),
+      0,
+    )
+    const completedWorkingSets = normalizedExercises.reduce(
+      (sum, exercise) => sum + completedStrengthUnits(exercise, progressContext),
+      0,
+    )
+    const strengthWeek = severeDomsStrengthWeekContext(
+      fitted.prescription,
+      normalizedExercises,
+    )
+    return {
+      status: 'SUPPORTED',
+      prescription: {
+        ...fitted.prescription,
+        decisionTrace: {
+          ...fitted.prescription.decisionTrace,
+          ruleIds: [
+            ...new Set([
+              ...(fitted.prescription.decisionTrace.ruleIds ?? []),
+              SEVERE_DOMS_STRENGTH_POLICY_VERSION,
+              SEVERE_DOMS_STRENGTH_REASON_CODE,
+              SEVERE_DOMS_STRENGTH_PROGRESSION_REASON_CODE,
+            ]),
+          ],
+          adaptations: [
+            ...(fitted.prescription.decisionTrace.adaptations ?? []),
+            {
+              original: { workingSetCount: originalWorkingSets },
+              adjusted: {
+                workingSetCount: adaptedWorkingSets,
+                completedWorkingSetCount: completedWorkingSets,
+                remainingWorkingSetCount: Math.max(
+                  0,
+                  adaptedWorkingSets - completedWorkingSets,
+                ),
+                maximumTargetRpe: SEVERE_DOMS_STRENGTH_MAXIMUM_RPE,
+                policyVersion: SEVERE_DOMS_STRENGTH_POLICY_VERSION,
+                roundingRule: SEVERE_DOMS_STRENGTH_ROUNDING_RULE,
+              },
+              reasonCodes: [
+                SEVERE_DOMS_STRENGTH_REASON_CODE,
+                SEVERE_DOMS_STRENGTH_PROGRESSION_REASON_CODE,
+              ],
+            },
+          ],
+          ...(strengthWeek ? { strengthWeek } : {}),
+        },
+      },
+    }
   }
   const limit = compact ? compactExerciseLimit(variant.durationMinutes) : Infinity
   const compactWarmupMinutes =

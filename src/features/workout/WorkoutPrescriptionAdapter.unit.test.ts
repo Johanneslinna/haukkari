@@ -77,6 +77,18 @@ function strengthPrescription(): PrescribedSession {
   return result.prescription
 }
 
+function fiveSetStrengthPrescription() {
+  const prescription = strengthPrescription()
+  const source = prescription.exercises[0]!
+  const exercise = {
+    ...source,
+    sets: 5,
+    dose:
+      source.dose?.kind === 'STRENGTH_SETS' ? { ...source.dose, sets: 5 } : source.dose,
+  }
+  return { ...prescription, exercises: [exercise], blocks: [exercise] }
+}
+
 describe('WorkoutPrescriptionAdapter – käyttöliittymän nykyhetken turvallisuustiedot', () => {
   it('välittää nykyisen iän, readinessin ja seulonnan varsinaiselle adaptPrescription-reitille', () => {
     const currentProfile = profile('1961-08-27')
@@ -108,6 +120,149 @@ describe('WorkoutPrescriptionAdapter – käyttöliittymän nykyhetken turvallis
       status: 'UNSUPPORTED',
       reasonCode: 'OLDER_ADULT_ENGINE_NOT_AVAILABLE',
     })
+  })
+
+  it('välittää voimakkaan DOMS:n reason coden käyttöliittymästä varsinaiselle annossovitukselle', () => {
+    const prescription = strengthPrescription()
+    const originalSets = prescription.exercises.reduce(
+      (sum, exercise) => sum + exercise.sets,
+      0,
+    )
+    const result = adaptWorkoutPrescriptionForCurrentAthlete({
+      prescription,
+      variant: fullVariant,
+      profile: profile('1991-01-01'),
+      screening: screening(),
+      readiness: 'YELLOW',
+      readinessReasonCodes: ['SEVERE_DOMS_STRENGTH_DELOAD'],
+      today,
+    })
+
+    expect(result.status).toBe('SUPPORTED')
+    if (result.status !== 'SUPPORTED') throw new Error(result.reasonCode)
+    expect(
+      result.prescription.exercises.reduce((sum, exercise) => sum + exercise.sets, 0),
+    ).toBe(Math.ceil(originalSets * 0.5))
+    expect(result.prescription.decisionTrace.rules.map((rule) => rule.ruleId)).toContain(
+      'READINESS-SEVERE-DOMS-001',
+    )
+  })
+
+  it('uudelleenvaltuuttaa aiemmin tallennetun täyden harjoituksen DOMS-kevennykseen vain kerran', () => {
+    const prescription = strengthPrescription()
+    const originalSets = prescription.exercises.reduce(
+      (sum, exercise) => sum + exercise.sets,
+      0,
+    )
+    const input = {
+      profile: profile('1991-01-01'),
+      screening: screening(),
+      readiness: 'YELLOW',
+      readinessReasonCodes: ['SEVERE_DOMS_STRENGTH_DELOAD'],
+      today,
+    }
+    const firstAuthorization = authorizeWorkoutPrescriptionForCurrentAthlete({
+      ...input,
+      prescription,
+    })
+
+    expect(firstAuthorization.status).toBe('SUPPORTED')
+    if (firstAuthorization.status !== 'SUPPORTED') {
+      throw new Error(firstAuthorization.reasonCode)
+    }
+    const adaptedSets = firstAuthorization.prescription.exercises.reduce(
+      (sum, exercise) => sum + exercise.sets,
+      0,
+    )
+    expect(adaptedSets).toBe(Math.ceil(originalSets * 0.5))
+
+    const secondAuthorization = authorizeWorkoutPrescriptionForCurrentAthlete({
+      ...input,
+      prescription: firstAuthorization.prescription,
+    })
+    expect(secondAuthorization.status).toBe('SUPPORTED')
+    if (secondAuthorization.status !== 'SUPPORTED') {
+      throw new Error(secondAuthorization.reasonCode)
+    }
+    expect(
+      secondAuthorization.prescription.exercises.reduce(
+        (sum, exercise) => sum + exercise.sets,
+        0,
+      ),
+    ).toBe(adaptedSets)
+  })
+
+  it('säilyttää käynnissä olevan harjoituksen tehdyt sarjat ja vähentää vain jäljellä olevaa työtä', () => {
+    const prescription = fiveSetStrengthPrescription()
+    const exerciseId = prescription.exercises[0]!.id
+    const result = authorizeWorkoutPrescriptionForCurrentAthlete({
+      prescription,
+      profile: profile('1991-01-01'),
+      screening: screening(),
+      readiness: 'YELLOW',
+      readinessReasonCodes: ['SEVERE_DOMS_STRENGTH_DELOAD'],
+      completedUnitsByExerciseId: { [exerciseId]: 2 },
+      today,
+    })
+
+    expect(result.status).toBe('SUPPORTED')
+    if (result.status !== 'SUPPORTED') throw new Error(result.reasonCode)
+    expect(result.prescription.exercises[0]?.sets).toBe(3)
+    expect(result.prescription.decisionTrace.adaptations).toContainEqual({
+      original: { workingSetCount: 5 },
+      adjusted: expect.objectContaining({
+        workingSetCount: 3,
+        completedWorkingSetCount: 2,
+        remainingWorkingSetCount: 1,
+      }),
+      reasonCodes: [
+        'SEVERE_DOMS_STRENGTH_DELOAD',
+        'SEVERE_DOMS_STRENGTH_PROGRESSION_FROZEN',
+      ],
+    })
+  })
+
+  it('ei poista historiaa tai vaadi lisäsarjoja, kun tehty määrä jo ylittää uuden tavoitteen', () => {
+    const prescription = fiveSetStrengthPrescription()
+    const exerciseId = prescription.exercises[0]!.id
+    const input = {
+      profile: profile('1991-01-01'),
+      screening: screening(),
+      readiness: 'YELLOW',
+      readinessReasonCodes: ['SEVERE_DOMS_STRENGTH_DELOAD'],
+      completedUnitsByExerciseId: { [exerciseId]: 4 },
+      today,
+    }
+    const first = authorizeWorkoutPrescriptionForCurrentAthlete({
+      ...input,
+      prescription,
+    })
+
+    expect(first.status).toBe('SUPPORTED')
+    if (first.status !== 'SUPPORTED') throw new Error(first.reasonCode)
+    expect(first.prescription.exercises[0]?.sets).toBe(4)
+    expect(first.prescription.decisionTrace.adaptations).toContainEqual({
+      original: { workingSetCount: 5 },
+      adjusted: expect.objectContaining({
+        workingSetCount: 4,
+        completedWorkingSetCount: 4,
+        remainingWorkingSetCount: 0,
+      }),
+      reasonCodes: expect.any(Array),
+    })
+
+    const reloaded = authorizeWorkoutPrescriptionForCurrentAthlete({
+      ...input,
+      prescription: first.prescription,
+    })
+    expect(reloaded.status).toBe('SUPPORTED')
+    if (reloaded.status !== 'SUPPORTED') throw new Error(reloaded.reasonCode)
+    expect(reloaded.prescription.exercises[0]?.sets).toBe(4)
+    expect(
+      reloaded.prescription.decisionTrace.rules.filter(
+        (rule) => rule.ruleId === 'READINESS-SEVERE-DOMS-001',
+      ),
+    ).toHaveLength(1)
   })
 
   it('sallii vielä 64-vuotiaan mutta ei päättele puuttuvia tietoja snapshotista', () => {

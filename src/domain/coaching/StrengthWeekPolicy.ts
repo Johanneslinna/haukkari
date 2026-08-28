@@ -410,6 +410,7 @@ function successfulDistinctWeekWindows(
           row.difficultyTooHard !== true &&
           row.feltWorse !== true &&
           row.sessionRpeNineOrMore !== true &&
+          row.severeDomsDeload !== true &&
           typeof row.rir === 'number' &&
           typeof row.targetRirMin === 'number' &&
           typeof row.targetRirMax === 'number' &&
