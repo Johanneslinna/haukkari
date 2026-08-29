@@ -534,6 +534,7 @@ test('ydinpolku toimii pienillä mobiileilla ja työpöydällä', async ({
   page,
 }, testInfo) => {
   await completeOnboarding(page)
+  await expect(page.locator('.haukkari-beta-label:visible')).toHaveText('INTERNAL BETA')
   const overflows = await page.evaluate(
     () => document.documentElement.scrollWidth > window.innerWidth,
   )

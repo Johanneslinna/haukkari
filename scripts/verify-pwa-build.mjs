@@ -27,6 +27,18 @@ assert.ok(distFiles.some((file) => /^workbox-.*\.js$/u.test(file)))
 const index = await readFile('dist/index.html', 'utf8')
 assert.match(index, /rel="manifest"/u)
 assert.match(index, /rel="apple-touch-icon"/u)
+assert.match(index, /name="robots" content="noindex, nofollow, noarchive"/u)
+
+const vercelConfig = JSON.parse(await readFile('vercel.json', 'utf8'))
+assert.ok(
+  vercelConfig.rewrites.some(
+    (rewrite) => rewrite.source === '/(.*)' && rewrite.destination === '/index.html',
+  ),
+)
+const robotsHeader = vercelConfig.headers
+  .flatMap((rule) => rule.headers)
+  .find((header) => header.key.toLowerCase() === 'x-robots-tag')
+assert.equal(robotsHeader?.value, 'noindex, nofollow, noarchive')
 
 const serviceWorker = await readFile('dist/sw.js', 'utf8')
 assert.match(serviceWorker, /push-handler\.js/u)
@@ -43,6 +55,11 @@ for (const file of await readdir('dist/assets')) {
 const productionBundle = builtSources.join('\n')
 assert.doesNotMatch(productionBundle, /visualTodayHarness/u)
 assert.doesNotMatch(productionBundle, /today-state=/u)
+assert.match(productionBundle, /INTERNAL BETA/u)
+assert.doesNotMatch(
+  productionBundle,
+  /SUPABASE_SERVICE_ROLE_KEY|SUPABASE_ACCESS_TOKEN|DATABASE_URL|VERCEL_TOKEN|GITHUB_TOKEN|SMTP_PASSWORD/u,
+)
 
 process.stdout.write(
   'PWA-buildin manifesti-, kuvake-, offline- ja päivitysportti: PASS\n',

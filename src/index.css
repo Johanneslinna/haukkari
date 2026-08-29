@@ -2207,6 +2207,12 @@ body {
   box-shadow: 0 0.45rem 1rem rgb(0 0 0 / 12%);
 }
 
+.haukkari-logo-copy {
+  min-width: 0;
+  display: grid;
+  gap: 0.08rem;
+}
+
 .haukkari-wordmark {
   color: var(--brand-forest);
   font-size: 0.95rem;
@@ -2214,8 +2220,20 @@ body {
   letter-spacing: 0.13em;
 }
 
+.haukkari-beta-label {
+  color: var(--brand-active-green);
+  font-size: 0.5rem;
+  font-weight: 900;
+  letter-spacing: 0.12em;
+  line-height: 1;
+}
+
 .haukkari-logo.is-inverse .haukkari-wordmark {
   color: var(--brand-warm-cream);
+}
+
+.haukkari-logo.is-inverse .haukkari-beta-label {
+  color: var(--brand-lime-sage);
 }
 
 .haukkari-logo.is-compact .haukkari-logo-mark {
@@ -2225,6 +2243,10 @@ body {
 
 .haukkari-logo.is-compact .haukkari-wordmark {
   font-size: 0.84rem;
+}
+
+.haukkari-logo.is-compact .haukkari-beta-label {
+  font-size: 0.44rem;
 }
 
 .app-brand {
