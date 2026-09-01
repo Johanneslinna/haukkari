@@ -20,7 +20,12 @@ import {
 const generatedAt = '2026-08-27T08:00:00.000Z'
 const budgets = [10, 20, 30, 45, 60, 90] as const
 const experiences: ExperienceLevel[] = ['BEGINNER', 'INTERMEDIATE', 'ADVANCED']
-const goals: GoalType[] = ['GENERAL_FITNESS', 'MAX_STRENGTH', 'MUSCLE_GAIN']
+const goals: GoalType[] = [
+  'GENERAL_FITNESS',
+  'MAX_STRENGTH',
+  'MUSCLE_GAIN',
+  'BODY_RECOMPOSITION',
+]
 const readinessStates = ['GREEN', 'YELLOW'] as const
 const equipmentProfiles = [
   { id: 'BANDS', equipment: ['Kehonpaino', 'Vastuskuminauhat'] },
@@ -272,7 +277,57 @@ describe('Aikuisten voimaharjoittelun kanoninen aikamalli', () => {
         }
       }
     }
-    expect(supported).toBe(2160)
+    expect(supported).toBe(2880)
+  })
+
+  it('muodostaa kompaktit versiot tasapainotetulla valinnalla eikä listan loppua leikkaamalla', () => {
+    const full = resolvedStrength({
+      budget: 90,
+      experience: 'ADVANCED',
+      goal: 'MUSCLE_GAIN',
+      equipment: [...equipmentProfiles.at(-1)!.equipment],
+    })
+    const compact10 = adaptPrescription(full, variant('COMPACT_10', 90), {
+      age: 35,
+      readiness: 'GREEN',
+      healthBlocked: false,
+      safetyInformationComplete: true,
+    })
+    const compact20 = adaptPrescription(full, variant('COMPACT_20', 90), {
+      age: 35,
+      readiness: 'GREEN',
+      healthBlocked: false,
+      safetyInformationComplete: true,
+    })
+    const compact30 = adaptPrescription(full, variant('COMPACT_30', 90), {
+      age: 35,
+      readiness: 'GREEN',
+      healthBlocked: false,
+      safetyInformationComplete: true,
+    })
+    for (const result of [compact10, compact20, compact30]) {
+      expect(result.status).toBe('SUPPORTED')
+      if (result.status !== 'SUPPORTED') throw new Error(result.reasonCode)
+      expect(auditStrengthPrescriptionTime(result.prescription).violations).toEqual([])
+    }
+    if (
+      compact10.status !== 'SUPPORTED' ||
+      compact20.status !== 'SUPPORTED' ||
+      compact30.status !== 'SUPPORTED'
+    ) {
+      throw new Error('compact variant unsupported')
+    }
+    expect(compact10.prescription.exercises).toHaveLength(2)
+    expect(compact20.prescription.exercises.map((exercise) => exercise.category)).toEqual(
+      expect.arrayContaining([
+        expect.stringMatching(/SQUAT|HINGE|SINGLE_LEG/u),
+        expect.stringMatching(/PUSH/u),
+        expect.stringMatching(/PULL/u),
+      ]),
+    )
+    expect(compact30.prescription.exercises.map((exercise) => exercise.category)).toEqual(
+      expect.arrayContaining([expect.stringMatching(/ANTI_EXTENSION|ANTI_ROTATION/u)]),
+    )
   })
 
   it('sovittaa deterministisesti poistamalla apuliikkeen ja sarjoja ilman lepojen lyhentämistä', () => {

@@ -18,13 +18,15 @@ import type {
   ExperienceLevel,
   GoalType,
   PrescribedSession,
+  StrengthExerciseProgrammingRole,
   StrengthMovementPattern,
+  StrengthRoleStructureDecision,
   StrengthWeekContext,
   StrengthWeekPlan,
   StrengthWeekSessionRole,
 } from './types'
 
-export const STRENGTH_WEEK_POLICY_VERSION = 'adult-strength-week-1.0.0'
+export const STRENGTH_WEEK_POLICY_VERSION = 'adult-strength-week-1.5.0'
 
 export const STRENGTH_WEEK_REASON_CODES = {
   POLICY_APPLIED: 'STRENGTH_WEEK_POLICY_APPLIED',
@@ -62,6 +64,14 @@ export const STRENGTH_WEEK_REASON_CODES = {
   SET_PROGRESSION_WITHHELD: 'SET_PROGRESSION_WITHHELD',
   MISSED_SESSION_NOT_DOUBLED: 'MISSED_SESSION_NOT_DOUBLED',
   VOLUME_FILLED: 'WEEKLY_VOLUME_FILLED_WITH_REMAINING_SAFE_TIME',
+  ROLE_STRUCTURE_COMPLETE: 'STRENGTH_ROLE_STRUCTURE_COMPLETE',
+  ROLE_STRUCTURE_TIME_LIMITED: 'STRENGTH_ROLE_STRUCTURE_TIME_LIMITED',
+  ROLE_STRUCTURE_EQUIPMENT_LIMITED: 'STRENGTH_ROLE_STRUCTURE_EQUIPMENT_LIMITED',
+  ROLE_STRUCTURE_HEALTH_LIMITED: 'STRENGTH_ROLE_STRUCTURE_HEALTH_LIMITED',
+  ROLE_STRUCTURE_EXPERIENCE_LIMITED: 'STRENGTH_ROLE_STRUCTURE_EXPERIENCE_LIMITED',
+  ROLE_STRUCTURE_VOLUME_LIMITED: 'STRENGTH_ROLE_STRUCTURE_VOLUME_LIMITED',
+  ROLE_STRUCTURE_INVALID: 'STRENGTH_ROLE_STRUCTURE_UNDERFILLED_WITHOUT_CONSTRAINT',
+  PREFERRED_VOLUME_BELOW_TARGET: 'WEEKLY_PREFERRED_VOLUME_BELOW_TARGET',
 } as const
 
 const REQUIRED_PATTERNS: readonly StrengthMovementPattern[] = [
@@ -111,6 +121,7 @@ export type StrengthWeekMaterializationState = {
   movementPatternCoverage: StrengthMovementPattern[]
   setProgressionVolume: MuscleVolume
   materializedSessionCount: number
+  roleStructures: StrengthRoleStructureDecision[]
 }
 
 function validAnchor(value: string) {
@@ -172,39 +183,297 @@ function rolesForFrequency(
   return ['FULL_BODY_A', 'FULL_BODY_B', 'FULL_BODY_C']
 }
 
-export function movementPatternsForRole(
+export function strengthWeekRoleLabelFi(role: StrengthWeekSessionRole) {
+  const labels: Record<StrengthWeekSessionRole, string> = {
+    FULL_BODY: 'Kokovartalon voima',
+    FULL_BODY_A: 'Kokovartalon voima A',
+    FULL_BODY_B: 'Kokovartalon voima B',
+    FULL_BODY_C: 'Kokovartalon voima C',
+    UPPER_A: 'Ylävartalon voima A',
+    LOWER_A: 'Alavartalon voima A',
+    UPPER_B: 'Ylävartalon voima B',
+    LOWER_B: 'Alavartalon voima B',
+  }
+  return labels[role]
+}
+
+export type StrengthWeekRoleSlot = {
+  id: string
+  movementPattern: string
+  programmingRole: StrengthExerciseProgrammingRole
+  required: boolean
+  maximumSets?: number
+}
+
+export type StrengthWeekRoleStructure = {
+  role: StrengthWeekSessionRole
+  requiredMovementPatterns: string[]
+  optionalMovementPatterns: string[]
+  slots: StrengthWeekRoleSlot[]
+  minimumExerciseCount: number
+  targetExerciseCount: number
+}
+
+function slot(
+  id: string,
+  movementPattern: string,
+  programmingRole: StrengthExerciseProgrammingRole,
+  required = true,
+  maximumSets?: number,
+): StrengthWeekRoleSlot {
+  return { id, movementPattern, programmingRole, required, maximumSets }
+}
+
+function longRoleSlots(role: StrengthWeekSessionRole): StrengthWeekRoleSlot[] {
+  const slots: Record<StrengthWeekSessionRole, StrengthWeekRoleSlot[]> = {
+    FULL_BODY: [
+      slot('squat-primary', 'SQUAT', 'PRIMARY'),
+      slot('pull-primary', 'HORIZONTAL_PULL', 'PRIMARY'),
+      slot('push-secondary', 'HORIZONTAL_PUSH', 'SECONDARY_COMPOUND'),
+      slot('core-control', 'ANTI_EXTENSION', 'CORE_CONTROL', false),
+      slot('hinge-secondary', 'HINGE', 'SECONDARY_COMPOUND', false),
+    ],
+    FULL_BODY_A: [
+      slot('squat-primary', 'SQUAT', 'PRIMARY'),
+      slot('pull-primary', 'HORIZONTAL_PULL', 'PRIMARY'),
+      slot('push-secondary', 'HORIZONTAL_PUSH', 'SECONDARY_COMPOUND'),
+      slot('core-control', 'ANTI_EXTENSION', 'CORE_CONTROL', false),
+      slot('hinge-secondary', 'HINGE', 'SECONDARY_COMPOUND', false),
+    ],
+    FULL_BODY_B: [
+      slot('hinge-primary', 'HINGE', 'PRIMARY'),
+      slot('push-primary', 'HORIZONTAL_PUSH', 'PRIMARY'),
+      slot('pull-secondary', 'HORIZONTAL_PULL', 'SECONDARY_COMPOUND'),
+      slot('core-control', 'ANTI_ROTATION', 'CORE_CONTROL', false),
+      slot('squat-secondary', 'SQUAT', 'SECONDARY_COMPOUND', false),
+    ],
+    FULL_BODY_C: [
+      slot('single-leg-primary', 'SINGLE_LEG', 'PRIMARY'),
+      slot('pull-primary', 'HORIZONTAL_PULL', 'PRIMARY'),
+      slot('push-secondary', 'HORIZONTAL_PUSH', 'SECONDARY_COMPOUND'),
+      slot('core-control', 'ANTI_ROTATION', 'CORE_CONTROL', false),
+      slot('hinge-secondary', 'HINGE', 'SECONDARY_COMPOUND', false),
+    ],
+    UPPER_A: [
+      slot('horizontal-push-primary', 'HORIZONTAL_PUSH', 'PRIMARY'),
+      slot('horizontal-pull-primary', 'HORIZONTAL_PULL', 'PRIMARY'),
+      slot('vertical-pull-secondary', 'VERTICAL_PULL', 'SECONDARY_COMPOUND'),
+      slot('vertical-push-secondary', 'VERTICAL_PUSH', 'SECONDARY_COMPOUND', true, 2),
+      slot('core-control', 'ANTI_EXTENSION', 'CORE_CONTROL', false),
+    ],
+    LOWER_A: [
+      slot('squat-primary', 'SQUAT', 'PRIMARY', true, 3),
+      slot('hinge-secondary', 'HINGE', 'SECONDARY_COMPOUND', true, 2),
+      slot('single-leg-accessory', 'SINGLE_LEG', 'ACCESSORY', false),
+      slot('calf-accessory', 'CALF_RAISE', 'ACCESSORY', false),
+    ],
+    UPPER_B: [
+      slot('vertical-pull-primary', 'VERTICAL_PULL', 'PRIMARY'),
+      slot('vertical-push-secondary', 'VERTICAL_PUSH', 'SECONDARY_COMPOUND', true, 2),
+      slot('horizontal-push-primary', 'HORIZONTAL_PUSH', 'PRIMARY'),
+      slot('horizontal-pull-secondary', 'HORIZONTAL_PULL', 'SECONDARY_COMPOUND'),
+      slot('core-control', 'ANTI_ROTATION', 'CORE_CONTROL', false),
+    ],
+    LOWER_B: [
+      slot('hinge-primary', 'HINGE', 'PRIMARY', true, 3),
+      slot('squat-primary', 'SQUAT', 'PRIMARY'),
+      slot('single-leg-accessory', 'SINGLE_LEG', 'ACCESSORY', false),
+      slot('calf-accessory', 'CALF_RAISE', 'ACCESSORY', false),
+    ],
+  }
+  return slots[role]
+}
+
+function compactUpperSlots(role: 'UPPER_A' | 'UPPER_B', availableMinutes: number) {
+  if (availableMinutes <= 20) {
+    return role === 'UPPER_A'
+      ? [
+          slot('horizontal-push-primary', 'HORIZONTAL_PUSH', 'PRIMARY'),
+          slot('horizontal-pull-primary', 'HORIZONTAL_PULL', 'PRIMARY'),
+          slot('core-control', 'ANTI_EXTENSION', 'CORE_CONTROL', false),
+        ]
+      : [
+          slot('horizontal-pull-primary', 'HORIZONTAL_PULL', 'PRIMARY'),
+          slot('horizontal-push-primary', 'HORIZONTAL_PUSH', 'PRIMARY'),
+          slot('core-control', 'ANTI_ROTATION', 'CORE_CONTROL', false),
+        ]
+  }
+  if (availableMinutes <= 45) {
+    return role === 'UPPER_A'
+      ? [
+          slot('horizontal-push-primary', 'HORIZONTAL_PUSH', 'PRIMARY'),
+          slot('horizontal-pull-primary', 'HORIZONTAL_PULL', 'PRIMARY'),
+          slot('vertical-pull-secondary', 'VERTICAL_PULL', 'SECONDARY_COMPOUND'),
+          slot('core-control', 'ANTI_EXTENSION', 'CORE_CONTROL', false),
+        ]
+      : [
+          slot('horizontal-pull-primary', 'HORIZONTAL_PULL', 'PRIMARY'),
+          slot('horizontal-push-primary', 'HORIZONTAL_PUSH', 'PRIMARY'),
+          slot('vertical-push-secondary', 'VERTICAL_PUSH', 'SECONDARY_COMPOUND'),
+          slot('core-control', 'ANTI_ROTATION', 'CORE_CONTROL', false),
+        ]
+  }
+  return longRoleSlots(role)
+}
+
+function roleSlotsForBudget(
   role: StrengthWeekSessionRole,
   availableMinutes: number,
-): string[] {
-  if (availableMinutes <= 10) {
-    if (role === 'FULL_BODY_A' || role === 'FULL_BODY')
-      return ['SQUAT', 'HORIZONTAL_PULL']
-    if (role === 'FULL_BODY_B') return ['HINGE', 'HORIZONTAL_PUSH']
+): StrengthWeekRoleSlot[] {
+  if (role === 'UPPER_A' || role === 'UPPER_B') {
+    return compactUpperSlots(role, availableMinutes)
   }
-  if (availableMinutes <= 20) {
-    if (role === 'UPPER_A')
-      return ['HORIZONTAL_PUSH', 'HORIZONTAL_PULL', 'ANTI_EXTENSION']
-    if (role === 'UPPER_B') return ['HORIZONTAL_PULL', 'HORIZONTAL_PUSH', 'ANTI_ROTATION']
+  if (role === 'FULL_BODY_C' && availableMinutes <= 45) {
+    return [
+      slot('squat-primary', 'SQUAT', 'PRIMARY'),
+      slot('pull-primary', 'HORIZONTAL_PULL', 'PRIMARY'),
+      slot('push-secondary', 'HORIZONTAL_PUSH', 'SECONDARY_COMPOUND'),
+      slot('core-control', 'ANTI_ROTATION', 'CORE_CONTROL', false),
+      slot('hinge-secondary', 'HINGE', 'SECONDARY_COMPOUND', false),
+    ]
   }
-  const patterns: Record<StrengthWeekSessionRole, string[]> = {
-    FULL_BODY: ['SQUAT', 'HINGE', 'HORIZONTAL_PUSH', 'HORIZONTAL_PULL', 'ANTI_EXTENSION'],
-    FULL_BODY_A: ['SQUAT', 'HORIZONTAL_PULL', 'HORIZONTAL_PUSH', 'ANTI_EXTENSION'],
-    FULL_BODY_B: ['HINGE', 'HORIZONTAL_PULL', 'HORIZONTAL_PUSH', 'ANTI_ROTATION'],
-    FULL_BODY_C: ['SINGLE_LEG', 'HINGE', 'HORIZONTAL_PUSH', 'HORIZONTAL_PULL'],
-    UPPER_A: ['HORIZONTAL_PUSH', 'HORIZONTAL_PULL', 'ANTI_EXTENSION'],
-    LOWER_A: ['SQUAT', 'HINGE', 'SINGLE_LEG'],
-    UPPER_B: ['HORIZONTAL_PULL', 'HORIZONTAL_PUSH', 'ANTI_ROTATION'],
-    LOWER_B: ['HINGE', 'SQUAT', 'SINGLE_LEG'],
-  }
-  const maximumMovements =
+  return longRoleSlots(role)
+}
+
+export function strengthWeekRoleStructure(
+  role: StrengthWeekSessionRole,
+  availableMinutes: number,
+  experience: ExperienceLevel = 'INTERMEDIATE',
+): StrengthWeekRoleStructure {
+  const sourceSlots = roleSlotsForBudget(role, availableMinutes)
+  const budgetLimit =
     availableMinutes <= 10
       ? 2
       : availableMinutes <= 20
         ? 3
-        : availableMinutes <= 30
-          ? 5
-          : 6
-  return patterns[role].slice(0, maximumMovements)
+        : availableMinutes <= 45
+          ? 4
+          : 5
+  const experienceLimit =
+    experience === 'BEGINNER' && availableMinutes > 45 ? 4 : budgetLimit
+  const targetExerciseCount = Math.min(sourceSlots.length, experienceLimit)
+  const slots = sourceSlots.slice(0, targetExerciseCount)
+  const minimumExerciseCount =
+    role === 'UPPER_A' || role === 'UPPER_B'
+      ? targetExerciseCount
+      : role === 'LOWER_A' || role === 'LOWER_B'
+        ? Math.min(targetExerciseCount, availableMinutes <= 20 ? 2 : 3)
+        : Math.min(targetExerciseCount, availableMinutes <= 20 ? targetExerciseCount : 4)
+  return {
+    role,
+    requiredMovementPatterns: [
+      ...new Set(
+        slots.filter((item) => item.required).map((item) => item.movementPattern),
+      ),
+    ],
+    optionalMovementPatterns: [
+      ...new Set(
+        slots.filter((item) => !item.required).map((item) => item.movementPattern),
+      ),
+    ],
+    slots,
+    minimumExerciseCount,
+    targetExerciseCount,
+  }
+}
+
+export function evaluateStrengthRoleStructure(input: {
+  structure: StrengthWeekRoleStructure
+  exercises: readonly PrescribedSession['exercises'][number][]
+  constraintReasonCodes?: readonly string[]
+}): StrengthRoleStructureDecision {
+  const filledRequiredSlotIds = input.structure.slots
+    .filter(
+      (item) =>
+        item.required &&
+        input.exercises.some((exercise) => exercise.programmingSlotId === item.id),
+    )
+    .map((item) => item.id)
+  const requiredSlotIds = input.structure.slots
+    .filter((item) => item.required)
+    .map((item) => item.id)
+  const complete =
+    input.exercises.length >= input.structure.minimumExerciseCount &&
+    filledRequiredSlotIds.length === requiredSlotIds.length
+  const explicitConstraints = [...new Set(input.constraintReasonCodes ?? [])]
+  const status: StrengthRoleStructureDecision['status'] = complete
+    ? 'COMPLETE'
+    : explicitConstraints.length > 0
+      ? 'CONSTRAINED'
+      : 'INVALID'
+  const targetShortfall = input.exercises.length < input.structure.targetExerciseCount
+  const reasonCodes = complete
+    ? [
+        STRENGTH_WEEK_REASON_CODES.ROLE_STRUCTURE_COMPLETE,
+        ...(targetShortfall ? explicitConstraints : []),
+      ]
+    : explicitConstraints.length > 0
+      ? explicitConstraints
+      : [STRENGTH_WEEK_REASON_CODES.ROLE_STRUCTURE_INVALID]
+  const primaryConstraint = reasonCodes[0]
+  const messageFi = complete
+    ? targetShortfall
+      ? `${strengthWeekRoleLabelFi(input.structure.role)} täyttää roolin vähimmäisrakenteen (${input.exercises.length}/${input.structure.targetExerciseCount} liikettä); täydentävä sisältö rajautui turvallisen käyttäjärajoitteen vuoksi.`
+      : `Täysi ${strengthWeekRoleLabelFi(input.structure.role).toLocaleLowerCase('fi-FI')} sisältää ${input.exercises.length} tavoitteen ja viikkoroolin mukaista liikettä.`
+    : primaryConstraint === STRENGTH_WEEK_REASON_CODES.ROLE_STRUCTURE_TIME_LIMITED
+      ? 'Harjoituksen rakennetta lyhennettiin käyttäjän valitseman enimmäisajan vuoksi.'
+      : primaryConstraint === STRENGTH_WEEK_REASON_CODES.ROLE_STRUCTURE_EQUIPMENT_LIMITED
+        ? 'Harjoituksen rakenne jäi tavallista suppeammaksi käytettävissä olevien välineiden vuoksi.'
+        : primaryConstraint === STRENGTH_WEEK_REASON_CODES.ROLE_STRUCTURE_HEALTH_LIMITED
+          ? 'Harjoituksen rakenne jäi tavallista suppeammaksi vahvistetun liikerajoitteen vuoksi.'
+          : primaryConstraint ===
+              STRENGTH_WEEK_REASON_CODES.ROLE_STRUCTURE_EXPERIENCE_LIMITED
+            ? 'Harjoituksen rakenne sovitettiin harjoituskokemuksen mukaiseen turvalliseen tasoon.'
+            : primaryConstraint ===
+                STRENGTH_WEEK_REASON_CODES.ROLE_STRUCTURE_VOLUME_LIMITED
+              ? 'Harjoituksen rakennetta rajattiin seitsemän vuorokauden lihasvolyymikaton vuoksi.'
+              : 'Harjoituksen roolikohtainen vähimmäisrakenne jäi vajaaksi ilman tunnistettua käyttäjärajoitetta.'
+  return {
+    role: input.structure.role,
+    status,
+    minimumExerciseCount: input.structure.minimumExerciseCount,
+    targetExerciseCount: input.structure.targetExerciseCount,
+    actualExerciseCount: input.exercises.length,
+    requiredSlotIds,
+    filledRequiredSlotIds,
+    reasonCodes,
+    messageFi,
+  }
+}
+
+export function refreshStrengthRoleStructureDecision(
+  source: StrengthRoleStructureDecision | undefined,
+  exercises: readonly PrescribedSession['exercises'][number][],
+  additionalConstraintReasonCodes: readonly string[] = [],
+) {
+  if (!source) return undefined
+  const syntheticStructure: StrengthWeekRoleStructure = {
+    role: source.role,
+    requiredMovementPatterns: [],
+    optionalMovementPatterns: [],
+    slots: source.requiredSlotIds.map((id) => slot(id, id, 'PRIMARY')),
+    minimumExerciseCount: source.minimumExerciseCount,
+    targetExerciseCount: source.targetExerciseCount,
+  }
+  return evaluateStrengthRoleStructure({
+    structure: syntheticStructure,
+    exercises,
+    constraintReasonCodes: [
+      ...source.reasonCodes.filter(
+        (reasonCode) => reasonCode !== STRENGTH_WEEK_REASON_CODES.ROLE_STRUCTURE_COMPLETE,
+      ),
+      ...additionalConstraintReasonCodes,
+    ],
+  })
+}
+
+export function movementPatternsForRole(
+  role: StrengthWeekSessionRole,
+  availableMinutes: number,
+): string[] {
+  return strengthWeekRoleStructure(role, availableMinutes).slots.map(
+    (item) => item.movementPattern,
+  )
 }
 
 function patternFromCategory(category: string): StrengthMovementPattern | null {
@@ -218,11 +487,34 @@ function patternFromCategory(category: string): StrengthMovementPattern | null {
   return null
 }
 
+function remainingRoleExposuresForPattern(input: {
+  roles: readonly StrengthWeekSessionRole[]
+  sequenceIndex: number
+  pattern: StrengthMovementPattern
+  availableMinutes: number
+}) {
+  return input.roles
+    .slice(input.sequenceIndex)
+    .filter((role) =>
+      movementPatternsForRole(role, input.availableMinutes).some(
+        (category) => patternFromCategory(category) === input.pattern,
+      ),
+    ).length
+}
+
 function goalVolume(goalRange: StrengthWeekGoalRange, volume: Readonly<MuscleVolume>) {
+  return volumeDeficit(goalRange.minimumSetsPerMuscle, volume)
+}
+
+function targetVolume(goalRange: StrengthWeekGoalRange, volume: Readonly<MuscleVolume>) {
+  return volumeDeficit(goalRange.targetSetsPerMuscle, volume)
+}
+
+function volumeDeficit(targetSets: number, volume: Readonly<MuscleVolume>) {
   return Object.fromEntries(
     CANONICAL_MUSCLES.map((muscle) => [
       muscle,
-      Math.max(0, goalRange.minimumSetsPerMuscle - (volume[muscle] ?? 0)),
+      Math.max(0, targetSets - (volume[muscle] ?? 0)),
     ]),
   )
 }
@@ -359,6 +651,7 @@ export function initialStrengthWeekMaterializationState(
     movementPatternCoverage: [...(blueprint?.completedMovementPatternCoverage ?? [])],
     setProgressionVolume: {},
     materializedSessionCount: 0,
+    roleStructures: [],
   }
 }
 
@@ -377,6 +670,14 @@ function cloneWithSets(exercise: PrescribedSession['exercises'][number], sets: n
         ? { ...exercise.dose, sets }
         : exercise.dose,
   }
+}
+
+function programmingRoleSetCap(exercise: PrescribedSession['exercises'][number]) {
+  if (exercise.programmingSetCap !== undefined) return exercise.programmingSetCap
+  if (exercise.programmingRole === 'CORE_CONTROL') return 3
+  if (exercise.programmingRole === 'ACCESSORY') return 3
+  if (exercise.programmingRole === 'SECONDARY_COMPOUND') return 3
+  return 6
 }
 
 function successfulDistinctWeekWindows(
@@ -449,17 +750,139 @@ export function materializeStrengthWeekSession(input: {
   const sessionPrimaryVolume: MuscleVolume = {}
   let setProgressionUsed = false
   let setProgressionMuscles: readonly string[] = []
-  const exercises = input.prescription.exercises.flatMap((source) => {
+  const finalSession = input.sequenceIndex === input.blueprint.roles.length - 1
+  const progressionCandidate = (exercise: PrescribedSession['exercises'][number]) =>
+    !input.blueprint.returning &&
+    !input.blueprint.externalStrengthVolumeUnknown &&
+    exercise.programmingRole !== 'CORE_CONTROL' &&
+    exercise.progressionDecision?.action === 'KEEP_LOAD' &&
+    new Set(
+      successfulDistinctWeekWindows(exercise, input.history, input.blueprint.generatedAt),
+    ).size === 2
+  const sourceExercises = [...input.prescription.exercises].sort((left, right) => {
+    const progressionPriority =
+      Number(progressionCandidate(right)) - Number(progressionCandidate(left))
+    if (progressionPriority !== 0) return progressionPriority
+    if (
+      !finalSession ||
+      (input.prescription.timeBudgetMinutes ?? input.prescription.durationMinutes) <= 10
+    ) {
+      return 0
+    }
+    const deficitPriority = (exerciseCode: string) => {
+      const definition = catalog.getExercise(exerciseCode)
+      if (!definition) return { benefit: 0, urgency: 0 }
+      const primaryDeficits = definition.primaryMuscles
+        .filter((muscle) =>
+          CANONICAL_MUSCLES.includes(muscle as (typeof CANONICAL_MUSCLES)[number]),
+        )
+        .map((muscle) =>
+          Math.max(
+            0,
+            input.blueprint.goalRange.minimumSetsPerMuscle -
+              (combinedBefore[muscle] ?? 0),
+          ),
+        )
+      const secondaryDeficits = definition.secondaryMuscles
+        .filter((muscle) =>
+          CANONICAL_MUSCLES.includes(muscle as (typeof CANONICAL_MUSCLES)[number]),
+        )
+        .map((muscle) =>
+          Math.max(
+            0,
+            input.blueprint.goalRange.minimumSetsPerMuscle -
+              (combinedBefore[muscle] ?? 0),
+          ),
+        )
+      return {
+        benefit:
+          primaryDeficits.reduce((total, deficit) => total + Math.min(1, deficit), 0) +
+          secondaryDeficits.reduce((total, deficit) => total + Math.min(0.5, deficit), 0),
+        urgency: Math.max(0, ...primaryDeficits, ...secondaryDeficits),
+      }
+    }
+    const leftPriority = deficitPriority(left.code)
+    const rightPriority = deficitPriority(right.code)
+    return (
+      rightPriority.benefit - leftPriority.benefit ||
+      rightPriority.urgency - leftPriority.urgency
+    )
+  })
+  const exercises = sourceExercises.flatMap((source) => {
     const definition = catalog.getExercise(source.code)
     if (!definition) return []
-    let sets = Math.min(
-      source.sets,
+    const maximumSets = Math.min(
       maximumAdditionalSets({
         exercise: definition,
         rollingVolume,
         sessionPrimaryVolume,
+        programmingRole: source.programmingRole,
       }),
+      programmingRoleSetCap(source),
     )
+    let sets = Math.min(source.sets, maximumSets)
+    const pattern = patternFromCategory(source.category)
+    if (
+      pattern &&
+      source.programmingRole !== 'CORE_CONTROL' &&
+      (input.prescription.timeBudgetMinutes ?? input.prescription.durationMinutes) >= 45
+    ) {
+      const remainingExposures = Math.max(
+        1,
+        remainingRoleExposuresForPattern({
+          roles: input.blueprint.roles,
+          sequenceIndex: input.sequenceIndex,
+          pattern,
+          availableMinutes:
+            input.prescription.timeBudgetMinutes ?? input.prescription.durationMinutes,
+        }),
+      )
+      const minimumShare = Math.max(
+        0,
+        ...definition.primaryMuscles.map((muscle) =>
+          Math.ceil(
+            Math.max(
+              0,
+              input.blueprint.goalRange.minimumSetsPerMuscle -
+                (rollingVolume[muscle] ?? 0),
+            ) / remainingExposures,
+          ),
+        ),
+      )
+      sets = Math.min(maximumSets, Math.max(sets, minimumShare))
+    }
+    if (input.blueprint.targetSessions >= 4 && source.category === 'SINGLE_LEG') {
+      sets = Math.min(sets, 1)
+    }
+    if (finalSession) {
+      const primaryDeficit = Math.max(
+        0,
+        ...definition.primaryMuscles
+          .filter((muscle) =>
+            CANONICAL_MUSCLES.includes(muscle as (typeof CANONICAL_MUSCLES)[number]),
+          )
+          .map(
+            (muscle) =>
+              input.blueprint.goalRange.minimumSetsPerMuscle -
+              (rollingVolume[muscle] ?? 0),
+          ),
+      )
+      const secondaryDeficit = Math.max(
+        0,
+        ...definition.secondaryMuscles
+          .filter((muscle) =>
+            CANONICAL_MUSCLES.includes(muscle as (typeof CANONICAL_MUSCLES)[number]),
+          )
+          .map(
+            (muscle) =>
+              (input.blueprint.goalRange.minimumSetsPerMuscle -
+                (rollingVolume[muscle] ?? 0)) /
+              0.5,
+          ),
+      )
+      const deficitDose = Math.ceil(primaryDeficit || secondaryDeficit)
+      if (deficitDose > 0) sets = Math.min(sets, deficitDose)
+    }
     const successfulWindows = new Set(
       successfulDistinctWeekWindows(source, input.history, input.blueprint.generatedAt),
     )
@@ -481,6 +904,7 @@ export function materializeStrengthWeekSession(input: {
       )
     const canConsiderSetProgression =
       !setProgressionUsed &&
+      source.programmingRole !== 'CORE_CONTROL' &&
       !input.blueprint.returning &&
       !input.blueprint.externalStrengthVolumeUnknown &&
       source.progressionDecision?.action === 'KEEP_LOAD' &&
@@ -493,6 +917,7 @@ export function materializeStrengthWeekSession(input: {
         exercise: definition,
         rollingVolume,
         sessionPrimaryVolume,
+        programmingRole: source.programmingRole,
       })
       if (allowedWithProgression >= sets + 1) {
         sets += 1
@@ -521,6 +946,7 @@ export function materializeStrengthWeekSession(input: {
       sets,
       rollingVolume,
       sessionPrimaryVolume,
+      programmingRole: source.programmingRole,
     })
     return [exercise]
   })
@@ -555,6 +981,7 @@ export function materializeStrengthWeekSession(input: {
         sets: exercise.sets,
         rollingVolume: rollingAfter,
         sessionPrimaryVolume: sessionPrimaryAfter,
+        programmingRole: exercise.programmingRole,
       })
     }
     let changed = true
@@ -565,6 +992,8 @@ export function materializeStrengthWeekSession(input: {
         const definition = catalog.getExercise(exercise.code)
         if (!definition) continue
         if (
+          exercise.programmingRole === 'CORE_CONTROL' ||
+          exercise.programmingRole === 'ACCESSORY' ||
           !definition.primaryMuscles.some(
             (muscle) =>
               (rollingAfter[muscle] ?? 0) < input.blueprint.goalRange.targetSetsPerMuscle,
@@ -573,10 +1002,12 @@ export function materializeStrengthWeekSession(input: {
             exercise: definition,
             rollingVolume: rollingAfter,
             sessionPrimaryVolume: sessionPrimaryAfter,
+            programmingRole: exercise.programmingRole,
           }) < 1
         ) {
           continue
         }
+        if (exercise.sets >= programmingRoleSetCap(exercise)) continue
         const nextExercise = cloneWithSets(exercise, exercise.sets + 1)
         const nextExercises = fittedPrescription.exercises.map((candidate, position) =>
           position === index ? nextExercise : candidate,
@@ -598,12 +1029,26 @@ export function materializeStrengthWeekSession(input: {
           sets: 1,
           rollingVolume: rollingAfter,
           sessionPrimaryVolume: sessionPrimaryAfter,
+          programmingRole: exercise.programmingRole,
         })
         volumeFilled = true
         changed = true
       }
     }
   }
+  const originalExerciseOrder = new Map(
+    input.prescription.exercises.map((exercise, index) => [exercise.id, index]),
+  )
+  const orderedExercises = [...fittedPrescription.exercises].sort(
+    (left, right) =>
+      (originalExerciseOrder.get(left.id) ?? Number.MAX_SAFE_INTEGER) -
+      (originalExerciseOrder.get(right.id) ?? Number.MAX_SAFE_INTEGER),
+  )
+  fittedPrescription = refreshStrengthPrescriptionTimeEstimate({
+    ...fittedPrescription,
+    exercises: orderedExercises,
+    blocks: orderedExercises,
+  })
   const setProgressionPreserved = fittedPrescription.exercises.some(
     (exercise) => exercise.progressionDecision?.action === 'INCREASE_SETS',
   )
@@ -628,6 +1073,17 @@ export function materializeStrengthWeekSession(input: {
   const missingMovementPatterns = REQUIRED_PATTERNS.filter(
     (pattern) => !coverage.includes(pattern),
   )
+  const roleStructureDecision = refreshStrengthRoleStructureDecision(
+    input.prescription.strengthRoleStructure,
+    fittedPrescription.exercises,
+    fittedPrescription.exercises.length < input.prescription.exercises.length
+      ? [STRENGTH_WEEK_REASON_CODES.ROLE_STRUCTURE_VOLUME_LIMITED]
+      : [],
+  )
+  fittedPrescription = {
+    ...fittedPrescription,
+    strengthRoleStructure: roleStructureDecision,
+  }
   const reasonCodes = [
     ...input.blueprint.reasonCodes,
     STRENGTH_WEEK_REASON_CODES.PLANNED_VOLUME_COUNTED,
@@ -649,6 +1105,7 @@ export function materializeStrengthWeekSession(input: {
         ]
       : []),
     ...(volumeFilled ? [STRENGTH_WEEK_REASON_CODES.VOLUME_FILLED] : []),
+    ...(roleStructureDecision?.reasonCodes ?? []),
   ]
   const context: StrengthWeekContext = {
     policyVersion: STRENGTH_WEEK_POLICY_VERSION,
@@ -659,11 +1116,13 @@ export function materializeStrengthWeekSession(input: {
     completedVolume: { ...input.blueprint.completedVolume },
     plannedVolumeBefore: { ...input.state.plannedVolume },
     plannedVolumeAfter,
-    remainingTargetVolume: goalVolume(input.blueprint.goalRange, combinedAfter),
+    remainingMinimumVolume: goalVolume(input.blueprint.goalRange, combinedAfter),
+    remainingTargetVolume: targetVolume(input.blueprint.goalRange, combinedAfter),
     hardCapRemaining: capRemaining(combinedAfter),
     movementPatternCoverage: coverage,
     missingMovementPatterns,
     reasonCodes: [...new Set(reasonCodes)],
+    roleStructure: roleStructureDecision,
   }
   return {
     prescription: {
@@ -681,6 +1140,10 @@ export function materializeStrengthWeekSession(input: {
           )
         : { ...input.state.setProgressionVolume },
       materializedSessionCount: input.state.materializedSessionCount + 1,
+      roleStructures: [
+        ...input.state.roleStructures,
+        ...(roleStructureDecision ? [roleStructureDecision] : []),
+      ],
     },
   }
 }
@@ -705,8 +1168,16 @@ export function finalizeStrengthWeekPlan(
   const hasUnsupportedChild = unsupportedSessionReasons.length > 0
   const missingMaterializedSession =
     state.materializedSessionCount < expectedMaterializedSessionCount
-  const remainingTargetVolume = goalVolume(blueprint.goalRange, combined)
+  const remainingMinimumVolume = goalVolume(blueprint.goalRange, combined)
+  const remainingTargetVolume = targetVolume(blueprint.goalRange, combined)
+  const belowMinimum = Object.values(remainingMinimumVolume).some((amount) => amount > 0)
   const belowTarget = Object.values(remainingTargetVolume).some((amount) => amount > 0)
+  const structureStatus: NonNullable<StrengthWeekPlan['structureStatus']> =
+    state.roleStructures.some((decision) => decision.status === 'INVALID')
+      ? 'INVALID'
+      : state.roleStructures.some((decision) => decision.status === 'CONSTRAINED')
+        ? 'CONSTRAINED'
+        : 'SUPPORTED'
   const remainingTimeSeconds = Math.max(0, options.remainingTimeSeconds ?? 0)
   const minimumPolicyAdditionSeconds = Math.max(
     0,
@@ -722,6 +1193,8 @@ export function finalizeStrengthWeekPlan(
         ? 'PARTIAL'
         : 'UNSUPPORTED'
       : blueprint.targetSessions < 2 ||
+          belowMinimum ||
+          structureStatus !== 'SUPPORTED' ||
           missingMovementPatterns.length > 0 ||
           blueprint.appSessionCount + blueprint.fixedStrengthExposureCount <
             blueprint.targetSessions
@@ -729,17 +1202,22 @@ export function finalizeStrengthWeekPlan(
         : 'SUPPORTED'
   const partialReasonCode =
     unsupportedSessionReasons[0] ??
-    (blueprint.targetSessions < 2
-      ? STRENGTH_WEEK_REASON_CODES.ONE_DAY_FULL_BODY
-      : missingMovementPatterns.length > 0
-        ? timeActuallyLimitsNextAddition
-          ? STRENGTH_WEEK_REASON_CODES.BELOW_TARGET_TIME
-          : STRENGTH_WEEK_REASON_CODES.COVERAGE_INCOMPLETE
-        : belowTarget
-          ? timeActuallyLimitsNextAddition
-            ? STRENGTH_WEEK_REASON_CODES.BELOW_TARGET_TIME
-            : STRENGTH_WEEK_REASON_CODES.BELOW_TARGET_CONSTRAINT
-          : STRENGTH_WEEK_REASON_CODES.COVERAGE_INCOMPLETE)
+    (structureStatus === 'INVALID'
+      ? STRENGTH_WEEK_REASON_CODES.ROLE_STRUCTURE_INVALID
+      : structureStatus === 'CONSTRAINED'
+        ? (state.roleStructures.find((decision) => decision.status === 'CONSTRAINED')
+            ?.reasonCodes[0] ?? STRENGTH_WEEK_REASON_CODES.ROLE_STRUCTURE_INVALID)
+        : blueprint.targetSessions < 2
+          ? STRENGTH_WEEK_REASON_CODES.ONE_DAY_FULL_BODY
+          : missingMovementPatterns.length > 0
+            ? timeActuallyLimitsNextAddition
+              ? STRENGTH_WEEK_REASON_CODES.BELOW_TARGET_TIME
+              : STRENGTH_WEEK_REASON_CODES.COVERAGE_INCOMPLETE
+            : belowMinimum
+              ? timeActuallyLimitsNextAddition
+                ? STRENGTH_WEEK_REASON_CODES.BELOW_TARGET_TIME
+                : STRENGTH_WEEK_REASON_CODES.BELOW_TARGET_CONSTRAINT
+              : STRENGTH_WEEK_REASON_CODES.COVERAGE_INCOMPLETE)
   return {
     policyVersion: STRENGTH_WEEK_POLICY_VERSION,
     weekAnchorDate: blueprint.weekAnchorDate,
@@ -748,8 +1226,9 @@ export function finalizeStrengthWeekPlan(
       status === 'SUPPORTED'
         ? {
             reasonCode: STRENGTH_WEEK_REASON_CODES.FULLY_SUPPORTED,
-            messageFi:
-              'Viikon tavoiteharjoitukset ja vaaditut liikesuunnat on muodostettu.',
+            messageFi: belowTarget
+              ? 'Viikon harjoitusrakenne ja vähimmäisvolyymi on muodostettu. Tavoitevolyymia ei täytetty keinotekoisella lisätyöllä.'
+              : 'Viikon tavoiteharjoitukset, rakenteet ja vaaditut liikesuunnat on muodostettu.',
             actionFi: 'Noudata viikkosuunnitelmaa ja tee päivän kuntotarkistus.',
             evidence: {
               remainingTimeSeconds,
@@ -773,16 +1252,22 @@ export function finalizeStrengthWeekPlan(
           : {
               reasonCode: partialReasonCode,
               messageFi:
-                blueprint.targetSessions < 2
-                  ? 'Käyttäjän valitsemaan yhteen harjoituspäivään ei mahdu koko viikon tavoitealtistusta.'
-                  : partialReasonCode === STRENGTH_WEEK_REASON_CODES.BELOW_TARGET_TIME
-                    ? 'Aikabudjetti ei riitä koko tavoitevolyymiin tai puuttuvaan liikesuuntaan turvallisia palautuksia ja puskuria säilyttäen.'
-                    : partialReasonCode === STRENGTH_WEEK_REASON_CODES.COVERAGE_INCOMPLETE
-                      ? 'Viikon pakollinen liikemallikattavuus jäi vajaaksi, vaikka aikaa olisi ollut versionoidun vähimmäislisäyksen verran.'
-                      : partialReasonCode ===
-                          STRENGTH_WEEK_REASON_CODES.EXTERNAL_VOLUME_UNKNOWN
-                        ? 'Ulkopuolisen voimaharjoituksen sarjamäärä ei ole tiedossa, joten automaattista sarjaprogressiota ei tehdä.'
-                        : 'Viikon vähimmäisvolyymi jäi vajaaksi turvallisen aika-, väline- tai volyymirajan vuoksi.',
+                partialReasonCode === STRENGTH_WEEK_REASON_CODES.ROLE_STRUCTURE_INVALID
+                  ? 'Yhden tai useamman harjoituksen roolikohtainen vähimmäisrakenne jäi vajaaksi ilman tunnistettua käyttäjärajoitetta.'
+                  : (state.roleStructures.find((decision) =>
+                      decision.reasonCodes.includes(partialReasonCode),
+                    )?.messageFi ??
+                    (blueprint.targetSessions < 2
+                      ? 'Käyttäjän valitsemaan yhteen harjoituspäivään ei mahdu koko viikon tavoitealtistusta.'
+                      : partialReasonCode === STRENGTH_WEEK_REASON_CODES.BELOW_TARGET_TIME
+                        ? 'Aikabudjetti ei riitä koko tavoitevolyymiin tai puuttuvaan liikesuuntaan turvallisia palautuksia ja puskuria säilyttäen.'
+                        : partialReasonCode ===
+                            STRENGTH_WEEK_REASON_CODES.COVERAGE_INCOMPLETE
+                          ? 'Viikon pakollinen liikemallikattavuus jäi vajaaksi, vaikka aikaa olisi ollut versionoidun vähimmäislisäyksen verran.'
+                          : partialReasonCode ===
+                              STRENGTH_WEEK_REASON_CODES.EXTERNAL_VOLUME_UNKNOWN
+                            ? 'Ulkopuolisen voimaharjoituksen sarjamäärä ei ole tiedossa, joten automaattista sarjaprogressiota ei tehdä.'
+                            : 'Viikon vähimmäisvolyymi jäi vajaaksi turvallisen aika-, väline- tai volyymirajan vuoksi.')),
               actionFi:
                 blueprint.targetSessions < 2
                   ? 'Lisää toinen harjoituspäivä, jos se sopii arkeesi.'
@@ -800,12 +1285,19 @@ export function finalizeStrengthWeekPlan(
       blueprint.completedStrengthExposureCount +
       blueprint.fixedStrengthExposureCount +
       state.materializedSessionCount,
+    minimumSetsPerMuscle: blueprint.goalRange.minimumSetsPerMuscle,
+    targetSetsPerMuscle: blueprint.goalRange.targetSetsPerMuscle,
     completedVolume: { ...blueprint.completedVolume },
     plannedVolume: { ...state.plannedVolume },
+    remainingMinimumVolume,
     remainingTargetVolume,
     hardCapRemaining: capRemaining(combined),
     movementPatternCoverage: [...state.movementPatternCoverage],
     missingMovementPatterns,
+    structureStatus,
+    roleStructures: [...state.roleStructures],
+    minimumVolumeStatus: belowMinimum ? 'BELOW_MINIMUM' : 'MET',
+    targetVolumeStatus: belowTarget ? 'BELOW_TARGET' : 'MET',
     reasonCodes: [
       ...new Set([
         ...blueprint.reasonCodes,
@@ -815,7 +1307,8 @@ export function finalizeStrengthWeekPlan(
         STRENGTH_WEEK_REASON_CODES.ROLLING_VOLUME_CAP,
         ...(status === 'SUPPORTED' ? [STRENGTH_WEEK_REASON_CODES.FULLY_SUPPORTED] : []),
         ...unsupportedSessionReasons,
-        ...(belowTarget
+        ...state.roleStructures.flatMap((decision) => decision.reasonCodes),
+        ...(belowMinimum
           ? [
               blueprint.bodyweightPullUnsupported
                 ? STRENGTH_WEEK_REASON_CODES.BELOW_TARGET_EQUIPMENT
@@ -823,6 +1316,9 @@ export function finalizeStrengthWeekPlan(
                   ? STRENGTH_WEEK_REASON_CODES.BELOW_TARGET_TIME
                   : STRENGTH_WEEK_REASON_CODES.BELOW_TARGET_CONSTRAINT,
             ]
+          : []),
+        ...(belowTarget
+          ? [STRENGTH_WEEK_REASON_CODES.PREFERRED_VOLUME_BELOW_TARGET]
           : []),
         ...(missingMovementPatterns.length
           ? [STRENGTH_WEEK_REASON_CODES.COVERAGE_INCOMPLETE]

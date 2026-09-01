@@ -1,12 +1,16 @@
 import { Link, useParams } from 'react-router-dom'
-import { doseLabelFi } from '../../domain/coaching'
+import { doseLabelFi, strengthWeekRoleLabelFi } from '../../domain/coaching'
 import { useAppData } from '../app-data/appDataContextValue'
 import { activeTrainingPlan } from '../coaching/coachingActions'
 import {
   calendarContextForProfile,
+  formatEstimatedSeconds,
   planSessions,
   planStrengthWeek,
+  prescriptionDecisionReasons,
+  prescriptionTimeBreakdownItems,
   sessionLabels,
+  sessionTotalDurationMinutes,
 } from '../coaching/coachingData'
 
 const weekdays = [
@@ -62,6 +66,9 @@ export function WeekSessionPreviewPage() {
   const strengthWeek = session.strengthWeekContext
   const title = session.title ?? sessionLabels[session.kind]
   const isToday = session.day === clock.weekday
+  const totalDurationMinutes = sessionTotalDurationMinutes(session)
+  const timeBreakdown = prescription ? prescriptionTimeBreakdownItems(prescription) : []
+  const decisionReasons = prescription ? prescriptionDecisionReasons(prescription) : []
 
   return (
     <div className="page-stack workout-page week-session-preview">
@@ -70,7 +77,7 @@ export function WeekSessionPreviewPage() {
           <p className="eyebrow">Harjoituksen ennakkonäkymä</p>
           <h1>{title}</h1>
           <p>
-            {weekdays[session.day - 1]} · {session.durationMinutes} min ·{' '}
+            {weekdays[session.day - 1]} · {totalDurationMinutes} min kokonaiskesto ·{' '}
             {intensityLabels[session.intensity]}
           </p>
         </div>
@@ -118,7 +125,7 @@ export function WeekSessionPreviewPage() {
           <p className="eyebrow">
             Voimaviikon harjoitus {strengthWeek.sequenceIndex + 1}
           </p>
-          <h2>{strengthWeek.role.replaceAll('_', ' ')}</h2>
+          <h2>{strengthWeekRoleLabelFi(strengthWeek.role)}</h2>
           <p>
             Tämä sama versionoitu harjoitusrunko avautuu suoritukseen. Päivän
             kuntotarkistus voi vain keventää, lyhentää tai estää sen ja kertoo silloin
@@ -144,6 +151,26 @@ export function WeekSessionPreviewPage() {
           <p className="muted-copy">
             Päivän kuntotarkistus suosittelee näistä vointiin ja käytettävissä olevaan
             aikaan sopivaa versiota.
+          </p>
+        </section>
+      )}
+
+      {prescription?.timeBreakdown && (
+        <section className="surface-card" aria-labelledby="time-breakdown-heading">
+          <p className="eyebrow">Kokonaiskesto</p>
+          <h2 id="time-breakdown-heading">Mistä {totalDurationMinutes} min muodostuu?</h2>
+          <div className="preview-variant-list" aria-label="Harjoituksen ajan erittely">
+            {timeBreakdown.map((item) => (
+              <span key={item.label}>
+                <strong>{item.label}</strong>
+                <small>{formatEstimatedSeconds(item.seconds)}</small>
+              </span>
+            ))}
+          </div>
+          <p className="muted-copy">
+            Kokonaiskesto sisältää koko harjoituksen alusta loppuun. Päivän enimmäisaika
+            on {prescription.timeBudgetMinutes ?? totalDurationMinutes} min, jota
+            suunnitelma ei ylitä.
           </p>
         </section>
       )}
@@ -195,11 +222,10 @@ export function WeekSessionPreviewPage() {
             <details className="decision-details">
               <summary>Miksi tämä harjoitus on suunnitelmassa?</summary>
               <ul>
-                {prescription.decisionTrace.rules.map((rule) => (
-                  <li key={rule.ruleId}>{rule.message}</li>
+                {decisionReasons.map((reason) => (
+                  <li key={reason}>{reason}</li>
                 ))}
               </ul>
-              <p>{prescription.progression}</p>
             </details>
           </>
         ) : session.unsupportedPrescription ? (

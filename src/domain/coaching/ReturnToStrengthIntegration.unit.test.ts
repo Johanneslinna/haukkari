@@ -48,7 +48,7 @@ function context(
   return {
     age: 35,
     contentReleaseId: 'adult-resistance-v1.0.0',
-    ruleVersion: 'adult-resistance-rules-1.4.0',
+    ruleVersion: 'adult-resistance-rules-1.5.0',
     experience: 'INTERMEDIATE',
     goal: 'GENERAL_FITNESS',
     equipment: ['Kehonpaino', 'Käsipainot'],

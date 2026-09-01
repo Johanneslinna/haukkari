@@ -55,6 +55,10 @@ import {
 } from './TimeBudgetPolicy'
 import type { StrengthTrainingBackground } from './ReturnToStrengthPolicy'
 import {
+  refreshStrengthRoleStructureDecision,
+  STRENGTH_WEEK_REASON_CODES,
+} from './StrengthWeekPolicy'
+import {
   SEVERE_DOMS_STRENGTH_MAXIMUM_RPE,
   SEVERE_DOMS_STRENGTH_REASON_CODE,
   SEVERE_DOMS_STRENGTH_POLICY_VERSION,
@@ -63,7 +67,7 @@ import {
   SEVERE_DOMS_STRENGTH_VOLUME_MULTIPLIER,
 } from './ReadinessEngine'
 
-export const TRAINING_RULE_VERSION = '2026.08.25-v2'
+export const TRAINING_RULE_VERSION = '2026.08.31-v3'
 
 export type PrescriptionProfile = {
   goal: GoalType
@@ -185,6 +189,7 @@ export function exerciseSubstitutions(
           sets: planned.sets,
           rollingVolume,
           sessionPrimaryVolume,
+          programmingRole: planned.programmingRole,
         })
       }
       if (
@@ -192,6 +197,7 @@ export function exerciseSubstitutions(
           exercise: template,
           rollingVolume,
           sessionPrimaryVolume,
+          programmingRole: exercise.programmingRole,
         }) < exercise.sets
       ) {
         return []
@@ -749,6 +755,49 @@ function compactExerciseLimit(minutes: number) {
   return 4
 }
 
+function balancedCompactStrengthExercises(
+  exercises: readonly ExercisePrescription[],
+  minutes: number,
+  role: StrengthWeekSessionRole | undefined,
+) {
+  const limit = Math.min(compactExerciseLimit(minutes), exercises.length)
+  if (exercises.length <= limit) return [...exercises]
+  const selected: ExercisePrescription[] = []
+  const selectFirst = (patterns: readonly string[]) => {
+    const match = exercises.find(
+      (exercise) => !selected.includes(exercise) && patterns.includes(exercise.category),
+    )
+    if (match) selected.push(match)
+  }
+  if (role?.startsWith('UPPER')) {
+    selectFirst(['HORIZONTAL_PUSH', 'VERTICAL_PUSH'])
+    selectFirst(['HORIZONTAL_PULL', 'VERTICAL_PULL'])
+    if (limit >= 3) selectFirst(['ANTI_EXTENSION', 'ANTI_ROTATION'])
+  } else if (role?.startsWith('LOWER')) {
+    selectFirst(['SQUAT', 'SINGLE_LEG'])
+    selectFirst(['HINGE'])
+  } else {
+    selectFirst(['SQUAT', 'HINGE', 'SINGLE_LEG'])
+    selectFirst(['HORIZONTAL_PUSH', 'VERTICAL_PUSH'])
+    selectFirst(['HORIZONTAL_PULL', 'VERTICAL_PULL'])
+    if (limit >= 4) selectFirst(['ANTI_EXTENSION', 'ANTI_ROTATION'])
+  }
+  const priority = [...exercises].sort((left, right) => {
+    const roleRank = (exercise: ExercisePrescription) => {
+      if (exercise.programmingRole === 'PRIMARY') return 0
+      if (exercise.programmingRole === 'SECONDARY_COMPOUND') return 1
+      if (exercise.programmingRole === 'CORE_CONTROL') return 2
+      return 3
+    }
+    return roleRank(left) - roleRank(right)
+  })
+  for (const exercise of priority) {
+    if (selected.length >= limit) break
+    if (!selected.includes(exercise)) selected.push(exercise)
+  }
+  return selected
+}
+
 function fitDoseToSeconds(
   exercise: ExercisePrescription,
   maxSeconds: number,
@@ -944,6 +993,9 @@ function severeDomsStrengthWeekContext(
   return {
     ...context,
     plannedVolumeAfter,
+    remainingMinimumVolume: context.remainingMinimumVolume
+      ? mergeMuscleVolume(context.remainingMinimumVolume, removedVolume)
+      : undefined,
     remainingTargetVolume: mergeMuscleVolume(
       context.remainingTargetVolume,
       removedVolume,
@@ -1073,21 +1125,32 @@ export function adaptPrescription(
               evidenceIds: ['APP-READINESS-RULE'],
             }
     const normalizedExercises = prescriptionBlocks(normalized)
+    const variantSourceExercises = compact
+      ? balancedCompactStrengthExercises(
+          normalizedExercises,
+          variantTimeBudgetMinutes,
+          normalized.decisionTrace.strengthWeek?.role,
+        )
+      : normalizedExercises
     const compactKeyExerciseIds = new Set(
-      normalizedExercises
+      variantSourceExercises
         .filter((exercise) => exercise.keyExercise)
         .slice(0, 2)
         .map((exercise) => exercise.id),
     )
-    if (compact && compactKeyExerciseIds.size < Math.min(2, normalizedExercises.length)) {
-      for (const exercise of normalizedExercises) {
+    if (
+      compact &&
+      compactKeyExerciseIds.size < Math.min(2, variantSourceExercises.length)
+    ) {
+      for (const exercise of variantSourceExercises) {
         compactKeyExerciseIds.add(exercise.id)
-        if (compactKeyExerciseIds.size === Math.min(2, normalizedExercises.length)) break
+        if (compactKeyExerciseIds.size === Math.min(2, variantSourceExercises.length))
+          break
       }
     }
     const readinessAdaptedExercises = severeDomsDeload
-      ? severeDomsDeloadStrengthExercises(normalizedExercises, progressContext)
-      : normalizedExercises.map((exercise) =>
+      ? severeDomsDeloadStrengthExercises(variantSourceExercises, progressContext)
+      : variantSourceExercises.map((exercise) =>
           ordinaryLight ? lightenStrengthExercise(exercise) : { ...exercise },
         )
     const exercises = readinessAdaptedExercises.map((adaptedExercise) => {
@@ -1104,6 +1167,13 @@ export function adaptPrescription(
         ? `${normalized.title} · enintään ${variantTimeBudgetMinutes} min`
         : normalized.title,
       timeBudgetMinutes: variantTimeBudgetMinutes,
+      strengthRoleStructure: compact
+        ? refreshStrengthRoleStructureDecision(
+            normalized.strengthRoleStructure,
+            exercises,
+            [STRENGTH_WEEK_REASON_CODES.ROLE_STRUCTURE_TIME_LIMITED],
+          )
+        : normalized.strengthRoleStructure,
       warmupMinutes:
         ADULT_STRENGTH_TIME_POLICY.warmupSecondsForBudget(variantTimeBudgetMinutes) / 60,
       warmup: [

@@ -1,4 +1,4 @@
-import type { ExercisePrescription } from './types'
+import type { ExercisePrescription, StrengthExerciseProgrammingRole } from './types'
 import type { ExerciseCatalog, ExerciseDefinition } from './content/TrainingContent'
 
 export const STRENGTH_VOLUME_POLICY_VERSION = 'strength-volume-policy-1.0.0'
@@ -19,6 +19,24 @@ export type VersionedStrengthSet = {
 
 export type MuscleVolume = Record<string, number>
 
+function programmingVolumeMuscles(input: {
+  primaryMuscles: readonly string[]
+  secondaryMuscles: readonly string[]
+  programmingRole?: StrengthExerciseProgrammingRole
+}) {
+  if (input.programmingRole !== 'CORE_CONTROL') {
+    return { primary: input.primaryMuscles, secondary: input.secondaryMuscles }
+  }
+  const primary = input.primaryMuscles.filter((muscle) => muscle === 'trunk')
+  const secondary = [
+    ...new Set([
+      ...input.secondaryMuscles,
+      ...input.primaryMuscles.filter((muscle) => muscle !== 'trunk'),
+    ]),
+  ]
+  return { primary, secondary }
+}
+
 export function mergeMuscleVolume(
   ...volumes: readonly Readonly<MuscleVolume>[]
 ): MuscleVolume {
@@ -37,16 +55,41 @@ export function mergeMuscleVolume(
 export function calculatePlannedMuscleVolume(
   exercises: readonly Pick<
     ExercisePrescription,
-    'sets' | 'primaryMuscles' | 'secondaryMuscles'
+    'sets' | 'primaryMuscles' | 'secondaryMuscles' | 'programmingRole'
   >[],
 ): MuscleVolume {
   const volume: MuscleVolume = {}
   for (const exercise of exercises) {
-    for (const muscle of exercise.primaryMuscles ?? []) {
+    const muscles = programmingVolumeMuscles({
+      primaryMuscles: exercise.primaryMuscles ?? [],
+      secondaryMuscles: exercise.secondaryMuscles ?? [],
+      programmingRole: exercise.programmingRole,
+    })
+    for (const muscle of muscles.primary) {
       add(volume, muscle, exercise.sets * PRIMARY_MUSCLE_SET_WEIGHT)
     }
-    for (const muscle of exercise.secondaryMuscles ?? []) {
+    for (const muscle of muscles.secondary) {
       add(volume, muscle, exercise.sets * SECONDARY_MUSCLE_SET_WEIGHT)
+    }
+  }
+  return volume
+}
+
+export function calculateSessionPrimaryMuscleVolume(
+  exercises: readonly Pick<
+    ExercisePrescription,
+    'sets' | 'primaryMuscles' | 'secondaryMuscles' | 'programmingRole'
+  >[],
+): MuscleVolume {
+  const volume: MuscleVolume = {}
+  for (const exercise of exercises) {
+    const muscles = programmingVolumeMuscles({
+      primaryMuscles: exercise.primaryMuscles ?? [],
+      secondaryMuscles: exercise.secondaryMuscles ?? [],
+      programmingRole: exercise.programmingRole,
+    })
+    for (const muscle of muscles.primary) {
+      add(volume, muscle, exercise.sets * PRIMARY_MUSCLE_SET_WEIGHT)
     }
   }
   return volume
@@ -104,9 +147,15 @@ export function maximumAdditionalSets(input: {
   exercise: ExerciseDefinition
   rollingVolume: Readonly<MuscleVolume>
   sessionPrimaryVolume: Readonly<MuscleVolume>
+  programmingRole?: StrengthExerciseProgrammingRole
 }): number {
   let allowed = Number.POSITIVE_INFINITY
-  for (const muscle of input.exercise.primaryMuscles) {
+  const muscles = programmingVolumeMuscles({
+    primaryMuscles: input.exercise.primaryMuscles,
+    secondaryMuscles: input.exercise.secondaryMuscles,
+    programmingRole: input.programmingRole,
+  })
+  for (const muscle of muscles.primary) {
     allowed = Math.min(
       allowed,
       Math.floor(
@@ -119,7 +168,7 @@ export function maximumAdditionalSets(input: {
       ),
     )
   }
-  for (const muscle of input.exercise.secondaryMuscles) {
+  for (const muscle of muscles.secondary) {
     allowed = Math.min(
       allowed,
       Math.floor(
@@ -136,12 +185,18 @@ export function addPlannedSets(input: {
   sets: number
   rollingVolume: MuscleVolume
   sessionPrimaryVolume: MuscleVolume
+  programmingRole?: StrengthExerciseProgrammingRole
 }) {
-  for (const muscle of input.exercise.primaryMuscles) {
+  const muscles = programmingVolumeMuscles({
+    primaryMuscles: input.exercise.primaryMuscles,
+    secondaryMuscles: input.exercise.secondaryMuscles,
+    programmingRole: input.programmingRole,
+  })
+  for (const muscle of muscles.primary) {
     add(input.rollingVolume, muscle, input.sets * PRIMARY_MUSCLE_SET_WEIGHT)
     add(input.sessionPrimaryVolume, muscle, input.sets * PRIMARY_MUSCLE_SET_WEIGHT)
   }
-  for (const muscle of input.exercise.secondaryMuscles) {
+  for (const muscle of muscles.secondary) {
     add(input.rollingVolume, muscle, input.sets * SECONDARY_MUSCLE_SET_WEIGHT)
   }
 }

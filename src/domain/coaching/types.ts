@@ -246,6 +246,21 @@ export type StrengthWeekSessionRole =
 export type StrengthMovementPattern =
   'SQUAT' | 'HINGE' | 'HORIZONTAL_PUSH' | 'HORIZONTAL_PULL' | 'CORE'
 
+export type StrengthExerciseProgrammingRole =
+  'PRIMARY' | 'SECONDARY_COMPOUND' | 'ACCESSORY' | 'CORE_CONTROL'
+
+export type StrengthRoleStructureDecision = {
+  role: StrengthWeekSessionRole
+  status: 'COMPLETE' | 'CONSTRAINED' | 'INVALID'
+  minimumExerciseCount: number
+  targetExerciseCount: number
+  actualExerciseCount: number
+  requiredSlotIds: string[]
+  filledRequiredSlotIds: string[]
+  reasonCodes: string[]
+  messageFi: string
+}
+
 export type StrengthWeekContext = {
   policyVersion: string
   weekAnchorDate: string
@@ -255,11 +270,14 @@ export type StrengthWeekContext = {
   completedVolume: Record<string, number>
   plannedVolumeBefore: Record<string, number>
   plannedVolumeAfter: Record<string, number>
+  remainingMinimumVolume?: Record<string, number>
   remainingTargetVolume: Record<string, number>
   hardCapRemaining: Record<string, number>
   movementPatternCoverage: StrengthMovementPattern[]
   missingMovementPatterns: StrengthMovementPattern[]
   reasonCodes: string[]
+  /** Uusissa snapshot-versioissa roolikohtaisen rakenteen auditoitava tulos. */
+  roleStructure?: StrengthRoleStructureDecision
 }
 
 export type StrengthWeekPlan = {
@@ -280,6 +298,8 @@ export type StrengthWeekPlan = {
   appSessionCount: number
   fixedStrengthExposureCount: number
   sessionExposureCount: number
+  minimumSetsPerMuscle: number
+  targetSetsPerMuscle: number
   completedVolume: Record<string, number>
   plannedVolume: Record<string, number>
   remainingTargetVolume: Record<string, number>
@@ -287,6 +307,12 @@ export type StrengthWeekPlan = {
   movementPatternCoverage: StrengthMovementPattern[]
   missingMovementPatterns: StrengthMovementPattern[]
   reasonCodes: string[]
+  /** Vanhoista suunnitelmasnapshoteista puuttuva additiivinen rakennetieto. */
+  structureStatus?: 'SUPPORTED' | 'CONSTRAINED' | 'INVALID'
+  roleStructures?: StrengthRoleStructureDecision[]
+  minimumVolumeStatus?: 'MET' | 'BELOW_MINIMUM'
+  targetVolumeStatus?: 'MET' | 'BELOW_TARGET'
+  remainingMinimumVolume?: Record<string, number>
 }
 
 export type PlannedSession = {
@@ -525,6 +551,12 @@ export type ExercisePrescription = {
   primaryMuscles?: string[]
   secondaryMuscles?: string[]
   techniqueReviewStatus?: 'VERIFIED' | 'PENDING_REVIEW'
+  /** Harjoituksen sisäinen annostelurooli; puuttuu ennen tätä versiota tallennetuista snapshot-versioista. */
+  programmingRole?: StrengthExerciseProgrammingRole
+  /** Viikkorakenteen paikka, jonka tämä liike täyttää. */
+  programmingSlotId?: string
+  /** Roolipaikan annostelukatto; puuttuu legacy-snapshotista. */
+  programmingSetCap?: number
   keyExercise: boolean
   /** V2:n yksikäsitteinen annos. Puuttuu vain ennen v2:ta tallennetuista snapshoteista. */
   dose?: PrescriptionDose
@@ -559,6 +591,8 @@ export type PrescribedSession = {
   timeAdjustmentReasonCodes?: string[]
   /** Paluusovitus voi säilyttää alkuperäisen kanonisen aikapuskurin. */
   minimumTimeBufferSeconds?: number
+  /** Roolikohtaisen täyden version auditoitava rakennuspäätös. */
+  strengthRoleStructure?: StrengthRoleStructureDecision
   objective?: SessionObjective
   confidence?: DecisionTrace['confidence']
   warmup: string[]

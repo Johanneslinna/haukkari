@@ -9,6 +9,9 @@ import {
   authorizeWorkoutPrescriptionForCurrentAthlete,
   adaptWorkoutPrescriptionForCurrentAthlete,
   currentWorkoutSafetyContext,
+  effectiveSessionKindForCurrentPlan,
+  shouldReevaluateStoredSafetyBlock,
+  shouldReevaluateStoredSafetyReasonCode,
 } from './WorkoutPrescriptionAdapter'
 
 const userId = '00000000-0000-4000-8000-000000000001'
@@ -89,7 +92,99 @@ function fiveSetStrengthPrescription() {
   return { ...prescription, exercises: [exercise], blocks: [exercise] }
 }
 
+describe('effectiveSessionKindForCurrentPlan', () => {
+  it('avaa nykyisen suunnitelman harjoituksen vanhentuneen kuntotarkistustyypin sijaan', () => {
+    expect(
+      effectiveSessionKindForCurrentPlan({
+        currentSessionKind: 'STRENGTH',
+        checkedSessionKind: 'SPORT',
+        allowedSessionKind: 'SPORT',
+      }),
+    ).toBe('STRENGTH')
+  })
+
+  it('säilyttää kuntotarkistuksen tekemän turvallisuusmuutoksen', () => {
+    expect(
+      effectiveSessionKindForCurrentPlan({
+        currentSessionKind: 'STRENGTH',
+        checkedSessionKind: 'SPORT',
+        allowedSessionKind: 'RECOVERY',
+      }),
+    ).toBe('RECOVERY')
+    expect(
+      effectiveSessionKindForCurrentPlan({
+        currentSessionKind: 'STRENGTH',
+        checkedSessionKind: 'SPORT',
+        allowedSessionKind: 'REST',
+      }),
+    ).toBe('REST')
+  })
+})
+
+describe('shouldReevaluateStoredSafetyBlock', () => {
+  it('tunnistaa saman eston myös viikkoyhteenvedon syykoodista', () => {
+    expect(shouldReevaluateStoredSafetyReasonCode('SAFETY_INFORMATION_INCOMPLETE')).toBe(
+      true,
+    )
+    expect(shouldReevaluateStoredSafetyReasonCode('WEEKLY_VOLUME_TARGET')).toBe(false)
+  })
+
+  it('arvioi vanhan puuttuvien turvallisuustietojen eston uudelleen', () => {
+    expect(
+      shouldReevaluateStoredSafetyBlock({
+        status: 'UNSUPPORTED',
+        sessionKind: 'STRENGTH',
+        reasonCode: 'SAFETY_INFORMATION_INCOMPLETE',
+        userMessage: 'Vanhentunut esto',
+      }),
+    ).toBe(true)
+  })
+
+  it('säilyttää harjoitussisältöön liittyvän eston', () => {
+    expect(
+      shouldReevaluateStoredSafetyBlock({
+        status: 'UNSUPPORTED',
+        sessionKind: 'SPORT',
+        reasonCode: 'SPORT_ENGINE_NOT_REVIEWED',
+        userMessage: 'Lajimoottori puuttuu',
+      }),
+    ).toBe(false)
+  })
+})
+
 describe('WorkoutPrescriptionAdapter – käyttöliittymän nykyhetken turvallisuustiedot', () => {
+  it('tulkitsee valmiin kartoituksen ilman vapaaehtoisia terveystietoja vahvistetuksi terveeksi lähtötilaksi', () => {
+    const completedProfile = record('profiles', crypto.randomUUID(), {
+      birth_date: '1991-01-01',
+      onboarding_completed: true,
+    })
+
+    expect(
+      currentWorkoutSafetyContext({
+        profile: completedProfile,
+        screening: null,
+        readiness: 'GREEN',
+        today,
+      }),
+    ).toEqual({
+      age: 35,
+      readiness: 'GREEN',
+      healthBlocked: false,
+      safetyInformationComplete: true,
+    })
+
+    expect(
+      adaptWorkoutPrescriptionForCurrentAthlete({
+        prescription: strengthPrescription(),
+        variant: fullVariant,
+        profile: completedProfile,
+        screening: null,
+        readiness: 'GREEN',
+        today,
+      }),
+    ).toMatchObject({ status: 'SUPPORTED' })
+  })
+
   it('välittää nykyisen iän, readinessin ja seulonnan varsinaiselle adaptPrescription-reitille', () => {
     const currentProfile = profile('1961-08-27')
     const currentScreening = screening()
@@ -309,6 +404,28 @@ describe('WorkoutPrescriptionAdapter – käyttöliittymän nykyhetken turvallis
       status: 'UNSUPPORTED',
       reasonCode: 'SAFETY_INFORMATION_INCOMPLETE',
     })
+  })
+
+  it('ei tulkitse vanhaa ei-rajoitteita-vastausta liikerajoitteeksi', () => {
+    const currentProfile = record('profiles', crypto.randomUUID(), {
+      birth_date: '1991-01-01',
+      onboarding_completed: true,
+    })
+
+    expect(
+      adaptWorkoutPrescriptionForCurrentAthlete({
+        prescription: strengthPrescription(),
+        variant: fullVariant,
+        profile: currentProfile,
+        screening: screening({
+          doctor_restrictions: 'Ei ole',
+          current_injuries_surgeries_and_mobility_limits: 'Ei mitään',
+          confirmed_limitation_tags: [],
+        }),
+        readiness: 'GREEN',
+        today,
+      }),
+    ).toMatchObject({ status: 'SUPPORTED' })
   })
 
   it('arvioi jatkettavan legacy-snapshotin nykyisellä aikapolitiikalla eikä keksi puuttuvaa annosta', () => {

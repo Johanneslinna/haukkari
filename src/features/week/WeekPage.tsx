@@ -1,7 +1,12 @@
 import { Link } from 'react-router-dom'
 import { useAppData } from '../app-data/appDataContextValue'
 import { activeTrainingPlan } from '../coaching/coachingActions'
-import { planSessions, planStrengthWeek, sessionLabels } from '../coaching/coachingData'
+import {
+  planSessions,
+  planStrengthWeek,
+  sessionLabels,
+  sessionTotalDurationMinutes,
+} from '../coaching/coachingData'
 
 const weekdays = [
   'Maanantai',
@@ -138,7 +143,7 @@ export function WeekPage() {
                   >
                     <strong>{session.title ?? sessionLabels[session.kind]}</strong>
                     <span>
-                      {session.durationMinutes} min ·{' '}
+                      {sessionTotalDurationMinutes(session)} min kokonaiskesto ·{' '}
                       {session.intensity === 'HARD'
                         ? 'kova'
                         : session.intensity === 'MODERATE'

@@ -15,6 +15,7 @@ import {
 import {
   booleanValue,
   calendarContextForProfile,
+  numberValue,
   objectValue,
   planSessions,
   readinessLabels,
@@ -52,6 +53,13 @@ export function DailyCheckInPage() {
     (session) => session.day === weekday,
   )
   const appSettings = objectValue(profile?.data.app_settings)
+  const minutesByDay = objectValue(appSettings.minutesByDay)
+  const defaultAvailableMinutes = numberValue(
+    minutesByDay[String(weekday)],
+    planned?.timeBudgetMinutes ??
+      planned?.durationMinutes ??
+      numberValue(appSettings.minutesPerSession, 45),
+  )
   const menstrualTrackingEnabled = booleanValue(appSettings.menstrualTrackingOptIn, false)
   const [sleep, setSleep] = useState<'POOR' | 'NORMAL' | 'GOOD'>('NORMAL')
   const [energy, setEnergy] = useState<'LOW' | 'NORMAL' | 'HIGH'>('NORMAL')
@@ -65,7 +73,9 @@ export function DailyCheckInPage() {
   const [painLocation, setPainLocation] = useState('')
   const [painSeverity, setPainSeverity] = useState<'MILD' | 'MODERATE' | 'SEVERE'>('MILD')
   const [altersGait, setAltersGait] = useState(false)
-  const [availableMinutes, setAvailableMinutes] = useState('45')
+  const [availableMinutes, setAvailableMinutes] = useState(() =>
+    String(defaultAvailableMinutes),
+  )
   const [wantedSession, setWantedSession] = useState<SessionKind>(
     planned?.kind ?? 'EASY_ENDURANCE',
   )

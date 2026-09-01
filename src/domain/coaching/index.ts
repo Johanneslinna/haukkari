@@ -117,6 +117,7 @@ export {
   STRENGTH_VOLUME_POLICY_VERSION,
   addPlannedSets,
   calculatePlannedMuscleVolume,
+  calculateSessionPrimaryMuscleVolume,
   calculateRollingMuscleVolume,
   mergeMuscleVolume,
   maximumAdditionalSets,
@@ -138,17 +139,23 @@ export {
   STRENGTH_WEEK_POLICY_VERSION,
   STRENGTH_WEEK_REASON_CODES,
   createStrengthWeekBlueprint,
+  evaluateStrengthRoleStructure,
   finalizeStrengthWeekPlan,
   initialStrengthWeekMaterializationState,
   maximumWeeklySetProgression,
   materializeStrengthWeekSession,
   movementPatternsForRole,
+  refreshStrengthRoleStructureDecision,
+  strengthWeekRoleStructure,
+  strengthWeekRoleLabelFi,
   strengthGoalRange,
 } from './StrengthWeekPolicy'
 export type {
   StrengthWeekBlueprint,
   StrengthWeekGoalRange,
   StrengthWeekMaterializationState,
+  StrengthWeekRoleSlot,
+  StrengthWeekRoleStructure,
 } from './StrengthWeekPolicy'
 export {
   ADULT_STRENGTH_TIME_POLICY,

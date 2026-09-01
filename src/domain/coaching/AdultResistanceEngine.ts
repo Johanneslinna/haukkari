@@ -21,6 +21,7 @@ import type {
   SessionObjective,
   WorkoutCompletionStatus,
   VerifiedNextLoad,
+  StrengthExerciseProgrammingRole,
   StrengthWeekSessionRole,
 } from './types'
 import { evaluateStrengthSafetyGate } from './StrengthSafetyGate'
@@ -43,14 +44,30 @@ import {
   type StrengthReturnDecision,
   type StrengthTrainingBackground,
 } from './ReturnToStrengthPolicy'
-import { movementPatternsForRole } from './StrengthWeekPolicy'
+import {
+  evaluateStrengthRoleStructure,
+  STRENGTH_WEEK_REASON_CODES,
+  strengthWeekRoleStructure,
+  type StrengthWeekRoleSlot,
+} from './StrengthWeekPolicy'
 import {
   SEVERE_DOMS_STRENGTH_PROGRESSION_REASON_CODE,
   SEVERE_DOMS_STRENGTH_REASON_CODE,
 } from './ReadinessEngine'
 
-export const ADULT_RESISTANCE_ENGINE_VERSION = 'adult-resistance-1.4.0'
-export const ADULT_RESISTANCE_RULE_VERSION = 'adult-resistance-rules-1.4.0'
+export const ADULT_RESISTANCE_ENGINE_VERSION = 'adult-resistance-1.6.0'
+export const ADULT_RESISTANCE_RULE_VERSION = 'adult-resistance-rules-1.6.0'
+
+const strengthWeekTrackedMuscles = new Set([
+  'quadriceps',
+  'gluteals',
+  'hamstrings',
+  'chest',
+  'triceps',
+  'latissimus',
+  'upper back',
+  'trunk',
+])
 export const ADULT_RESISTANCE_LOAD_CONTEXT_VERSION = 'adult-resistance-load-context-1.0.0'
 
 const experienceRank: Record<ExperienceLevel, number> = {
@@ -201,7 +218,14 @@ export function createResistanceSessionObjective(
   context: AdultResistanceAthleteContext,
 ): SessionObjective {
   const primaryAdaptation = goalAdaptation(context.goal)
-  const requiredMovementPatterns = [
+  const roleStructure = context.strengthWeekRole
+    ? strengthWeekRoleStructure(
+        context.strengthWeekRole,
+        context.availableMinutes,
+        context.experience,
+      )
+    : undefined
+  const requiredMovementPatterns = roleStructure?.requiredMovementPatterns ?? [
     'SQUAT',
     'HINGE',
     'HORIZONTAL_PUSH',
@@ -227,7 +251,7 @@ export function createResistanceSessionObjective(
       eccentric: lowBudget ? 3 : 4,
     },
     requiredMovementPatterns,
-    optionalMovementPatterns: [
+    optionalMovementPatterns: roleStructure?.optionalMovementPatterns ?? [
       'VERTICAL_PUSH',
       'VERTICAL_PULL',
       'SINGLE_LEG',
@@ -300,8 +324,10 @@ export function filterEligibleExercises(
     const adaptationFit = exercise.adaptationTargets.includes(
       sessionObjective.primaryAdaptation ?? '',
     )
-    const movementFit = exercise.movementPatterns.some((pattern) =>
-      sessionObjective.requiredMovementPatterns?.includes(pattern),
+    const movementFit = exercise.movementPatterns.some(
+      (pattern) =>
+        sessionObjective.requiredMovementPatterns?.includes(pattern) ||
+        sessionObjective.optionalMovementPatterns?.includes(pattern),
     )
     if (!adaptationFit && !movementFit) reasonCodes.push('OBJECTIVE_MISMATCH')
     return { exercise, eligible: reasonCodes.length === 0, reasonCodes }
@@ -333,8 +359,10 @@ export function scoreExerciseCandidates(
         )
           ? 20
           : 8,
-        movementPatternFit: exercise.movementPatterns.some((pattern) =>
-          sessionObjective.requiredMovementPatterns?.includes(pattern),
+        movementPatternFit: exercise.movementPatterns.some(
+          (pattern) =>
+            sessionObjective.requiredMovementPatterns?.includes(pattern) ||
+            sessionObjective.optionalMovementPatterns?.includes(pattern),
         )
           ? 16
           : 6,
@@ -355,6 +383,11 @@ export function scoreExerciseCandidates(
         historicalResponseFit: Math.min(8, recentSuccesses * 2),
         adherenceProbability: exercise.technicalComplexity <= 2 ? 6 : 4,
         variationValue: recentSuccesses === 0 ? 3 : 1,
+        weeklySecondaryOverlapCost: athleteContext.strengthWeekRole
+          ? -exercise.secondaryMuscles.filter((muscle) =>
+              strengthWeekTrackedMuscles.has(muscle),
+            ).length * 4
+          : 0,
         fatigueCost: -exercise.fatigue.systemic * 2,
         sorenessCost: -exercise.fatigue.sorenessRisk,
         riskCost: -exercise.technicalComplexity,
@@ -646,6 +679,48 @@ export function prescribeResistanceDose(
   }
 }
 
+function doseForProgrammingRole(
+  source: ResistanceDoseDecision,
+  programmingRole: StrengthExerciseProgrammingRole | undefined,
+  athleteContext: AdultResistanceAthleteContext,
+): ResistanceDoseDecision {
+  if (!programmingRole || programmingRole === 'PRIMARY') return source
+  if (programmingRole === 'SECONDARY_COMPOUND') {
+    return {
+      ...source,
+      sets: Math.min(3, source.sets),
+      restSeconds: Math.max(90, source.restSeconds),
+      ruleIds: [...source.ruleIds, 'RT-SECONDARY-COMPOUND-DOSE-001'],
+    }
+  }
+  if (programmingRole === 'ACCESSORY') {
+    return {
+      ...source,
+      sets: Math.min(athleteContext.experience === 'BEGINNER' ? 2 : 3, source.sets),
+      targetRir: [3, 4],
+      restSeconds: 60,
+      ruleIds: [...source.ruleIds, 'RT-ACCESSORY-DOSE-001'],
+    }
+  }
+  return {
+    ...source,
+    sets:
+      athleteContext.experience === 'BEGINNER' || athleteContext.availableMinutes <= 45
+        ? 2
+        : 3,
+    repetitions: [6, 10],
+    targetRir: [3, 4],
+    restSeconds: 60,
+    calibrationRequired: false,
+    prescribedLoadKg: undefined,
+    prescribedLoadRangeKg: undefined,
+    ruleIds: [
+      ...source.ruleIds.filter((ruleId) => ruleId !== 'RT-CALIBRATION-001'),
+      'RT-CORE-CONTROL-DOSE-001',
+    ],
+  }
+}
+
 function loadTracking(exercise: ExerciseDefinition): {
   loadType: ExerciseLoadType
   loadLabelFi: string
@@ -676,11 +751,7 @@ function loadTracking(exercise: ExerciseDefinition): {
   }
 }
 
-function selectedPatternOrder(
-  minutes: number,
-  strengthWeekRole?: StrengthWeekSessionRole,
-) {
-  if (strengthWeekRole) return movementPatternsForRole(strengthWeekRole, minutes)
+function selectedPatternOrder(minutes: number) {
   if (minutes <= 20) return ['SQUAT', 'HORIZONTAL_PUSH', 'HORIZONTAL_PULL']
   if (minutes <= 30) return ['SQUAT', 'HINGE', 'HORIZONTAL_PUSH', 'HORIZONTAL_PULL']
   return ['SQUAT', 'HINGE', 'HORIZONTAL_PUSH', 'HORIZONTAL_PULL', 'ANTI_EXTENSION']
@@ -733,7 +804,10 @@ export function freezeSevereDomsProgression(exercise: ExercisePrescription) {
   const baseGuidance = exercise.loadGuidance.replace(/\s*Seuraava askel:.*$/u, '')
   return {
     ...exercise,
-    loadGuidance: `${baseGuidance} Seuraava askel: säilytä kuorma ja toistot; voimakkaan lihasarkuuden kevennetty harjoitus ei valtuuta progressiota.`,
+    loadGuidance:
+      exercise.programmingRole === 'CORE_CONTROL'
+        ? `${baseGuidance} Seuraava askel: säilytä helppo, täysin hallittu variaatio; kevennetty harjoitus ei valtuuta vaikeuttamaan liikettä.`
+        : `${baseGuidance} Seuraava askel: säilytä kuorma ja toistot; voimakkaan lihasarkuuden kevennetty harjoitus ei valtuuta progressiota.`,
     progressionDecision: decision,
   }
 }
@@ -755,6 +829,7 @@ export function refreshAdultResistanceProgression(input: {
   }
   const adaptations: NonNullable<PrescribedSession['decisionTrace']['adaptations']> = []
   const exercises = input.prescription.exercises.map((exercise) => {
+    if (exercise.programmingRole === 'CORE_CONTROL') return exercise
     const maximumRepetitions = Math.max(
       1,
       ...(exercise.repetitions?.match(/\d+/gu)?.map(Number) ?? [1]),
@@ -1041,20 +1116,63 @@ export function prescribeAdultResistanceSession(input: {
     .map((item) => item.exercise)
   const scores = scoreExerciseCandidates(eligible, input.context, objective, history)
   const chosen: ExerciseCandidateScore[] = []
-  const requiredPatternOrder = selectedPatternOrder(
-    input.context.availableMinutes,
-    input.context.strengthWeekRole,
-  )
-  for (const pattern of requiredPatternOrder) {
-    const candidate = scores.find(
-      (item) =>
-        item.exercise.movementPatterns.includes(pattern) && !chosen.includes(item),
-    )
-    if (candidate) chosen.push(candidate)
+  const chosenSlots: Array<StrengthWeekRoleSlot | undefined> = []
+  const roleStructure = input.context.strengthWeekRole
+    ? strengthWeekRoleStructure(
+        input.context.strengthWeekRole,
+        input.context.availableMinutes,
+        input.context.experience,
+      )
+    : undefined
+  const requiredPatternOrder = selectedPatternOrder(input.context.availableMinutes)
+  if (roleStructure) {
+    for (const roleSlot of roleStructure.slots) {
+      const primaryMatches = scores.filter(
+        (item) =>
+          item.exercise.movementPatterns[0] === roleSlot.movementPattern &&
+          !chosen.includes(item),
+      )
+      const secondaryMatches = scores.filter(
+        (item) =>
+          item.exercise.movementPatterns.includes(roleSlot.movementPattern) &&
+          !chosen.includes(item),
+      )
+      const candidates = primaryMatches.length > 0 ? primaryMatches : secondaryMatches
+      const preferVariation =
+        (roleStructure.role === 'UPPER_B' || roleStructure.role === 'FULL_BODY_B') &&
+        roleSlot.movementPattern !== 'SQUAT' &&
+        candidates.length > 1 &&
+        candidates[1]!.score >= candidates[0]!.score - 12
+      const complementarySquat =
+        roleStructure.role === 'FULL_BODY_C' && roleSlot.movementPattern === 'SQUAT'
+          ? candidates.find((item) =>
+              item.exercise.secondaryMuscles.includes('hamstrings'),
+            )
+          : undefined
+      const candidate = complementarySquat ?? candidates[preferVariation ? 1 : 0]
+      if (!candidate) continue
+      chosen.push(candidate)
+      chosenSlots.push(roleSlot)
+    }
+  } else {
+    for (const pattern of requiredPatternOrder) {
+      const candidate =
+        scores.find(
+          (item) =>
+            item.exercise.movementPatterns[0] === pattern && !chosen.includes(item),
+        ) ??
+        scores.find(
+          (item) =>
+            item.exercise.movementPatterns.includes(pattern) && !chosen.includes(item),
+        )
+      if (candidate) {
+        chosen.push(candidate)
+        chosenSlots.push(undefined)
+      }
+    }
   }
-  const coverageCandidateCount = chosen.length
-  const maximumCandidateCount = input.context.strengthWeekRole
-    ? coverageCandidateCount
+  const maximumCandidateCount = roleStructure
+    ? roleStructure.targetExerciseCount
     : input.context.availableMinutes <= 10
       ? 2
       : input.context.availableMinutes <= 20
@@ -1071,15 +1189,9 @@ export function prescribeAdultResistanceSession(input: {
   for (const candidate of scores) {
     if (chosen.length >= maximumCandidateCount) break
     if (chosen.includes(candidate)) continue
-    if (
-      input.context.strengthWeekRole &&
-      !candidate.exercise.movementPatterns.some((pattern) =>
-        requiredPatternOrder.includes(pattern),
-      )
-    ) {
-      continue
-    }
+    if (roleStructure) continue
     chosen.push(candidate)
+    chosenSlots.push(undefined)
   }
   const capabilities = chosen.map((item) =>
     estimateAdultResistanceCapability(
@@ -1104,17 +1216,21 @@ export function prescribeAdultResistanceSession(input: {
           ))
       )
     }).length
-    const dose = prescribeResistanceDose(
-      objective,
-      item.exercise,
-      capabilities[index]!,
+    const roleDose = doseForProgrammingRole(
+      prescribeResistanceDose(
+        objective,
+        item.exercise,
+        capabilities[index]!,
+        input.context,
+        { comparableSetsThisWeek },
+      ),
+      chosenSlots[index]?.programmingRole,
       input.context,
-      { comparableSetsThisWeek },
     )
-    if (input.context.strengthWeekRole && index < coverageCandidateCount) {
-      dose.sets = Math.min(2, dose.sets)
-    }
-    return dose
+    const programmingSetCap = chosenSlots[index]?.maximumSets
+    return programmingSetCap === undefined
+      ? roleDose
+      : { ...roleDose, sets: Math.min(roleDose.sets, programmingSetCap) }
   })
   const rollingVolume = calculateRollingMuscleVolume({
     sets: history,
@@ -1130,6 +1246,7 @@ export function prescribeAdultResistanceSession(input: {
         exercise: item.exercise,
         rollingVolume,
         sessionPrimaryVolume,
+        programmingRole: chosenSlots[index]?.programmingRole,
       }),
     )
     if (dose.sets > 0) {
@@ -1138,6 +1255,7 @@ export function prescribeAdultResistanceSession(input: {
         sets: dose.sets,
         rollingVolume,
         sessionPrimaryVolume,
+        programmingRole: chosenSlots[index]?.programmingRole,
       })
     } else {
       dose.ruleIds.push('RT-WEEKLY-MUSCLE-CAP-001')
@@ -1151,27 +1269,54 @@ export function prescribeAdultResistanceSession(input: {
   const baseExercises: ExercisePrescription[] = chosen.flatMap((item, index) => {
     const dose = doses[index]!
     if (dose.sets <= 0) return []
-    const repetitions = Array.isArray(dose.repetitions)
-      ? `${dose.repetitions[0]}–${dose.repetitions[1]}`
-      : String(dose.repetitions)
+    const programmingSlot = chosenSlots[index]
+    const programmingRole = programmingSlot?.programmingRole
+    const coreControl = programmingRole === 'CORE_CONTROL'
+    const repetitions = coreControl
+      ? item.exercise.code === 'FRONT_PLANK'
+        ? '20–40 s'
+        : '6–10 / puoli'
+      : Array.isArray(dose.repetitions)
+        ? `${dose.repetitions[0]}–${dose.repetitions[1]}`
+        : String(dose.repetitions)
     const targetRir = Array.isArray(dose.targetRir) ? dose.targetRir[0] : dose.targetRir
     const load = loadTracking(item.exercise)
     const maximumRepetitions = Array.isArray(dose.repetitions)
       ? dose.repetitions[1]
       : dose.repetitions
-    const progressionDecision = decideInterSessionProgression({
-      comparableSessions: capabilityAndProgressionHistory,
-      targetRir: Array.isArray(dose.targetRir)
-        ? dose.targetRir
-        : [dose.targetRir, dose.targetRir],
-      verifiedNextLoads: input.context.verifiedNextLoads,
-      targetExerciseCode: item.exercise.code,
-      targetExerciseVersion: item.exercise.version,
-      targetLoadType: load.loadType,
-      targetLoadContextId: load.loadContextId,
-      maximumRepetitions,
-      generatedAt: input.context.generatedAt,
-    })
+    const progressionDecision: InterSessionProgressionDecision = coreControl
+      ? {
+          action: 'KEEP_LOAD',
+          changedVariable: 'NONE',
+          reasonCodes: ['CORE_CONTROL_QUALITY_PROGRESSION'],
+          supportingSessionIds: [],
+        }
+      : decideInterSessionProgression({
+          comparableSessions: capabilityAndProgressionHistory,
+          targetRir: Array.isArray(dose.targetRir)
+            ? dose.targetRir
+            : [dose.targetRir, dose.targetRir],
+          verifiedNextLoads: input.context.verifiedNextLoads,
+          targetExerciseCode: item.exercise.code,
+          targetExerciseVersion: item.exercise.version,
+          targetLoadType: load.loadType,
+          targetLoadContextId: load.loadContextId,
+          maximumRepetitions,
+          generatedAt: input.context.generatedAt,
+        })
+    const bodyweightGuidance =
+      'Valitse variaatio, jossa liikerata ja asento säilyvät hallittuina. Etene ensin toistoissa, kestossa tai liikeradassa ja muuta vain yhtä vaikeustekijää kerrallaan.'
+    const coreGuidance =
+      'Pidä hengitys, selän ja lantion asento sekä liikkeen hallinta muuttumattomina. Etene vasta kaikkien laadukkaiden toistojen jälkeen pidentämällä vipuvartta, liikerataa tai kestoa yksi muutos kerrallaan.'
+    const loadGuidance = coreControl
+      ? coreGuidance
+      : load.loadType === 'BODYWEIGHT'
+        ? bodyweightGuidance
+        : `${
+            dose.calibrationRequired
+              ? 'Aloita kevyellä kalibroivalla sarjalla. Valitse kuorma, jolla tavoitetoistot onnistuvat hallitusti ja toistoja jää tavoitealueen verran varastoon.'
+              : `Suositeltu työkuorma on arviolta ${dose.prescribedLoadRangeKg?.[0]}–${dose.prescribedLoadRangeKg?.[1]} kg. Arvio ei ole mitattu maksimi.`
+          } ${progressionGuidanceFi(progressionDecision)}`
     const substitutions = item.exercise.substitutionCodes
       .map((code) => catalog.getExercise(code)?.nameFi)
       .filter((name): name is string => Boolean(name))
@@ -1190,14 +1335,15 @@ export function prescribeAdultResistanceSession(input: {
         targetRpe: Math.max(5, 10 - targetRir),
         targetRir,
         warmupSets: index === 0 && dose.calibrationRequired ? 1 : 0,
-        estimatedWorkSetSeconds: ADULT_STRENGTH_TIME_POLICY.workSetSeconds,
-        loadGuidance: `${
-          dose.calibrationRequired
-            ? 'Aloita kevyellä kalibroivalla sarjalla. Valitse kuorma, jolla tavoitetoistot onnistuvat hallitusti ja toistoja jää tavoitealueen verran varastoon.'
-            : `Suositeltu työkuorma on arviolta ${dose.prescribedLoadRangeKg?.[0]}–${dose.prescribedLoadRangeKg?.[1]} kg. Arvio ei ole mitattu maksimi.`
-        } ${progressionGuidanceFi(progressionDecision)}`,
-        stopCondition:
-          'Keskeytä, jos liike provosoi kipua tai tekniikka ei pysy hallittuna.',
+        estimatedWorkSetSeconds: coreControl
+          ? 45
+          : programmingRole === 'ACCESSORY'
+            ? 50
+            : ADULT_STRENGTH_TIME_POLICY.workSetSeconds,
+        loadGuidance,
+        stopCondition: coreControl
+          ? 'Lopeta sarja, kun hengitys tai selän ja lantion asento ei enää säily hallittuna, tai jos liike provosoi kipua.'
+          : 'Keskeytä, jos liike provosoi kipua tai tekniikka ei pysy hallittuna.',
         substitutions,
         ...load,
         progressionDecision: progressionDecision as ExerciseProgressionDecision,
@@ -1213,9 +1359,10 @@ export function prescribeAdultResistanceSession(input: {
         primaryMuscles: [...item.exercise.primaryMuscles],
         secondaryMuscles: [...item.exercise.secondaryMuscles],
         techniqueReviewStatus: 'PENDING_REVIEW',
-        keyExercise: input.context.strengthWeekRole
-          ? index < coverageCandidateCount
-          : index < 2,
+        programmingRole,
+        programmingSlotId: programmingSlot?.id,
+        programmingSetCap: programmingSlot?.maximumSets,
+        keyExercise: roleStructure ? programmingRole === 'PRIMARY' : index < 2,
         dose: {
           kind: 'STRENGTH_SETS',
           sets: dose.sets,
@@ -1231,6 +1378,50 @@ export function prescribeAdultResistanceSession(input: {
   if (exercises.length === 0) {
     throw new Error('UNSUPPORTED_PRESCRIPTION:NO_SAFE_STRENGTH_DOSE_AVAILABLE')
   }
+  const structuralConstraintReasonCodes = (() => {
+    if (!roleStructure) return []
+    const missingSlots = roleStructure.slots.filter(
+      (roleSlot) =>
+        !exercises.some((exercise) => exercise.programmingSlotId === roleSlot.id),
+    )
+    if (missingSlots.length === 0) return []
+    const rejectedReasons = eligibility
+      .filter((item) =>
+        missingSlots.some((roleSlot) =>
+          item.exercise.movementPatterns.includes(roleSlot.movementPattern),
+        ),
+      )
+      .flatMap((item) => item.reasonCodes)
+    const reasons: string[] = []
+    if (rejectedReasons.includes('CONTRAINDICATION_MATCH')) {
+      reasons.push(STRENGTH_WEEK_REASON_CODES.ROLE_STRUCTURE_HEALTH_LIMITED)
+    }
+    if (rejectedReasons.includes('EQUIPMENT_UNAVAILABLE')) {
+      reasons.push(STRENGTH_WEEK_REASON_CODES.ROLE_STRUCTURE_EQUIPMENT_LIMITED)
+    }
+    if (
+      rejectedReasons.some((reason) =>
+        [
+          'EXPERIENCE_NOT_MET',
+          'TECHNICAL_COMPLEXITY_TOO_HIGH',
+          'SUPERVISION_REQUIRED',
+        ].includes(reason),
+      )
+    ) {
+      reasons.push(STRENGTH_WEEK_REASON_CODES.ROLE_STRUCTURE_EXPERIENCE_LIMITED)
+    }
+    if (chosen.length > exercises.length) {
+      reasons.push(STRENGTH_WEEK_REASON_CODES.ROLE_STRUCTURE_VOLUME_LIMITED)
+    }
+    return [...new Set(reasons)]
+  })()
+  const initialStructureDecision = roleStructure
+    ? evaluateStrengthRoleStructure({
+        structure: roleStructure,
+        exercises,
+        constraintReasonCodes: structuralConstraintReasonCodes,
+      })
+    : undefined
   const ruleIds = [
     'ADULT-ONLY-001',
     ...new Set(doses.flatMap((dose) => dose.ruleIds)),
@@ -1240,6 +1431,7 @@ export function prescribeAdultResistanceSession(input: {
     ADULT_STRENGTH_TIME_POLICY_VERSION,
     STRENGTH_RETURN_POLICY_VERSION,
     ...returnDecision.reasonCodes,
+    ...(initialStructureDecision?.reasonCodes ?? []),
   ]
   const evidenceClaimIds = [...new Set(doses.flatMap((dose) => dose.evidenceClaimIds))]
   const unfitted = withV2Blocks({
@@ -1249,6 +1441,7 @@ export function prescribeAdultResistanceSession(input: {
     goal: input.context.goal,
     durationMinutes: input.context.availableMinutes,
     timeBudgetMinutes: input.context.availableMinutes,
+    strengthRoleStructure: initialStructureDecision,
     objective,
     warmupMinutes,
     warmup: [
@@ -1365,17 +1558,34 @@ export function prescribeAdultResistanceSession(input: {
   if (fitted.status === 'UNSUPPORTED') {
     throw new Error('UNSUPPORTED_PRESCRIPTION:NO_SAFE_STRENGTH_DOSE_AVAILABLE')
   }
-  if (!returnDecision.progressionSuppressed) return fitted.prescription
+  const fittedStructureDecision = roleStructure
+    ? evaluateStrengthRoleStructure({
+        structure: roleStructure,
+        exercises: fitted.prescription.exercises,
+        constraintReasonCodes: [
+          ...structuralConstraintReasonCodes,
+          ...(fitted.prescription.exercises.length < exercises.length
+            ? [STRENGTH_WEEK_REASON_CODES.ROLE_STRUCTURE_TIME_LIMITED]
+            : []),
+        ],
+      })
+    : undefined
+  const fittedPrescription = {
+    ...fitted.prescription,
+    strengthRoleStructure: fittedStructureDecision,
+  }
+  if (!returnDecision.progressionSuppressed) return fittedPrescription
 
   const returnedExercises = applyReturnDose(
-    fitted.prescription.exercises,
+    fittedPrescription.exercises,
     returnDecision,
     history,
   )
   const returned = fitStrengthPrescriptionToTimeBudget({
     prescription: {
       ...fitted.prescription,
-      minimumTimeBufferSeconds: fitted.prescription.timeBreakdown?.bufferSeconds,
+      strengthRoleStructure: fittedStructureDecision,
+      minimumTimeBufferSeconds: fittedPrescription.timeBreakdown?.bufferSeconds,
       exercises: returnedExercises,
       blocks: returnedExercises,
       decisionTrace: {

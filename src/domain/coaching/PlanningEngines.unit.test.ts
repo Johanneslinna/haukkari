@@ -264,7 +264,8 @@ describe('PlanGenerator, ScheduleOptimizer ja lajisovittimet', () => {
     )
     expect(strength?.prescriptionDetail).toBeDefined()
     expect(strength?.durationMinutes).toBe(strength?.prescriptionDetail?.durationMinutes)
-    expect(strength?.timeBudgetMinutes).toBe(45)
+    expect(strength?.timeBudgetMinutes).toBe(60)
+    expect(strength?.prescriptionDetail?.timeBudgetMinutes).toBe(60)
     for (const workoutVariant of strength?.variants ?? []) {
       const adapted = adaptPrescription(strength!.prescriptionDetail!, workoutVariant, {
         age: 35,

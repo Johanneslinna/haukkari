@@ -86,7 +86,7 @@ describe('TrainingPrescriptionEngine – kultaiset käyttäjäprofiilit', () => 
           item.stopCondition.length > 0,
       ),
     ).toBe(true)
-    expect(result.decisionTrace.ruleVersion).toBe('adult-resistance-rules-1.4.0')
+    expect(result.decisionTrace.ruleVersion).toBe('adult-resistance-rules-1.6.0')
     expect(result.decisionTrace.contentReleaseId).toBe('adult-resistance-v1.0.0')
   })
 
@@ -549,7 +549,7 @@ describe('TrainingPrescriptionEngine – kultaiset käyttäjäprofiilit', () => 
     })
 
     expect(result.schemaVersion).toBe(2)
-    expect(result.engineVersion).toBe('adult-resistance-1.4.0')
+    expect(result.engineVersion).toBe('adult-resistance-1.6.0')
     expect(result.blocks).toEqual(result.exercises)
     expect(result.objective?.primary).toBeTruthy()
     expect(prescriptionDurationSeconds(result)).toBeLessThanOrEqual(45 * 60)

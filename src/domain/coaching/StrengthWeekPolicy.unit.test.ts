@@ -5,13 +5,18 @@ import {
   MAX_ROLLING_MUSCLE_SETS,
   MAX_SESSION_PRIMARY_MUSCLE_SETS,
   calculatePlannedMuscleVolume,
+  calculateSessionPrimaryMuscleVolume,
 } from './StrengthVolumePolicy'
 import {
   STRENGTH_WEEK_POLICY_VERSION,
   STRENGTH_WEEK_REASON_CODES,
+  createStrengthWeekBlueprint,
+  finalizeStrengthWeekPlan,
+  initialStrengthWeekMaterializationState,
   maximumWeeklySetProgression,
   strengthGoalRange,
 } from './StrengthWeekPolicy'
+import { auditStrengthPrescriptionTime } from './TimeBudgetPolicy'
 import type { AdultResistanceSetHistory } from './AdultResistanceEngine'
 
 const generatedAt = '2026-08-27T08:00:00.000Z'
@@ -111,6 +116,27 @@ function strengthSessions(planInput: PlanGenerationInput) {
   )
 }
 
+function unrestrictedFourDayPlan() {
+  return generatePlan(
+    input({
+      experience: 'ADVANCED',
+      availableDays: [1, 3, 5, 7],
+      minutesPerSession: 90,
+      minutesByDay: { '1': 90, '3': 90, '5': 90, '7': 90 },
+      equipment: [
+        'Kehonpaino',
+        'Käsipainot',
+        'Levytanko ja painot',
+        'Kahvakuula',
+        'Vastuskuminauhat',
+        'Kuntosalilaitteet',
+        'Juoksumatto',
+        'Polkupyörä, kuntopyörä tai pyörätraineri',
+      ],
+    }),
+  ).decision
+}
+
 describe('adult-strength-week-1.0.0', () => {
   it('käyttää kylmäaloituksessa konservatiivista 4–8 sarjan tavoitetta ja kahta harjoitusta', () => {
     expect(strengthGoalRange('MUSCLE_GAIN', false)).toEqual({
@@ -165,13 +191,260 @@ describe('adult-strength-week-1.0.0', () => {
   })
 
   it('muodostaa neljälle aktiivisen kokeneen päivälle upper/lower-jaon', () => {
-    const sessions = strengthSessions(input())
+    const generated = unrestrictedFourDayPlan()
+    const sessions = generated.sessions.filter(
+      (session) => session.source === 'APP' && session.kind === 'STRENGTH',
+    )
     expect(sessions.map((session) => session.strengthWeekContext?.role)).toEqual([
       'UPPER_A',
       'LOWER_A',
       'UPPER_B',
       'LOWER_B',
     ])
+    const upperSessions = sessions.filter((session) =>
+      session.strengthWeekContext?.role.startsWith('UPPER_'),
+    )
+    const lowerSessions = sessions.filter((session) =>
+      session.strengthWeekContext?.role.startsWith('LOWER_'),
+    )
+    expect(
+      upperSessions.every((session) =>
+        session.prescriptionDetail?.exercises.every(
+          (exercise) =>
+            exercise.category !== 'SQUAT' &&
+            exercise.category !== 'HINGE' &&
+            exercise.category !== 'SINGLE_LEG',
+        ),
+      ),
+    ).toBe(true)
+    expect(upperSessions.map((session) => session.title)).toEqual([
+      'Ylävartalon voima A',
+      'Ylävartalon voima B',
+    ])
+    expect(lowerSessions.map((session) => session.title)).toEqual([
+      'Alavartalon voima A',
+      'Alavartalon voima B',
+    ])
+    expect(
+      upperSessions.every(
+        (session) => (session.prescriptionDetail?.exercises.length ?? 0) >= 5,
+      ),
+    ).toBe(true)
+    expect(
+      upperSessions.flatMap(
+        (session) =>
+          session.prescriptionDetail?.exercises.map((exercise) => exercise.category) ??
+          [],
+      ),
+    ).toEqual(
+      expect.arrayContaining([
+        'HORIZONTAL_PUSH',
+        'HORIZONTAL_PULL',
+        'VERTICAL_PUSH',
+        'VERTICAL_PULL',
+      ]),
+    )
+    expect(
+      upperSessions[0]?.prescriptionDetail?.exercises.map((exercise) => exercise.code),
+    ).not.toEqual(
+      upperSessions[1]?.prescriptionDetail?.exercises.map((exercise) => exercise.code),
+    )
+    for (const session of upperSessions) {
+      const prescription = session.prescriptionDetail!
+      expect(prescription.durationMinutes).toBeLessThanOrEqual(90)
+      expect(prescription.durationMinutes).toBeLessThan(90)
+      expect(auditStrengthPrescriptionTime(prescription).violations).toEqual([])
+      expect(prescription.strengthRoleStructure).toMatchObject({
+        status: 'COMPLETE',
+        minimumExerciseCount: 5,
+        targetExerciseCount: 5,
+        actualExerciseCount: 5,
+      })
+    }
+    expect(generated.strengthWeek).toMatchObject({
+      status: 'SUPPORTED',
+      structureStatus: 'SUPPORTED',
+      minimumVolumeStatus: 'MET',
+    })
+    for (const muscle of [
+      'quadriceps',
+      'gluteals',
+      'hamstrings',
+      'chest',
+      'triceps',
+      'latissimus',
+      'upper back',
+      'trunk',
+    ]) {
+      expect(
+        (generated.strengthWeek?.completedVolume[muscle] ?? 0) +
+          (generated.strengthWeek?.plannedVolume[muscle] ?? 0),
+        muscle,
+      ).toBeGreaterThanOrEqual(generated.strengthWeek!.minimumSetsPerMuscle)
+    }
+  })
+
+  it('annostelee dead bugin core-hallintaliikkeenä ilman kilogrammakalibrointia', () => {
+    const upperA = unrestrictedFourDayPlan().sessions.find(
+      (session) => session.strengthWeekContext?.role === 'UPPER_A',
+    )!
+    const prescription = upperA.prescriptionDetail
+    expect(prescription).toBeDefined()
+    if (!prescription) throw new Error('UPPER_A prescription missing')
+    const deadBug = prescription.exercises.find(
+      (exercise) => exercise.code === 'DEAD_BUG',
+    )
+    expect(deadBug).toBeDefined()
+    if (!deadBug) throw new Error('DEAD_BUG missing')
+    expect(deadBug).toMatchObject({
+      programmingRole: 'CORE_CONTROL',
+      sets: 3,
+      repetitions: '6–10 / puoli',
+      restSeconds: 60,
+      targetRpe: 7,
+      loadType: 'BODYWEIGHT',
+      loadLabelFi: 'Variaatio tai lisäpaino',
+    })
+    expect(deadBug.loadGuidance).toMatch(/hengitys|hallinta/u)
+    expect(deadBug.loadGuidance).not.toMatch(/kg|kalibroi kuorma/u)
+    expect(deadBug.progressionDecision?.reasonCodes).toContain(
+      'CORE_CONTROL_QUALITY_PROGRESSION',
+    )
+    expect(deadBug.stopCondition).toMatch(/asento|kipua/u)
+    expect(calculateSessionPrimaryMuscleVolume([deadBug])).toEqual({ trunk: 3 })
+  })
+
+  it('selittää olkapään yläasentorajoitteen vuoksi suppean upper-rakenteen terveystekijällä', () => {
+    const plan = generatePlan(
+      input({
+        experience: 'ADVANCED',
+        availableDays: [1, 3, 5, 7],
+        minutesPerSession: 90,
+        minutesByDay: { '1': 90, '3': 90, '5': 90, '7': 90 },
+        equipment: [
+          'Kehonpaino',
+          'Käsipainot',
+          'Levytanko ja painot',
+          'Vastuskuminauhat',
+          'Kuntosalilaitteet',
+        ],
+        confirmedLimitationTags: ['OVERHEAD_RESTRICTION'],
+      }),
+    ).decision
+    const uppers = plan.sessions.filter((session) =>
+      session.strengthWeekContext?.role.startsWith('UPPER_'),
+    )
+    expect(uppers).toHaveLength(2)
+    expect(
+      uppers.every((session) =>
+        session.prescriptionDetail?.exercises.every(
+          (exercise) =>
+            exercise.category !== 'VERTICAL_PUSH' &&
+            exercise.category !== 'VERTICAL_PULL',
+        ),
+      ),
+    ).toBe(true)
+    expect(
+      uppers.every((session) =>
+        session.prescriptionDetail?.strengthRoleStructure?.reasonCodes.includes(
+          STRENGTH_WEEK_REASON_CODES.ROLE_STRUCTURE_HEALTH_LIMITED,
+        ),
+      ),
+    ).toBe(true)
+    expect(plan.strengthWeek).toMatchObject({
+      status: 'PARTIAL',
+      structureStatus: 'CONSTRAINED',
+    })
+    expect(plan.strengthWeek?.supportDecision.messageFi).toMatch(/liikerajoit/u)
+  })
+
+  it.each([
+    ['vain käsipainot', ['Kehonpaino', 'Käsipainot']],
+    ['vain vastuskuminauhat', ['Kehonpaino', 'Vastuskuminauhat']],
+  ] as const)(
+    'selittää pitkän upper-rakenteen puutteen välinerajoitteella: %s',
+    (_label, equipment) => {
+      const plan = generatePlan(
+        input({
+          experience: 'ADVANCED',
+          availableDays: [1, 3, 5, 7],
+          minutesPerSession: 90,
+          minutesByDay: { '1': 90, '3': 90, '5': 90, '7': 90 },
+          equipment: [...equipment],
+        }),
+      ).decision
+      const uppers = plan.sessions.filter((session) =>
+        session.strengthWeekContext?.role.startsWith('UPPER_'),
+      )
+      expect(
+        uppers.some((session) =>
+          session.prescriptionDetail?.strengthRoleStructure?.reasonCodes.includes(
+            STRENGTH_WEEK_REASON_CODES.ROLE_STRUCTURE_EQUIPMENT_LIMITED,
+          ),
+        ),
+      ).toBe(true)
+      expect(plan.strengthWeek).toMatchObject({
+        status: 'PARTIAL',
+        structureStatus: 'CONSTRAINED',
+      })
+      expect(plan.strengthWeek?.supportDecision.messageFi).toMatch(/väline/u)
+    },
+  )
+
+  it('ei merkitse viikkoa tuetuksi, jos roolikohtainen vähimmäisrakenne on selittämättä vajaa', () => {
+    const blueprint = createStrengthWeekBlueprint({
+      weekAnchorDate: '2026-08-24',
+      goal: 'MUSCLE_GAIN',
+      experience: 'ADVANCED',
+      availableAppDays: 4,
+      fixedStrengthExposureCount: 0,
+      fixedStrengthVolumeKnown: true,
+      returning: false,
+      equipment: ['Kehonpaino', 'Käsipainot', 'Kuntosalilaitteet'],
+      history: [],
+      trainingContinuityConfirmed: true,
+      generatedAt,
+    })
+    const state = initialStrengthWeekMaterializationState(blueprint)
+    state.materializedSessionCount = 4
+    state.movementPatternCoverage = [
+      'SQUAT',
+      'HINGE',
+      'HORIZONTAL_PUSH',
+      'HORIZONTAL_PULL',
+      'CORE',
+    ]
+    state.plannedVolume = Object.fromEntries(
+      [
+        'quadriceps',
+        'gluteals',
+        'hamstrings',
+        'chest',
+        'triceps',
+        'latissimus',
+        'upper back',
+        'trunk',
+      ].map((muscle) => [muscle, 8]),
+    )
+    state.roleStructures = [
+      {
+        role: 'UPPER_A',
+        status: 'INVALID',
+        minimumExerciseCount: 5,
+        targetExerciseCount: 5,
+        actualExerciseCount: 3,
+        requiredSlotIds: ['push', 'pull', 'vertical-push', 'vertical-pull'],
+        filledRequiredSlotIds: ['push', 'pull'],
+        reasonCodes: [STRENGTH_WEEK_REASON_CODES.ROLE_STRUCTURE_INVALID],
+        messageFi: 'Rakenne jäi vajaaksi.',
+      },
+    ]
+    const plan = finalizeStrengthWeekPlan(blueprint, state)
+    expect(plan.status).toBe('PARTIAL')
+    expect(plan.structureStatus).toBe('INVALID')
+    expect(plan.supportDecision.reasonCode).toBe(
+      STRENGTH_WEEK_REASON_CODES.ROLE_STRUCTURE_INVALID,
+    )
   })
 
   it('rajaa aloittelijan ja RETURNING-käyttäjän enintään kolmeen sekä kokeneen neljään', () => {
@@ -274,8 +547,34 @@ describe('adult-strength-week-1.0.0', () => {
     },
   )
 
+  it('muodostaa jatkuvuuden vahvistaneelle käyttäjälle tuetun 45 minuutin saliviikon ilman sovellushistoriaa', () => {
+    const plan = generatePlan(
+      input({
+        availableDays: [1, 3, 5],
+        minutesPerSession: 45,
+        minutesByDay: { '1': 45, '3': 45, '5': 45 },
+        strengthHistory: [],
+        likes: 'Maljakyykky',
+        equipment: [
+          'Kehonpaino',
+          'Käsipainot',
+          'Levytanko ja painot',
+          'Kuntosalilaitteet',
+          'Vastuskuminauhat',
+        ],
+      }),
+    ).decision
+    expect(plan.strengthWeek).toMatchObject({
+      status: 'SUPPORTED',
+      structureStatus: 'SUPPORTED',
+      minimumVolumeStatus: 'MET',
+    })
+    expect(plan.strengthWeek?.movementPatternCoverage).toContain('CORE')
+    expect(plan.strengthWeek?.plannedVolume.hamstrings).toBeGreaterThanOrEqual(8)
+  })
+
   it.each(['INTERMEDIATE', 'ADVANCED'] as const)(
-    'säilyttää 30 minuutin %s-viikossa työntävän liikkeen ja coren',
+    'säilyttää 30 minuutin %s-viikossa työntävän liikkeen ja coren sekä ilmoittaa vajaasta volyymista',
     (experience) => {
       const plan = generatePlan(
         input({
@@ -285,7 +584,7 @@ describe('adult-strength-week-1.0.0', () => {
           minutesByDay: { '1': 30, '3': 30, '5': 30 },
         }),
       ).decision
-      expect(plan.strengthWeek?.status).toBe('SUPPORTED')
+      expect(plan.strengthWeek?.status).toBe('PARTIAL')
       expect(plan.strengthWeek?.movementPatternCoverage).toEqual(
         expect.arrayContaining(['HORIZONTAL_PUSH', 'CORE']),
       )
@@ -324,7 +623,7 @@ describe('adult-strength-week-1.0.0', () => {
     ).toBeGreaterThan(1)
   })
 
-  it('säilyttää coren neljässä 20 minuutin harjoituksessa, kun tuettu välineprofiili mahdollistaa sen', () => {
+  it('säilyttää coren neljässä 20 minuutin harjoituksessa ja ilmoittaa vajaasta volyymista', () => {
     const plan = generatePlan(
       input({
         experience: 'ADVANCED',
@@ -334,7 +633,7 @@ describe('adult-strength-week-1.0.0', () => {
       }),
     ).decision
     expect(plan.strengthWeek?.movementPatternCoverage).toContain('CORE')
-    expect(plan.strengthWeek?.status).toBe('SUPPORTED')
+    expect(plan.strengthWeek?.status).toBe('PARTIAL')
   })
 
   it('laskee suunnitellut sarjat kerran ja portittaa myöhemmät päivät 16/6-katoilla', () => {

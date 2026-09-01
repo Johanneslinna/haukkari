@@ -31,6 +31,7 @@ import {
   finalizeStrengthWeekPlan,
   initialStrengthWeekMaterializationState,
   materializeStrengthWeekSession,
+  strengthWeekRoleLabelFi,
   STRENGTH_WEEK_REASON_CODES,
   type StrengthWeekBlueprint,
 } from './StrengthWeekPolicy'
@@ -246,10 +247,14 @@ function createAppSessions(
     const index = (produced.get(kind) ?? 0) + 1
     const defaults = sessionDefaults[kind]
     const day = openDays[sessions.length] ?? 1
+    const requestedDuration =
+      kind === 'STRENGTH'
+        ? ConstraintEngine.maximumMinutes(athleteState, day)
+        : defaults.durationMinutes
     const recommendedDuration = ConstraintEngine.capSessionMinutes(
       athleteState,
       day,
-      defaults.durationMinutes,
+      requestedDuration,
     )
     sessions.push({
       id: `generated-${kind.toLocaleLowerCase('fi-FI')}-${index}`,
@@ -573,6 +578,7 @@ export function generatePlan(
     }
     strengthWeekState = materialized.state
     strengthSequenceIndex += 1
+    const strengthTitle = strengthWeekRoleLabelFi(strengthRole)
     const variants = (session.variants ?? []).flatMap((variant) => {
       const adapted = adaptPrescription(materialized.prescription, variant, {
         age: profile.age,
@@ -593,9 +599,12 @@ export function generatePlan(
       ...session,
       title: strengthWeek.bodyweightPullUnsupported
         ? 'Voimaharjoitus – vetävä liikesuunta puuttuu'
-        : session.title,
+        : strengthTitle,
       durationMinutes: materialized.prescription.durationMinutes,
-      prescriptionDetail: materialized.prescription,
+      prescriptionDetail: {
+        ...materialized.prescription,
+        title: strengthTitle,
+      },
       strengthWeekContext: materialized.context,
       notes: [
         ...(session.notes ?? []),

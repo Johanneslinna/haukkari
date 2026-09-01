@@ -100,7 +100,9 @@ async function expectStrengthWeekRoles(page: Page, roles: string[]) {
   await expect(sessions).toHaveCount(roles.length)
   for (const [index, role] of roles.entries()) {
     await sessions.nth(index).click()
-    await expect(page.getByRole('heading', { name: role, exact: true })).toBeVisible()
+    await expect(
+      page.getByRole('heading', { name: role, exact: true, level: 1 }),
+    ).toBeVisible()
     await page.getByRole('link', { name: 'Takaisin viikkoon' }).click()
   }
 }
@@ -153,7 +155,7 @@ test('10 minuutin voimaviikko käyttää oikeaa A/B-kiertoa', async ({ page }) =
     returningStrengthDays: 1,
     equipmentPreset: 'Koti',
   })
-  await expectStrengthWeekRoles(page, ['FULL BODY A', 'FULL BODY B'])
+  await expectStrengthWeekRoles(page, ['Kokovartalon voima A', 'Kokovartalon voima B'])
 })
 
 test('kolmen päivän voimaviikko näyttää koko kehon A/B/C-kierron', async ({ page }) => {
@@ -164,7 +166,11 @@ test('kolmen päivän voimaviikko näyttää koko kehon A/B/C-kierron', async ({
     returningStrengthDays: 1,
     equipmentPreset: 'Koti',
   })
-  await expectStrengthWeekRoles(page, ['FULL BODY A', 'FULL BODY B', 'FULL BODY C'])
+  await expectStrengthWeekRoles(page, [
+    'Kokovartalon voima A',
+    'Kokovartalon voima B',
+    'Kokovartalon voima C',
+  ])
 })
 
 test('neljän päivän aktiivinen voimaviikko näyttää upper/lower-rakenteen', async ({
@@ -177,7 +183,12 @@ test('neljän päivän aktiivinen voimaviikko näyttää upper/lower-rakenteen',
     returningStrengthDays: 1,
     equipmentPreset: 'Koti',
   })
-  await expectStrengthWeekRoles(page, ['UPPER A', 'LOWER A', 'UPPER B', 'LOWER B'])
+  await expectStrengthWeekRoles(page, [
+    'Ylävartalon voima A',
+    'Alavartalon voima A',
+    'Ylävartalon voima B',
+    'Alavartalon voima B',
+  ])
   await page.locator('.session-block').nth(3).click()
   await expect(page.locator('.exercise-plan-list h3')).toHaveCount(3)
 })
@@ -305,6 +316,7 @@ test('viikkonäkymän blueprint säilyy suoritukseen ja toteuma päivittää vii
   await completeOnboarding(page, {
     strengthProgressionScenario: true,
     availableDayCount: 4,
+    minutesPerSession: 90,
     experience: 'INTERMEDIATE',
     returningStrengthDays: 1,
     equipmentPreset: 'Koti',
@@ -322,6 +334,7 @@ test('viikkonäkymän blueprint säilyy suoritukseen ja toteuma päivittää vii
   expect(previewExercises.length).toBeGreaterThan(0)
   await page.getByRole('link', { name: /^(?:Nyt|Tänään)$/u }).click()
   await page.getByRole('link', { name: 'Aloita treeni' }).click()
+  await expect(page.getByLabel('Käytettävissä oleva aika tänään (min)')).toHaveValue('90')
   await page.getByRole('button', { name: 'Ei mitään poikkeavaa' }).click()
   await page.getByRole('link', { name: 'Avaa päivän harjoitus' }).click()
   await expect(page.locator('.exercise-plan-list h3')).toHaveText(previewExercises)
@@ -694,7 +707,8 @@ test('tallennetut voimaharjoituskerrat ohjaavat seuraavan käyttäjänäkymän p
   page,
 }) => {
   test.setTimeout(180_000)
-  await page.clock.install({ time: new Date('2026-08-24T08:00:00.000Z') })
+  let currentTime = new Date('2026-08-24T08:00:00.000Z')
+  await page.clock.install({ time: currentTime })
   await completeOnboarding(page, {
     withStrengthSafetyContext: true,
     strengthProgressionScenario: true,
@@ -712,7 +726,8 @@ test('tallennetut voimaharjoituskerrat ohjaavat seuraavan käyttäjänäkymän p
     }
   }
   const advanceToNextTrainingDay = async (days: number) => {
-    await page.clock.fastForward(days * 86_400_000)
+    currentTime = new Date(currentTime.getTime() + days * 86_400_000)
+    await page.clock.setSystemTime(currentTime)
     await openTodayWorkout()
   }
 
@@ -728,13 +743,15 @@ test('tallennetut voimaharjoituskerrat ohjaavat seuraavan käyttäjänäkymän p
     minutes: 20,
     exerciseName: 'Yhden käden soutu',
   })
-  await advanceToNextTrainingDay(1)
+  // A/B-harjoitukset eroavat nyt tarkoituksella. Progressio vaatii kaksi
+  // vertailukelpoista A-roolin harjoitusta, joten siirrytään viikko kerrallaan.
+  await advanceToNextTrainingDay(7)
   await completeCompactStrengthWorkout(page, maximumRepetitions, 5, {
     minutes: 20,
     exerciseName: 'Yhden käden soutu',
   })
 
-  await advanceToNextTrainingDay(6)
+  await advanceToNextTrainingDay(7)
   await expect(
     page.getByText('Vahvista seuraava käytettävissä oleva kuorma'),
   ).toBeVisible()
@@ -753,13 +770,13 @@ test('tallennetut voimaharjoituskerrat ohjaavat seuraavan käyttäjänäkymän p
     minutes: 20,
     exerciseName: 'Yhden käden soutu',
   })
-  await advanceToNextTrainingDay(1)
+  await advanceToNextTrainingDay(7)
   await completeCompactStrengthWorkout(page, maximumRepetitions, 20, {
     minutes: 20,
     exerciseName: 'Yhden käden soutu',
   })
 
-  await advanceToNextTrainingDay(6)
+  await advanceToNextTrainingDay(7)
   await expect(
     page.getByText('Vahvista seuraava käytettävissä oleva kuorma'),
   ).toBeVisible()

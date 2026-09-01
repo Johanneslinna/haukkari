@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest'
-import { resolvePrescription } from '../../domain/coaching'
+import { resolvePrescription, STRENGTH_WEEK_POLICY_VERSION } from '../../domain/coaching'
 import type { JsonObject, LocalRecord, SyncableTable } from '../../domain/sync/types'
 import type { AppDataContextValue } from '../app-data/appDataContextValue'
+import { planSessions, planStrengthWeek } from './coachingData'
 import {
   addCompetition,
   calendarPlanningInputs,
@@ -134,6 +135,7 @@ function rolloverFixture(
     timezone?: string
     includeTimezone?: boolean
     weekAnchorDate?: string
+    strengthWeekPolicyVersion?: string
   } = {},
 ) {
   const goalId = '40000000-0000-4000-8000-000000000001'
@@ -186,7 +188,8 @@ function rolloverFixture(
       plan: {
         sessions: [],
         strengthWeek: {
-          policyVersion: 'adult-strength-week-1.0.0',
+          policyVersion:
+            options.strengthWeekPolicyVersion ?? STRENGTH_WEEK_POLICY_VERSION,
           weekAnchorDate: options.weekAnchorDate ?? '2026-08-17',
         },
       },
@@ -555,6 +558,101 @@ describe('kalenterin replanner', () => {
 })
 
 describe('voimaviikon vaihtuminen', () => {
+  it('muodostaa saman viikon uudelleen, kun suunnitelmaan jäi vanha turvallisuusesto', async () => {
+    const data = rolloverFixture({ weekAnchorDate: '2026-08-24' })
+    const profile = data.latest('profiles')!
+    const goal = data.latest('goal_profiles')!
+    await data.update(profile, {
+      birth_date: '1991-01-01',
+      app_settings: {
+        experience: 'INTERMEDIATE',
+        availableDays: [1, 3],
+        equipment: ['Kehonpaino', 'Käsipainot'],
+        minutesPerSession: 90,
+        minutesByDay: { '1': 90, '3': 90 },
+        physicalLoad: 'MODERATE',
+      },
+    })
+    await data.update(goal, {
+      preferences: {
+        experience: 'INTERMEDIATE',
+        availableDays: [1, 3],
+        equipment: ['Kehonpaino', 'Käsipainot'],
+        minutesPerSession: 90,
+        minutesByDay: { '1': 90, '3': 90 },
+        physicalLoad: 'MODERATE',
+      },
+    })
+    const activePlan = data.latest('training_plans')!
+    await data.update(activePlan, {
+      plan: {
+        sessions: [
+          {
+            id: 'stale-strength-session',
+            day: 1,
+            kind: 'STRENGTH',
+            durationMinutes: 90,
+            timeBudgetMinutes: 90,
+            intensity: 'HARD',
+            loadRegion: 'FULL_BODY',
+            fixed: false,
+            source: 'APP',
+            unsupportedPrescription: {
+              status: 'UNSUPPORTED',
+              sessionKind: 'STRENGTH',
+              reasonCode: 'SAFETY_INFORMATION_INCOMPLETE',
+              userMessage: 'Vanhentunut turvallisuusesto',
+            },
+          },
+        ],
+        strengthWeek: {
+          policyVersion: STRENGTH_WEEK_POLICY_VERSION,
+          weekAnchorDate: '2026-08-24',
+          reasonCodes: ['SAFETY_INFORMATION_INCOMPLETE'],
+        },
+      },
+    })
+
+    await expect(
+      ensureCurrentStrengthWeekPlan(data, '2026-08-24T08:00:00.000Z'),
+    ).resolves.toBe(true)
+
+    const refreshedPlan = data
+      .list('training_plans')
+      .find((record) => record.data.status === 'ACTIVE')
+    const refreshedPlanData = refreshedPlan?.data.plan as JsonObject
+    expect(
+      planSessions(refreshedPlanData).filter(
+        (session) => session.kind === 'STRENGTH' && session.unsupportedPrescription,
+      ),
+    ).toHaveLength(0)
+    expect(
+      Object.values(planStrengthWeek(refreshedPlanData)?.plannedVolume ?? {}).reduce(
+        (total, amount) => total + amount,
+        0,
+      ),
+    ).toBeGreaterThan(0)
+  })
+
+  it('päivittää saman viikon vanhan aikabudjettipolitiikan uutena versiona', async () => {
+    const stale = rolloverFixture({
+      weekAnchorDate: '2026-08-24',
+      strengthWeekPolicyVersion: 'adult-strength-week-1.0.0',
+    })
+
+    await expect(
+      ensureCurrentStrengthWeekPlan(stale, '2026-08-26T08:00:00.000Z'),
+    ).resolves.toBe(true)
+    expect(stale.list('plan_versions')).toHaveLength(2)
+    expect(
+      (stale.list('training_plans').at(-1)?.data.plan as JsonObject | undefined)
+        ?.strengthWeek,
+    ).toMatchObject({
+      policyVersion: STRENGTH_WEEK_POLICY_VERSION,
+      weekAnchorDate: '2026-08-24',
+    })
+  })
+
   it('käyttää Helsingin paikallista maanantairajaa eikä UTC-vuorokauden rajaa', async () => {
     const sunday = rolloverFixture({ weekAnchorDate: '2026-08-24' })
     await expect(
@@ -667,7 +765,7 @@ describe('voimaviikon vaihtuminen', () => {
     expect(
       (replacement?.data.plan as JsonObject | undefined)?.strengthWeek,
     ).toMatchObject({
-      policyVersion: 'adult-strength-week-1.0.0',
+      policyVersion: STRENGTH_WEEK_POLICY_VERSION,
       weekAnchorDate: '2026-08-24',
     })
     expect(data.list('plan_versions')).toHaveLength(2)

@@ -48,10 +48,17 @@ import type {
 import {
   calendarContextForProfile,
   objectValue,
+  planSessions,
   stringValue,
   toJsonObject,
 } from './coachingData'
+import { hasMeaningfulRestrictionText } from './healthInformation'
 import { strengthHistoryFromLogs } from '../workout/WorkoutHistory'
+import {
+  ageFromBirthDate,
+  shouldReevaluateStoredSafetyBlock,
+  shouldReevaluateStoredSafetyReasonCode,
+} from '../workout/WorkoutPrescriptionAdapter'
 import {
   deterministicWeeklyPlanIds,
   weeklyMaterializationIdempotencyKey,
@@ -104,13 +111,7 @@ export type OnboardingInput = {
   sensitiveConsent: boolean
 }
 
-export function hasMeaningfulRestrictionText(value: string) {
-  const normalized = value.trim().toLocaleLowerCase('fi-FI')
-  if (!normalized) return false
-  return !/^(?:-|ei|ei ole|ei mitään|ei rajoitteita|ei sairauksia|ei vammoja|terve|none)$/u.test(
-    normalized,
-  )
-}
+export { hasMeaningfulRestrictionText } from './healthInformation'
 
 function runtimeCalendarContext(at: Date | string = new Date()) {
   const resolved = Intl.DateTimeFormat().resolvedOptions().timeZone
@@ -154,11 +155,18 @@ function confirmedLimitationTagsFrom(value: unknown): ConfirmedLimitationTag[] {
 function planningPreferencesWithScreening(
   preferences: OnboardingInput | Record<string, unknown>,
   screening: LocalRecord | null,
+  profile: LocalRecord | null = null,
+  localDate?: string,
 ) {
   const answers = objectValue(screening?.data.answers)
   const existing = preferences as Record<string, unknown>
+  const storedAge =
+    typeof existing.age === 'number'
+      ? existing.age
+      : ageFromBirthDate(profile?.data.birth_date, localDate)
   return {
     ...existing,
+    ...(storedAge === undefined ? {} : { age: storedAge }),
     currentInjuries:
       stringValue(answers.current_injuries_surgeries_and_mobility_limits) ||
       existing.currentInjuries,
@@ -651,7 +659,7 @@ export async function activateGoalDraft(
   const screeningStatus = stringValue(screening?.data.status)
   const plan = planFromPreferences(
     draft.profile,
-    planningPreferencesWithScreening(settings, screening),
+    planningPreferencesWithScreening(settings, screening, profileRecord, clock.localDate),
     screeningStatus === 'HIGH_INTENSITY_BLOCKED' || screeningStatus === 'NEEDS_REVIEW',
     clock,
     {},
@@ -1099,6 +1107,8 @@ async function refreshStrengthWeekAfterWorkout(
   const preferences = planningPreferencesWithScreening(
     { ...profileSettings, ...basePreferences },
     screening,
+    profile,
+    clock.localDate,
   )
   const weekAnchorDate = clock.weekAnchorDate
   const completedStrengthSessionIds = data
@@ -1186,7 +1196,22 @@ async function ensureCurrentStrengthWeekPlanOnce(
   if (typeof strengthWeek.policyVersion !== 'string') return false
   const profile = data.latest('profiles')
   const clock = weeklyMaterializationClock(profile, at)
-  if (strengthWeek.weekAnchorDate === clock.weekAnchorDate) return false
+  const currentPolicyWeek =
+    strengthWeek.weekAnchorDate === clock.weekAnchorDate &&
+    strengthWeek.policyVersion === STRENGTH_WEEK_POLICY_VERSION
+  const hasStoredSafetyBlock =
+    planSessions(currentPlan).some(
+      (session) =>
+        session.unsupportedPrescription !== undefined &&
+        shouldReevaluateStoredSafetyBlock(session.unsupportedPrescription),
+    ) ||
+    (Array.isArray(strengthWeek.reasonCodes) &&
+      strengthWeek.reasonCodes.some(
+        (reasonCode) =>
+          typeof reasonCode === 'string' &&
+          shouldReevaluateStoredSafetyReasonCode(reasonCode),
+      ))
+  if (currentPolicyWeek && !hasStoredSafetyBlock) return false
 
   const goalRecord = activeGoalRecord(data)
   const goalPeriod = [...data.list('goal_periods')]
@@ -1206,6 +1231,8 @@ async function ensureCurrentStrengthWeekPlanOnce(
   const preferences = planningPreferencesWithScreening(
     { ...profileSettings, ...basePreferences },
     screening,
+    profile,
+    clock.localDate,
   )
   const screeningStatus = stringValue(screening?.data.status)
   const plan = planFromPreferences(
@@ -1216,6 +1243,12 @@ async function ensureCurrentStrengthWeekPlanOnce(
     calendarPlanningInputs(data),
     strengthHistoryFromLogs(data.list('workout_logs')),
   )
+  if (
+    currentPolicyWeek &&
+    JSON.stringify(currentPlan) === JSON.stringify(plan.decision)
+  ) {
+    return false
+  }
   const ids = await deterministicWeeklyPlanIds({
     userId: activePlan.userId,
     goalPeriodId: goalPeriod.id,
@@ -1283,8 +1316,19 @@ async function ensureCurrentStrengthWeekPlanOnce(
     }
   }
   if (existingTrainingPlan) {
-    if (existingTrainingPlan.data.status !== 'ACTIVE') {
-      await data.update(existingTrainingPlan, toJsonObject({ status: 'ACTIVE' }))
+    if (
+      existingTrainingPlan.data.status !== 'ACTIVE' ||
+      (currentPolicyWeek && hasStoredSafetyBlock)
+    ) {
+      await data.update(
+        existingTrainingPlan,
+        toJsonObject({
+          status: 'ACTIVE',
+          ...(currentPolicyWeek && hasStoredSafetyBlock
+            ? { plan: plan.decision, change_reason: 'CURRENT_SAFETY_REEVALUATION' }
+            : {}),
+        }),
+      )
     }
   } else {
     await data.create(
@@ -1466,6 +1510,8 @@ async function createCalendarPlanVersion(
   const planningPreferences = planningPreferencesWithScreening(
     { ...profileSettings, ...basePreferences },
     data.latest('health_screenings'),
+    data.latest('profiles'),
+    clock.localDate,
   )
   const latestSportProfile = data.latest('sport_profiles')
   const sportCode =

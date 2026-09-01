@@ -1,7 +1,13 @@
 import { describe, expect, it } from 'vitest'
 import { generatePlan } from '../../domain/coaching/PlanGenerator'
 import type { JsonObject, LocalRecord, SyncableTable } from '../../domain/sync/types'
-import { planSessions, planStrengthWeek } from '../coaching/coachingData'
+import {
+  planSessions,
+  planStrengthWeek,
+  prescriptionDecisionReasons,
+  prescriptionTimeBreakdownItems,
+  sessionTotalDurationMinutes,
+} from '../coaching/coachingData'
 import {
   adaptWorkoutPrescriptionForCurrentAthlete,
   authorizeWorkoutPrescriptionForCurrentAthlete,
@@ -35,7 +41,7 @@ function record(table: SyncableTable, data: JsonObject): LocalRecord {
   }
 }
 
-function plan() {
+function plan(minutesPerSession = 45) {
   return generatePlan({
     goal: { primary: 'GENERAL_FITNESS', secondary: [], inputs: {} },
     experience: 'INTERMEDIATE',
@@ -45,8 +51,8 @@ function plan() {
     competitions: [],
     equipment: ['Kehonpaino', 'Käsipainot'],
     physicalLoad: 'MODERATE',
-    minutesPerSession: 45,
-    minutesByDay: { '1': 45, '4': 45 },
+    minutesPerSession,
+    minutesByDay: { '1': minutesPerSession, '4': minutesPerSession },
     age: 35,
     generatedAt: now,
     calendarTimeZone: 'Europe/Helsinki',
@@ -56,13 +62,78 @@ function plan() {
 }
 
 describe('voimaviikon tuotantopolku', () => {
+  it('laskee päiväkohtaisesta aikabudjetista koko harjoituksen keston kaikkine osineen', () => {
+    const session = plan(90).sessions.find((item) => item.kind === 'STRENGTH')!
+    const prescription = session.prescriptionDetail!
+    const breakdown = prescription.timeBreakdown!
+
+    expect(session.timeBudgetMinutes).toBe(90)
+    expect(prescription.timeBudgetMinutes).toBe(90)
+    expect(sessionTotalDurationMinutes(session)).toBe(
+      Math.ceil(breakdown.totalSeconds / 60),
+    )
+    expect(session.durationMinutes).toBe(sessionTotalDurationMinutes(session))
+    expect(breakdown).toMatchObject({
+      warmupSeconds: expect.any(Number),
+      exerciseWarmupSeconds: expect.any(Number),
+      workSeconds: expect.any(Number),
+      restSeconds: expect.any(Number),
+      transitionSeconds: expect.any(Number),
+      equipmentSetupSeconds: expect.any(Number),
+      cooldownSeconds: expect.any(Number),
+      bufferSeconds: expect.any(Number),
+    })
+    for (const value of [
+      breakdown.warmupSeconds,
+      breakdown.exerciseWarmupSeconds,
+      breakdown.workSeconds,
+      breakdown.restSeconds,
+      breakdown.transitionSeconds,
+      breakdown.equipmentSetupSeconds,
+      breakdown.cooldownSeconds,
+      breakdown.bufferSeconds,
+    ]) {
+      expect(value).toBeGreaterThan(0)
+    }
+    expect(
+      prescriptionTimeBreakdownItems(prescription).map((item) => item.label),
+    ).toEqual([
+      'Yleislämmittely',
+      'Liikekohtaiset lämmittelysarjat',
+      'Työsarjat',
+      'Sarjapalautukset',
+      'Liikkeiden vaihdot ja välineiden säädöt',
+      'Loppuverryttely',
+      'Aikapuskuri',
+    ])
+
+    const repeatedTechnicalReason =
+      'Annostus pysyy julkaistun aikuisten voimaharjoittelusäännön sisällä.'
+    expect(
+      prescription.decisionTrace.rules.filter(
+        (rule) => rule.message === repeatedTechnicalReason,
+      ).length,
+    ).toBeGreaterThan(1)
+    const userReasons = prescriptionDecisionReasons(prescription)
+    expect(new Set(userReasons).size).toBe(userReasons.length)
+    expect(userReasons).not.toContain(repeatedTechnicalReason)
+    expect(
+      userReasons.filter(
+        (reason) =>
+          reason ===
+          'Liikkeet ja sarjamäärät on sovitettu viikon turvalliseen kokonaiskuormaan.',
+      ),
+    ).toHaveLength(1)
+    expect(userReasons[0]).toContain('koko kehon harjoitus')
+  })
+
   it('säilyttää saman blueprintin JSON-snapshotissa, esikatselussa ja suorituksen valtuutuksessa', () => {
     const originalPlan = plan()
     const snapshot = JSON.parse(JSON.stringify(originalPlan)) as JsonObject
     const previewSession = planSessions(snapshot).find(
       (session) => session.kind === 'STRENGTH',
     )
-    expect(planStrengthWeek(snapshot)?.policyVersion).toBe('adult-strength-week-1.0.0')
+    expect(planStrengthWeek(snapshot)?.policyVersion).toBe('adult-strength-week-1.5.0')
     expect(previewSession?.strengthWeekContext?.role).toBe('FULL_BODY_A')
     const prescription = previewSession!.prescriptionDetail!
     const authorized = authorizeWorkoutPrescriptionForCurrentAthlete({

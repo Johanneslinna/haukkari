@@ -1,4 +1,5 @@
 dist
+/.deploy/
 coverage
 node_modules
 playwright-report

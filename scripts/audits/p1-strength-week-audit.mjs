@@ -347,6 +347,7 @@ try {
     MAX_SESSION_PRIMARY_MUSCLE_SETS,
     adaptPrescription,
     calculatePlannedMuscleVolume,
+    calculateSessionPrimaryMuscleVolume,
     createLocalCalendarContext,
     generatePlan,
   } = engine
@@ -468,11 +469,10 @@ try {
       ) {
         violations.push(`case ${index}: session has no meaningful dose`)
       }
-      const primary = {}
+      const primary = calculateSessionPrimaryMuscleVolume(
+        session.prescriptionDetail.exercises,
+      )
       for (const exercise of session.prescriptionDetail.exercises) {
-        for (const muscle of exercise.primaryMuscles ?? []) {
-          primary[muscle] = (primary[muscle] ?? 0) + exercise.sets
-        }
         const progression = exercise.progressionDecision
         if (
           progression?.action === 'INCREASE_SETS' &&
@@ -620,7 +620,7 @@ try {
     userId: '00000000-0000-4000-8000-000000000001',
     goalPeriodId: '00000000-0000-4000-8000-000000000002',
     calendarPolicyVersion: 'local-calendar-1.0.0',
-    strengthWeekPolicyVersion: 'adult-strength-week-1.0.0',
+    strengthWeekPolicyVersion: 'adult-strength-week-1.5.0',
   }
   const firstWeekIds = await deterministicWeeklyPlanIds({
     ...weeklyIdInput,
@@ -685,7 +685,7 @@ try {
   }
 
   const report = {
-    policyVersion: 'adult-strength-week-1.0.0',
+    policyVersion: 'adult-strength-week-1.5.0',
     calendarPolicyVersion: 'local-calendar-1.0.0',
     evaluatedCases,
     statusCounts: counts,

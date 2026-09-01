@@ -10,10 +10,12 @@ import {
   type PrescriptionAdaptationSafetyContext,
   type PrescriptionResult,
   type ReadinessState,
+  type UnsupportedPrescription,
   type WorkoutVariant,
 } from '../../domain/coaching'
 import type { LocalRecord } from '../../domain/sync/types'
 import { objectValue, stringValue, todayIso } from '../coaching/coachingData'
+import { hasMeaningfulRestrictionText } from '../coaching/healthInformation'
 
 const readinessStates = new Set<ReadinessState>([
   'GREEN',
@@ -33,6 +35,42 @@ const confirmedLimitationTagValues = new Set<ConfirmedLimitationTag>([
   'CALF_INJURY',
   'HAMSTRING_INJURY',
 ])
+
+/**
+ * Päivän kuntotarkistus tallentaa tarkistushetken harjoitustyypin. Jos
+ * viikkosuunnitelmaa muokataan myöhemmin, vanha tyyppi ei saa estää uuden
+ * suunnitelman harjoituksen avaamista. Kuntotarkistuksen tekemä varsinainen
+ * turvallisuusmuutos (esimerkiksi palauttava harjoitus tai lepo) säilytetään.
+ */
+export function effectiveSessionKindForCurrentPlan(input: {
+  currentSessionKind: PrescribedSession['kind']
+  checkedSessionKind: PrescribedSession['kind']
+  allowedSessionKind: PrescribedSession['kind']
+}): PrescribedSession['kind'] {
+  const checkInOnlyMirrorsOldPlan =
+    input.checkedSessionKind !== input.currentSessionKind &&
+    input.allowedSessionKind === input.checkedSessionKind
+
+  return checkInOnlyMirrorsOldPlan ? input.currentSessionKind : input.allowedSessionKind
+}
+
+const currentSafetyReasonCodes = new Set<UnsupportedPrescription['reasonCode']>([
+  'HEALTH_ENGINE_NOT_AVAILABLE',
+  'SAFETY_INFORMATION_INCOMPLETE',
+  'YOUTH_ENGINE_NOT_AVAILABLE',
+  'OLDER_ADULT_ENGINE_NOT_AVAILABLE',
+  'READINESS_RED_STOP',
+  'READINESS_RECOVERY_ONLY',
+])
+
+/** Tallennettu turvallisuusesto arvioidaan uudelleen päivän nykyisillä tiedoilla. */
+export function shouldReevaluateStoredSafetyReasonCode(reasonCode: string) {
+  return currentSafetyReasonCodes.has(reasonCode as UnsupportedPrescription['reasonCode'])
+}
+
+export function shouldReevaluateStoredSafetyBlock(prescription: UnsupportedPrescription) {
+  return shouldReevaluateStoredSafetyReasonCode(prescription.reasonCode)
+}
 
 export function confirmedLimitationTags(value: unknown): ConfirmedLimitationTag[] {
   return Array.isArray(value)
@@ -72,17 +110,21 @@ export function currentWorkoutSafetyContext(input: {
   today?: string
 }): PrescriptionAdaptationSafetyContext {
   const screeningStatus = stringValue(input.screening?.data.status)
+  const completedWithoutSensitiveHealthData =
+    input.screening === null && input.profile?.data.onboarding_completed === true
   const healthBlocked =
     screeningStatus === 'HIGH_INTENSITY_BLOCKED' || screeningStatus === 'NEEDS_REVIEW'
       ? true
       : screeningStatus === 'CLEAR'
         ? false
-        : undefined
+        : completedWithoutSensitiveHealthData
+          ? false
+          : undefined
   const answers = objectValue(input.screening?.data.answers)
   const hasLegacyLimitationText = [
     stringValue(answers.current_injuries_surgeries_and_mobility_limits),
     stringValue(answers.doctor_restrictions),
-  ].some((value) => value.trim().length > 0)
+  ].some(hasMeaningfulRestrictionText)
   const hasConfirmedLimitation =
     confirmedLimitationTags(answers.confirmed_limitation_tags).length > 0
 

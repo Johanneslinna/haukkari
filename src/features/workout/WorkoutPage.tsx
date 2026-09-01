@@ -44,6 +44,7 @@ import {
   calendarContextForProfile,
   numberValue,
   planSessions,
+  prescriptionDecisionReasons,
   readinessLabels,
   sessionLabels,
   stringValue,
@@ -54,6 +55,8 @@ import {
   authorizeWorkoutPrescriptionForCurrentAthlete,
   confirmedLimitationTags,
   currentWorkoutSafetyContext,
+  effectiveSessionKindForCurrentPlan,
+  shouldReevaluateStoredSafetyBlock,
   storedReadiness,
 } from './WorkoutPrescriptionAdapter'
 import { strengthHistoryFromLogs } from './WorkoutHistory'
@@ -321,12 +324,11 @@ export function WorkoutPage() {
     checkInAnswers.plannedSession,
     session?.kind ?? 'REST',
   ) as PrescribedSession['kind']
-  const effectiveSessionKind =
-    allowedSession === 'REST'
-      ? 'REST'
-      : allowedSession === requestedSession
-        ? requestedSession
-        : allowedSession
+  const effectiveSessionKind = effectiveSessionKindForCurrentPlan({
+    currentSessionKind: session?.kind ?? 'REST',
+    checkedSessionKind: requestedSession,
+    allowedSessionKind: allowedSession,
+  })
   const compactMinutes = numberValue(
     checkInRecommendation.compactVariantMinutes,
     typeof checkInAnswers.availableMinutes === 'number' &&
@@ -359,7 +361,12 @@ export function WorkoutPage() {
     .filter((value): value is WorkoutFeedback => value !== null)
   const prescriptionResolution: PrescriptionResult | null = (() => {
     if (!session) return null
-    if (session.unsupportedPrescription) return session.unsupportedPrescription
+    if (
+      session.unsupportedPrescription &&
+      !shouldReevaluateStoredSafetyBlock(session.unsupportedPrescription)
+    ) {
+      return session.unsupportedPrescription
+    }
     if (session.prescriptionDetail && effectiveSessionKind === session.kind) {
       return {
         status: 'SUPPORTED',
@@ -736,20 +743,55 @@ export function WorkoutPage() {
   }
 
   if (unsupportedPrescription) {
+    const safetyInformationIncomplete =
+      unsupportedPrescription.reasonCode === 'SAFETY_INFORMATION_INCOMPLETE'
+    const missingSafetyDetail =
+      safetyContext.age === undefined
+        ? 'Ikä puuttuu harjoitteluprofiilista.'
+        : safetyContext.readiness === undefined
+          ? 'Päivän kuntotarkistus puuttuu.'
+          : safetyContext.healthBlocked === undefined
+            ? 'Aloituskartoituksen turvallisuusvahvistus puuttuu.'
+            : safetyContext.safetyInformationComplete !== true
+              ? 'Aiempi vapaa rajoiteteksti pitää vahvistaa valintana ennen automaattista voimaharjoitusta.'
+              : unsupportedPrescription.userMessage
     return (
       <div className="page-stack narrow-page">
         <header className="section-heading">
           <div>
-            <p className="eyebrow">Harjoitustyyppi ei ole vielä tuettu</p>
-            <h1>Harjoitusta ei muodosteta väärillä säännöillä</h1>
-            <p>{unsupportedPrescription.userMessage}</p>
+            <p className="eyebrow">
+              {safetyInformationIncomplete
+                ? 'Turvallisuustieto pitää vahvistaa'
+                : 'Harjoitustyyppi ei ole vielä tuettu'}
+            </p>
+            <h1>
+              {safetyInformationIncomplete
+                ? 'Voimaharjoitus odottaa yhtä vahvistusta'
+                : 'Harjoitusta ei muodosteta väärillä säännöillä'}
+            </h1>
+            <p>
+              {safetyInformationIncomplete
+                ? missingSafetyDetail
+                : unsupportedPrescription.userMessage}
+            </p>
           </div>
         </header>
         <div className="status-banner" role="status">
-          Tämä rajoitus estää vääränlaisen harjoituksen näyttämisen turvallisuussyistä.
+          {safetyInformationIncomplete
+            ? 'Voimaharjoitustyyppi on tuettu. Harjoitus avautuu, kun puuttuva tieto on vahvistettu.'
+            : 'Tämä rajoitus estää vääränlaisen harjoituksen näyttämisen turvallisuussyistä.'}
         </div>
-        <Link className="button button-secondary" to="/viikko">
-          Katso viikkosuunnitelma
+        <Link
+          className="button button-secondary"
+          to={
+            safetyInformationIncomplete && safetyContext.readiness === undefined
+              ? '/kuntotarkistus'
+              : '/viikko'
+          }
+        >
+          {safetyInformationIncomplete && safetyContext.readiness === undefined
+            ? 'Tee kuntotarkistus'
+            : 'Katso viikkosuunnitelma'}
         </Link>
       </div>
     )
@@ -1472,11 +1514,10 @@ export function WorkoutPage() {
             <details className="decision-details">
               <summary>Miksi juuri tämä harjoitus?</summary>
               <ul>
-                {prescription.decisionTrace.rules.map((rule) => (
-                  <li key={rule.ruleId}>{rule.message}</li>
+                {prescriptionDecisionReasons(prescription).map((reason) => (
+                  <li key={reason}>{reason}</li>
                 ))}
               </ul>
-              <p>{prescription.progression}</p>
             </details>
             <button
               className="button button-primary"
