@@ -668,6 +668,38 @@ describe('voimaviikon vaihtuminen', () => {
     expect(monday.list('plan_versions').at(-1)?.data.effective_from).toBe('2026-08-31')
   })
 
+  it('muodostaa vanhasta viikosta uuden viikon kolmella odotetulla kirjoitusoperaatiolla', async () => {
+    const data = rolloverFixture({ weekAnchorDate: '2026-08-24' })
+    const previousPlanId = data.latest('training_plans')!.id
+    const operations: Array<{
+      table: SyncableTable
+      kind: 'INSERT' | 'UPDATE'
+      entityId: string
+    }> = []
+    const create = data.create.bind(data)
+    const update = data.update.bind(data)
+    data.create = async (table, payload, entityId) => {
+      const record = await create(table, payload, entityId)
+      operations.push({ table, kind: 'INSERT', entityId: record.id })
+      return record
+    }
+    data.update = async (record, payload) => {
+      const updated = await update(record, payload)
+      operations.push({ table: record.table, kind: 'UPDATE', entityId: record.id })
+      return updated
+    }
+
+    await expect(
+      ensureCurrentStrengthWeekPlan(data, '2026-09-01T08:00:00.000Z'),
+    ).resolves.toBe(true)
+
+    expect(operations).toEqual([
+      { table: 'plan_versions', kind: 'INSERT', entityId: expect.any(String) },
+      { table: 'training_plans', kind: 'UPDATE', entityId: previousPlanId },
+      { table: 'training_plans', kind: 'INSERT', entityId: expect.any(String) },
+    ])
+  })
+
   it('käyttää legacy-profiilille Helsinkiä mutta estää virheellisen aikavyöhykkeen', async () => {
     const legacy = rolloverFixture({ includeTimezone: false })
     await expect(

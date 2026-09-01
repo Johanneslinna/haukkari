@@ -22,6 +22,16 @@ export type BrowserSyncHarness = {
   deleteWorkout: (userId: string, id: string) => Promise<void>
   getWorkout: (userId: string, id: string) => Promise<unknown>
   outboxCount: (userId: string) => Promise<number>
+  outboxOperations: (userId: string) => Promise<
+    Array<{
+      table: string
+      kind: string
+      entityId: string
+      state: string
+      attempts: number
+      lastError: string | null
+    }>
+  >
   createWeeklyMaterialization: (
     userId: string,
     input: {
@@ -84,6 +94,26 @@ export function installBrowserSyncHarness() {
     },
     outboxCount(userId) {
       return localDatabase.outbox.where('userId').equals(userId).count()
+    },
+    async outboxOperations(userId) {
+      const operations = await localDatabase.outbox
+        .where('userId')
+        .equals(userId)
+        .toArray()
+      return operations
+        .sort(
+          (left, right) =>
+            left.createdAt.localeCompare(right.createdAt) ||
+            left.operationId.localeCompare(right.operationId),
+        )
+        .map(({ table, kind, entityId, state, attempts, lastError }) => ({
+          table,
+          kind,
+          entityId,
+          state,
+          attempts,
+          lastError,
+        }))
     },
     async createWeeklyMaterialization(userId, input) {
       const { ids, materialization, plan } =

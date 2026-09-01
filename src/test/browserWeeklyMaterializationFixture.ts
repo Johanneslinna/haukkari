@@ -3,10 +3,18 @@ import {
   STRENGTH_WEEK_POLICY_VERSION,
 } from '../domain/coaching'
 import {
+  createLocalCalendarContext,
+  LEGACY_CALENDAR_TIME_ZONE,
+} from '../domain/coaching/LocalCalendarPolicy'
+import {
   deterministicWeeklyPlanIds,
   weeklyMaterializationIdempotencyKey,
 } from '../domain/sync/DeterministicUuid'
 import type { JsonObject } from '../domain/sync/types'
+
+export function browserSyncCalendarFixture(at: Date | string = new Date()) {
+  return createLocalCalendarContext(at, LEGACY_CALENDAR_TIME_ZONE)
+}
 
 export async function buildBrowserWeeklyMaterializationFixture(
   userId: string,

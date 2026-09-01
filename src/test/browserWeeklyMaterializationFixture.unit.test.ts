@@ -7,9 +7,21 @@ import {
   deterministicWeeklyPlanIds,
   weeklyMaterializationIdempotencyKey,
 } from '../domain/sync/DeterministicUuid'
-import { buildBrowserWeeklyMaterializationFixture } from './browserWeeklyMaterializationFixture'
+import {
+  browserSyncCalendarFixture,
+  buildBrowserWeeklyMaterializationFixture,
+} from './browserWeeklyMaterializationFixture'
 
 describe('browserWeeklyMaterializationFixture', () => {
+  it('seuraa E2E-fixturessa Helsingin viikon vaihtumista', () => {
+    expect(browserSyncCalendarFixture('2026-08-30T20:59:59.000Z').weekAnchorDate).toBe(
+      '2026-08-24',
+    )
+    expect(browserSyncCalendarFixture('2026-08-30T21:00:00.000Z').weekAnchorDate).toBe(
+      '2026-08-31',
+    )
+  })
+
   it('käyttää payloadissa, idempotenssiavaimessa ja tunnisteissa samoja politiikkaversioita', async () => {
     const userId = '00000000-0000-4000-8000-000000000001'
     const goalPeriodId = '00000000-0000-4000-8000-000000000002'

@@ -2,12 +2,15 @@ import { randomUUID } from 'node:crypto'
 import process from 'node:process'
 import { createClient } from '@supabase/supabase-js'
 import { expect, test, type Page, type TestInfo } from '@playwright/test'
+import { browserSyncCalendarFixture } from '../../src/test/browserWeeklyMaterializationFixture'
 
 const apiUrl = process.env.LOCAL_SUPABASE_API_URL ?? ''
 const anonKey = process.env.LOCAL_SUPABASE_ANON_KEY ?? ''
 const adminKey = process.env.LOCAL_SUPABASE_ADMIN_KEY ?? ''
 const password = 'Haukkari-e2e-2026!'
 const syncCompletionTimeout = 20_000
+const syncCalendar = browserSyncCalendarFixture()
+const weekAnchorDate = syncCalendar.weekAnchorDate
 const email = `sync-e2e-${Date.now()}-${randomUUID()}@example.invalid`
 const admin = createClient(apiUrl, adminKey, {
   auth: { autoRefreshToken: false, persistSession: false },
@@ -38,9 +41,12 @@ async function signIn(page: Page) {
 }
 
 async function pageSyncDiagnostic(page: Page) {
-  const [outboxCount, heading, conflictAction] = await Promise.all([
+  const [outboxCount, outboxOperations, heading, conflictAction] = await Promise.all([
     page
       .evaluate((id) => window.__treenikompassiSyncTest!.outboxCount(id), userId)
+      .catch((reason: unknown) => `Virhe: ${String(reason)}`),
+    page
+      .evaluate((id) => window.__treenikompassiSyncTest!.outboxOperations(id), userId)
       .catch((reason: unknown) => `Virhe: ${String(reason)}`),
     page
       .locator('#sync-heading')
@@ -51,7 +57,14 @@ async function pageSyncDiagnostic(page: Page) {
       .allTextContents()
       .catch((reason: unknown) => [`Virhe: ${String(reason)}`]),
   ])
-  return { outboxCount, heading, conflictAction }
+  return { outboxCount, outboxOperations, heading, conflictAction }
+}
+
+async function readOutboxOperations(page: Page) {
+  return page.evaluate(
+    (id) => window.__treenikompassiSyncTest!.outboxOperations(id),
+    userId,
+  )
 }
 
 async function attachConcurrentSyncDiagnostic(
@@ -120,7 +133,7 @@ test.beforeAll(async () => {
     id: goalPeriodId,
     user_id: userId,
     goal_profile_id: goalProfileId,
-    starts_on: '2026-08-24',
+    starts_on: weekAnchorDate,
     status: 'ACTIVE',
   })
   if (goalPeriod.error) throw new Error(goalPeriod.error.message)
@@ -137,6 +150,7 @@ test('offline-uudelleenkäynnistys, kaksi selainkontekstia, konflikti ja tombsto
   const contextB = await browser.newContext()
   const pageA = await contextA.newPage()
   const pageB = await contextB.newPage()
+  const outboxCheckpoints: Record<string, unknown> = {}
 
   try {
     await signIn(pageA)
@@ -145,7 +159,7 @@ test('offline-uudelleenkäynnistys, kaksi selainkontekstia, konflikti ja tombsto
     await contextB.setOffline(true)
     const weeklyInput = {
       goalPeriodId,
-      weekAnchorDate: '2026-08-24',
+      weekAnchorDate,
     }
     const deviceAIds = await pageA.evaluate(
       ({ id, input }) =>
@@ -190,6 +204,14 @@ test('offline-uudelleenkäynnistys, kaksi selainkontekstia, konflikti ja tombsto
           }),
         ),
       )
+      const materializationOutboxes = await Promise.all(
+        [pageA, pageB].map((page) => readOutboxOperations(page)),
+      )
+      outboxCheckpoints.afterWeeklyMaterialization = {
+        deviceA: materializationOutboxes[0],
+        deviceB: materializationOutboxes[1],
+      }
+      expect(materializationOutboxes).toEqual([[], []])
     } catch (reason) {
       try {
         await attachConcurrentSyncDiagnostic(testInfo, pageA, pageB)
@@ -260,6 +282,28 @@ test('offline-uudelleenkäynnistys, kaksi selainkontekstia, konflikti ja tombsto
     await expect(pageA.getByRole('heading', { name: /Synkronointitesti/u })).toBeVisible()
     await pageA.waitForFunction(() => Boolean(window.__treenikompassiSyncTest))
 
+    await expect
+      .poll(
+        async () => {
+          const operations = await readOutboxOperations(pageA)
+          outboxCheckpoints.afterTodayReloadBeforeOffline = operations
+          return operations
+        },
+        {
+          message:
+            'TodayPage- ja service worker -reloadin jälkeen outboxin pitää olla tyhjä ennen offline-vaihetta',
+          timeout: syncCompletionTimeout,
+        },
+      )
+      .toEqual([])
+    const remoteVersionsAfterTodayReload = await userClient
+      .from('plan_versions')
+      .select('id')
+      .eq('goal_period_id', goalPeriodId)
+      .eq('change_reason', 'WEEKLY_MATERIALIZATION')
+    expect(remoteVersionsAfterTodayReload.error).toBeNull()
+    expect(remoteVersionsAfterTodayReload.data).toEqual([{ id: weeklyPlanVersionId }])
+
     await contextA.setOffline(true)
     const workoutId = await pageA.evaluate(
       ({ id, notes, decisionTrace }) =>
@@ -287,12 +331,17 @@ test('offline-uudelleenkäynnistys, kaksi selainkontekstia, konflikti ja tombsto
         },
       },
     )
-    expect(
-      await pageA.evaluate(
-        (id) => window.__treenikompassiSyncTest!.outboxCount(id),
-        userId,
-      ),
-    ).toBe(1)
+    const offlineWorkoutOutbox = await readOutboxOperations(pageA)
+    outboxCheckpoints.afterOfflineWorkout = offlineWorkoutOutbox
+    expect(offlineWorkoutOutbox).toHaveLength(1)
+    expect(offlineWorkoutOutbox[0]).toMatchObject({
+      table: 'workout_logs',
+      kind: 'INSERT',
+      entityId: workoutId,
+      state: 'PENDING',
+      attempts: 0,
+      lastError: null,
+    })
 
     await pageA.reload()
     await expect(pageA.getByRole('heading', { name: /Synkronointitesti/u })).toBeVisible()
@@ -431,6 +480,10 @@ test('offline-uudelleenkäynnistys, kaksi selainkontekstia, konflikti ja tombsto
       )
       .toMatchObject({ deletedAt: expect.any(String) })
   } finally {
+    await testInfo.attach('outbox-checkpoints', {
+      body: JSON.stringify(outboxCheckpoints, null, 2),
+      contentType: 'application/json',
+    })
     await contextA.close()
     await contextB.close()
   }
