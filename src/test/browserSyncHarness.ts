@@ -2,14 +2,7 @@ import { recordKey } from '../domain/sync/types'
 import type { JsonObject } from '../domain/sync/types'
 import { localDatabase } from '../infrastructure/storage/localDatabase'
 import { LocalWriteService } from '../infrastructure/storage/localWriteService'
-import {
-  deterministicWeeklyPlanIds,
-  weeklyMaterializationIdempotencyKey,
-} from '../domain/sync/DeterministicUuid'
-import {
-  LOCAL_CALENDAR_POLICY_VERSION,
-  STRENGTH_WEEK_POLICY_VERSION,
-} from '../domain/coaching'
+import { buildBrowserWeeklyMaterializationFixture } from './browserWeeklyMaterializationFixture'
 
 const writes = new LocalWriteService(localDatabase)
 
@@ -93,39 +86,8 @@ export function installBrowserSyncHarness() {
       return localDatabase.outbox.where('userId').equals(userId).count()
     },
     async createWeeklyMaterialization(userId, input) {
-      const ids = await deterministicWeeklyPlanIds({
-        userId,
-        goalPeriodId: input.goalPeriodId,
-        weekAnchorDate: input.weekAnchorDate,
-        calendarPolicyVersion: LOCAL_CALENDAR_POLICY_VERSION,
-        strengthWeekPolicyVersion: STRENGTH_WEEK_POLICY_VERSION,
-      })
-      const materialization = {
-        idempotencyKey: weeklyMaterializationIdempotencyKey({
-          goalPeriodId: input.goalPeriodId,
-          weekAnchorDate: input.weekAnchorDate,
-          calendarPolicyVersion: LOCAL_CALENDAR_POLICY_VERSION,
-          strengthWeekPolicyVersion: STRENGTH_WEEK_POLICY_VERSION,
-        }),
-        trainingPlanId: ids.trainingPlanId,
-        generatedAt: `${input.weekAnchorDate}T09:00:00.000Z`,
-        localDate: input.weekAnchorDate,
-        weekAnchorDate: input.weekAnchorDate,
-        calendarTimeZone: 'Europe/Helsinki',
-        calendarPolicyVersion: 'local-calendar-1.0.0',
-        strengthWeekPolicyVersion: 'adult-strength-week-1.0.0',
-        changeReason: 'WEEKLY_MATERIALIZATION',
-      }
-      const plan = {
-        writer: input.writer ?? 'default-device',
-        sessions: [],
-        strengthWeek: {
-          policyVersion: 'adult-strength-week-1.0.0',
-          weekAnchorDate: input.weekAnchorDate,
-          status: 'SUPPORTED',
-          reasonCodes: ['STRENGTH_WEEK_FULLY_SUPPORTED'],
-        },
-      } satisfies JsonObject
+      const { ids, materialization, plan } =
+        await buildBrowserWeeklyMaterializationFixture(userId, input)
       await writes.create({
         userId,
         deviceId: await deviceId(userId),
