@@ -116,6 +116,17 @@ jobs:
       - name: Run two-browser sync E2E tests
         run: npm run db:test-sync-e2e
 
+      - name: Upload sync Playwright diagnostics on failure
+        if: failure()
+        uses: actions/upload-artifact@v6
+        with:
+          name: sync-playwright-diagnostics-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            playwright-report-sync/
+            test-results/
+          if-no-files-found: ignore
+          retention-days: 7
+
       - name: Prepare ephemeral Edge Function test configuration
         shell: bash
         run: |

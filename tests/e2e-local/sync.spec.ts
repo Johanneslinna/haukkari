@@ -1,12 +1,13 @@
 import { randomUUID } from 'node:crypto'
 import process from 'node:process'
 import { createClient } from '@supabase/supabase-js'
-import { expect, test, type Page } from '@playwright/test'
+import { expect, test, type Page, type TestInfo } from '@playwright/test'
 
 const apiUrl = process.env.LOCAL_SUPABASE_API_URL ?? ''
 const anonKey = process.env.LOCAL_SUPABASE_ANON_KEY ?? ''
 const adminKey = process.env.LOCAL_SUPABASE_ADMIN_KEY ?? ''
 const password = 'Haukkari-e2e-2026!'
+const syncCompletionTimeout = 20_000
 const email = `sync-e2e-${Date.now()}-${randomUUID()}@example.invalid`
 const admin = createClient(apiUrl, adminKey, {
   auth: { autoRefreshToken: false, persistSession: false },
@@ -34,6 +35,62 @@ async function signIn(page: Page) {
     timeout: 20_000,
   })
   await page.waitForFunction(() => Boolean(window.__treenikompassiSyncTest))
+}
+
+async function pageSyncDiagnostic(page: Page) {
+  const [outboxCount, heading, conflictAction] = await Promise.all([
+    page
+      .evaluate((id) => window.__treenikompassiSyncTest!.outboxCount(id), userId)
+      .catch((reason: unknown) => `Virhe: ${String(reason)}`),
+    page
+      .locator('#sync-heading')
+      .textContent()
+      .catch((reason: unknown) => `Virhe: ${String(reason)}`),
+    page
+      .getByRole('link', { name: /Ratkaise ristiriidat/u })
+      .allTextContents()
+      .catch((reason: unknown) => [`Virhe: ${String(reason)}`]),
+  ])
+  return { outboxCount, heading, conflictAction }
+}
+
+async function attachConcurrentSyncDiagnostic(
+  testInfo: TestInfo,
+  pageA: Page,
+  pageB: Page,
+) {
+  const [deviceA, deviceB, remoteVersions, remotePlans] = await Promise.all([
+    pageSyncDiagnostic(pageA),
+    pageSyncDiagnostic(pageB),
+    userClient
+      .from('plan_versions')
+      .select('id,version')
+      .eq('goal_period_id', goalPeriodId)
+      .eq('change_reason', 'WEEKLY_MATERIALIZATION'),
+    userClient
+      .from('training_plans')
+      .select('id,plan_version_id,status,version,plan')
+      .eq('plan_version_id', weeklyPlanVersionId),
+  ])
+  await testInfo.attach('concurrent-sync-diagnostic', {
+    body: JSON.stringify(
+      {
+        deviceA,
+        deviceB,
+        remoteVersions: {
+          data: remoteVersions.data,
+          error: remoteVersions.error?.message ?? null,
+        },
+        remotePlans: {
+          data: remotePlans.data,
+          error: remotePlans.error?.message ?? null,
+        },
+      },
+      null,
+      2,
+    ),
+    contentType: 'application/json',
+  })
 }
 
 test.beforeAll(async () => {
@@ -75,7 +132,7 @@ test.afterAll(async () => {
 
 test('offline-uudelleenkäynnistys, kaksi selainkontekstia, konflikti ja tombstone', async ({
   browser,
-}) => {
+}, testInfo) => {
   const contextA = await browser.newContext()
   const contextB = await browser.newContext()
   const pageA = await contextA.newPage()
@@ -108,20 +165,55 @@ test('offline-uudelleenkäynnistys, kaksi selainkontekstia, konflikti ja tombsto
       pageA.getByRole('button', { name: 'Synkronoi nyt' }).click(),
       pageB.getByRole('button', { name: 'Synkronoi nyt' }).click(),
     ])
-    await Promise.all([
-      expect(pageA.getByRole('heading', { name: 'Synkronoitu' })).toBeVisible(),
-      expect(pageB.getByRole('heading', { name: 'Synkronoitu' })).toBeVisible(),
-    ])
-    await expect(pageB.getByRole('link', { name: /Ratkaise ristiriidat/u })).toHaveCount(
-      0,
-    )
+    try {
+      await expect
+        .poll(
+          () =>
+            Promise.all(
+              [pageA, pageB].map((page) =>
+                page.evaluate(
+                  (id) => window.__treenikompassiSyncTest!.outboxCount(id),
+                  userId,
+                ),
+              ),
+            ),
+          {
+            message: 'Molempien selainkontekstien outboxien pitää tyhjentyä',
+            timeout: syncCompletionTimeout,
+          },
+        )
+        .toEqual([0, 0])
+      await Promise.all(
+        [pageA, pageB].map((page) =>
+          expect(page.getByRole('heading', { name: 'Synkronoitu' })).toBeVisible({
+            timeout: syncCompletionTimeout,
+          }),
+        ),
+      )
+    } catch (reason) {
+      try {
+        await attachConcurrentSyncDiagnostic(testInfo, pageA, pageB)
+      } catch (diagnosticReason) {
+        console.error(
+          'Synkronoinnin diagnostiikan tallennus epäonnistui.',
+          diagnosticReason,
+        )
+      }
+      throw reason
+    }
+    for (const page of [pageA, pageB]) {
+      await expect(page.getByRole('link', { name: /Ratkaise ristiriidat/u })).toHaveCount(
+        0,
+      )
+    }
     const remoteVersions = await userClient
       .from('plan_versions')
-      .select('id')
+      .select('id,snapshot')
       .eq('goal_period_id', goalPeriodId)
       .eq('change_reason', 'WEEKLY_MATERIALIZATION')
     expect(remoteVersions.error).toBeNull()
-    expect(remoteVersions.data).toEqual([{ id: weeklyPlanVersionId }])
+    expect(remoteVersions.data).toHaveLength(1)
+    expect(remoteVersions.data?.[0]?.id).toBe(weeklyPlanVersionId)
     const remotePlans = await userClient
       .from('training_plans')
       .select('id,status,plan')
@@ -134,6 +226,9 @@ test('offline-uudelleenkäynnistys, kaksi selainkontekstia, konflikti ja tombsto
     })
     const canonicalWriter = remotePlans.data?.[0]?.plan.writer
     expect(['device-a', 'device-b']).toContain(canonicalWriter)
+    expect(remoteVersions.data?.[0]?.snapshot).toMatchObject({
+      plan: { writer: canonicalWriter },
+    })
     for (const page of [pageA, pageB]) {
       await expect
         .poll(() =>
@@ -148,7 +243,10 @@ test('offline-uudelleenkäynnistys, kaksi selainkontekstia, konflikti ja tombsto
           ),
         )
         .toMatchObject({
-          version: { id: weeklyPlanVersionId },
+          version: {
+            id: weeklyPlanVersionId,
+            data: { snapshot: { plan: { writer: canonicalWriter } } },
+          },
           plan: {
             id: weeklyTrainingPlanId,
             data: { status: 'ACTIVE', plan: { writer: canonicalWriter } },
