@@ -1,0 +1,168 @@
+[
+  {
+    "id": "CLAIM-ADULT-RT-BASE-001",
+    "population": {
+      "minimumAge": 18,
+      "trainingStatus": ["BEGINNER", "INTERMEDIATE", "ADVANCED"],
+      "healthStatus": ["HEALTHY"]
+    },
+    "intervention": "Progressive resistance training using major movement patterns",
+    "outcomes": ["muscle strength", "muscle hypertrophy", "physical function"],
+    "context": ["healthy adults", "supervised or self-directed resistance training"],
+    "doseEnvelope": {
+      "sessionsPerWeek": [1, 4],
+      "setsPerExercise": [1, 5],
+      "repetitions": [3, 15],
+      "targetRir": [1, 5],
+      "durationMinutes": [20, 90]
+    },
+    "certainty": "HIGH",
+    "directness": "DIRECT",
+    "recommendationStrength": "STRONG",
+    "sourceIds": ["ACSM-RT-2026", "CURRIER-RT-NMA-2023", "PELLAND-DOSE-2026"],
+    "technicalValidation": "PASSED",
+    "scientificReview": "PENDING_HUMAN_REVIEW",
+    "reviewedBy": [],
+    "status": "PUBLISHED_INTERNAL",
+    "version": "1.0.0"
+  },
+  {
+    "id": "CLAIM-ADULT-RT-EFFORT-001",
+    "population": {
+      "minimumAge": 18,
+      "trainingStatus": ["BEGINNER", "INTERMEDIATE", "ADVANCED"],
+      "healthStatus": ["HEALTHY"]
+    },
+    "intervention": "Resistance training with repetitions in reserve and without routine momentary failure",
+    "comparator": "Routine training to momentary muscular failure",
+    "outcomes": ["strength", "hypertrophy", "fatigue management"],
+    "context": ["healthy adults"],
+    "doseEnvelope": { "targetRir": [1, 5] },
+    "certainty": "MODERATE",
+    "directness": "DIRECT",
+    "recommendationStrength": "CONDITIONAL",
+    "sourceIds": ["GRGIC-FAILURE-2021", "BASTOS-RIR-2024", "ACSM-RT-2026"],
+    "technicalValidation": "PASSED",
+    "scientificReview": "PENDING_HUMAN_REVIEW",
+    "reviewedBy": [],
+    "status": "PUBLISHED_INTERNAL",
+    "version": "1.0.0"
+  },
+  {
+    "id": "CLAIM-ADULT-RT-LOAD-001",
+    "population": {
+      "minimumAge": 18,
+      "trainingStatus": ["BEGINNER", "INTERMEDIATE", "ADVANCED"],
+      "healthStatus": ["HEALTHY"]
+    },
+    "intervention": "Resistance training across low, moderate, and high load ranges",
+    "outcomes": ["muscle strength", "muscle hypertrophy"],
+    "context": ["healthy adults"],
+    "doseEnvelope": { "repetitions": [3, 15], "percent1Rm": [40, 90] },
+    "certainty": "MODERATE",
+    "directness": "DIRECT",
+    "recommendationStrength": "CONDITIONAL",
+    "sourceIds": ["LOPEZ-LOAD-2021", "CURRIER-RT-NMA-2023"],
+    "technicalValidation": "PASSED",
+    "scientificReview": "PENDING_HUMAN_REVIEW",
+    "reviewedBy": [],
+    "status": "PUBLISHED_INTERNAL",
+    "version": "1.0.0"
+  },
+  {
+    "id": "CLAIM-ADULT-RT-ROM-001",
+    "population": { "minimumAge": 18, "healthStatus": ["HEALTHY"] },
+    "intervention": "Resistance training through a controlled available range of motion",
+    "outcomes": ["range of motion", "strength"],
+    "context": ["healthy adults"],
+    "certainty": "MODERATE",
+    "directness": "DIRECT",
+    "recommendationStrength": "CONDITIONAL",
+    "sourceIds": ["ALIZADEH-ROM-2023"],
+    "technicalValidation": "PASSED",
+    "scientificReview": "PENDING_HUMAN_REVIEW",
+    "reviewedBy": [],
+    "status": "PUBLISHED_INTERNAL",
+    "version": "1.0.0"
+  },
+  {
+    "id": "CLAIM-ADULT-PA-BASE-001",
+    "population": { "minimumAge": 18, "healthStatus": ["HEALTHY"] },
+    "intervention": "Regular aerobic and muscle-strengthening physical activity",
+    "outcomes": ["health", "physical function"],
+    "context": ["population-level guidance"],
+    "certainty": "HIGH",
+    "directness": "ADJACENT",
+    "recommendationStrength": "STRONG",
+    "sourceIds": ["WHO-PA-2020"],
+    "technicalValidation": "PASSED",
+    "scientificReview": "PENDING_HUMAN_REVIEW",
+    "reviewedBy": [],
+    "status": "PUBLISHED_INTERNAL",
+    "version": "1.0.0"
+  },
+  {
+    "id": "CLAIM-ADULT-CONCURRENT-001",
+    "population": { "minimumAge": 18, "healthStatus": ["HEALTHY"] },
+    "intervention": "Concurrent aerobic and resistance training",
+    "outcomes": ["strength", "hypertrophy", "explosive strength"],
+    "context": ["weekly schedule design"],
+    "certainty": "MODERATE",
+    "directness": "ADJACENT",
+    "recommendationStrength": "CONDITIONAL",
+    "sourceIds": ["SCHUMANN-CONCURRENT-2022"],
+    "technicalValidation": "PASSED",
+    "scientificReview": "PENDING_HUMAN_REVIEW",
+    "reviewedBy": [],
+    "status": "PUBLISHED_INTERNAL",
+    "version": "1.0.0"
+  },
+  {
+    "id": "CLAIM-YOUTH-TEAM-SPORT-DRAFT-001",
+    "population": {
+      "minimumAge": 12,
+      "maximumAge": 17,
+      "healthStatus": ["HEALTHY"],
+      "sportCodes": ["football", "ice-hockey", "floorball", "volleyball"]
+    },
+    "intervention": "Supervised youth resistance, plyometric, and injury-prevention training",
+    "outcomes": ["strength", "power", "speed", "injury incidence"],
+    "context": ["youth team sports", "future architecture only"],
+    "certainty": "LOW",
+    "directness": "INDIRECT",
+    "recommendationStrength": "CONDITIONAL",
+    "sourceIds": [
+      "NSCA-YOUTH-2009",
+      "OLIVER-YOUTH-TEAM-SPORT-2024",
+      "LUO-FEMALE-YOUTH-2025",
+      "AKERLUND-FLOORBALL-2020",
+      "FIFA11-COLLEGIATE-2015",
+      "NORDIC-HAMSTRING-2017",
+      "STOJANOVIC-PLYOMETRIC-2017"
+    ],
+    "technicalValidation": "PASSED",
+    "scientificReview": "PENDING_HUMAN_REVIEW",
+    "reviewedBy": [],
+    "status": "DRAFT",
+    "version": "0.1.0"
+  },
+  {
+    "id": "CLAIM-ICE-HOCKEY-DRAFT-001",
+    "population": {
+      "minimumAge": 12,
+      "sportCodes": ["ice-hockey"]
+    },
+    "intervention": "Strength, plyometric, and resisted sprint training for ice hockey",
+    "outcomes": ["on-ice sprint", "power"],
+    "context": ["future sport module only"],
+    "certainty": "LOW",
+    "directness": "INDIRECT",
+    "recommendationStrength": "CONDITIONAL",
+    "sourceIds": ["DAEHLIN-HOCKEY-2017", "DIETZE-HERMOSA-HOCKEY-2024"],
+    "technicalValidation": "PASSED",
+    "scientificReview": "PENDING_HUMAN_REVIEW",
+    "reviewedBy": [],
+    "status": "DRAFT",
+    "version": "0.1.0"
+  }
+]

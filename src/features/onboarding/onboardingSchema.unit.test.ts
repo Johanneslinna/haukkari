@@ -73,4 +73,31 @@ describe('aloituskartoituksen validointi', () => {
 
     expect(parsed.success).toBe(false)
   })
+
+  it('vaatii viimeisen voimaharjoituksen päivän vain vahvistetulle 12 viikon taustalle', () => {
+    expect(
+      onboardingSchema.safeParse({
+        ...completeAnswers,
+        previousRegularStrengthTraining: true,
+        lastStrengthWorkoutDate: '',
+      }).success,
+    ).toBe(false)
+    expect(
+      onboardingSchema.safeParse({
+        ...completeAnswers,
+        previousRegularStrengthTraining: true,
+        lastStrengthWorkoutDate: '2026-05-01',
+      }).success,
+    ).toBe(true)
+  })
+
+  it('ei hyväksy tulevaisuuteen sijoittuvaa voimaharjoittelutaustaa', () => {
+    expect(
+      onboardingSchema.safeParse({
+        ...completeAnswers,
+        previousRegularStrengthTraining: true,
+        lastStrengthWorkoutDate: '2099-01-01',
+      }).success,
+    ).toBe(false)
+  })
 })

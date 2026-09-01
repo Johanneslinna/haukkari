@@ -1,4 +1,67 @@
 export { evaluateGoalConflicts } from './ConflictEngine'
+export { CapabilityEstimator, estimateExerciseCapability } from './CapabilityEstimator'
+export type { ExerciseCapabilityEstimate } from './CapabilityEstimator'
+export {
+  AdultResistanceEngine,
+  ADULT_RESISTANCE_ENGINE_VERSION,
+  ADULT_RESISTANCE_LOAD_CONTEXT_VERSION,
+  ADULT_RESISTANCE_RULE_VERSION,
+  adaptNextSet,
+  createResistanceSessionObjective,
+  decideInterSessionProgression,
+  defaultResistanceLoadContextId,
+  estimateAdultResistanceCapability,
+  filterEligibleExercises,
+  nextAutomaticLoadKg,
+  prescribeAdultResistanceSession,
+  prescribeResistanceDose,
+  refreshAdultResistanceProgression,
+  scoreExerciseCandidates,
+  freezeSevereDomsProgression,
+} from './AdultResistanceEngine'
+export type {
+  AdultResistanceAthleteContext,
+  AdultResistanceSetHistory,
+  EligibilityDecision,
+  ExerciseCandidateScore,
+  InterSessionProgressionDecision,
+  ResistanceDoseDecision,
+  SetAdaptationAction,
+  SetAdaptationDecision,
+} from './AdultResistanceEngine'
+export {
+  InMemoryExerciseCatalog,
+  TRAINING_CONTENT_RELEASE,
+  publishedExerciseCatalog,
+} from './content/TrainingContent'
+export type {
+  EvidenceClaim,
+  EvidenceSource,
+  ExerciseCatalog,
+  ExerciseDefinition,
+  PrescriptionRule,
+} from './content/TrainingContent'
+export {
+  exerciseAllowedForExperience,
+  exerciseConflictsWithLimitations,
+  exerciseLibrary,
+  verifiedTechniqueUrl,
+} from './ExerciseLibrary'
+export type {
+  ExerciseDifficulty,
+  ExerciseFatigueCost,
+  ExerciseTemplate,
+  TechniqueReviewStatus,
+} from './ExerciseLibrary'
+export {
+  PlannerEventModel,
+  plannerEventToSession,
+  plannerEventWeekday,
+} from './PlannerEvent'
+export type { PlannerEvent, PlannerEventKind } from './PlannerEvent'
+export { applyHockeyMicrocycle, iceHockeyAdapter } from './sports/iceHockeyAdapter'
+export type { HockeySeasonPhase } from './sports/iceHockeyAdapter'
+export * from './engine'
 export {
   GoalEngine,
   confirmGoalChange,
@@ -13,8 +76,125 @@ export {
 export { PlanGenerator, generatePlan } from './PlanGenerator'
 export { ProgressEvaluator, evaluateProgress } from './ProgressEvaluator'
 export { ProgressionEngine, evaluateProgression } from './ProgressionEngine'
-export { ReadinessEngine, evaluateReadiness } from './ReadinessEngine'
+export {
+  PRESCRIPTION_ENGINE_VERSION,
+  PRESCRIPTION_SCHEMA_VERSION,
+  doseDurationSeconds,
+  doseLabelFi,
+  doseUnitCount,
+  legacyDose,
+  normalizePrescriptionV2,
+  prescriptionBlocks,
+  prescriptionDurationSeconds,
+  withV2Blocks,
+  withExerciseDose,
+} from './PrescriptionContract'
+export {
+  ReadinessEngine,
+  SEVERE_DOMS_STRENGTH_POLICY_VERSION,
+  SEVERE_DOMS_STRENGTH_PROGRESSION_REASON_CODE,
+  SEVERE_DOMS_STRENGTH_REASON_CODE,
+  SEVERE_DOMS_STRENGTH_MAXIMUM_RPE,
+  SEVERE_DOMS_STRENGTH_ROUNDING_RULE,
+  SEVERE_DOMS_STRENGTH_VOLUME_MULTIPLIER,
+  evaluateReadiness,
+} from './ReadinessEngine'
+export {
+  evaluateStrengthSafetyGate,
+  strengthSafetyGateMessage,
+} from './StrengthSafetyGate'
+export type {
+  StrengthSafetyGateDecision,
+  StrengthSafetyGateInput,
+  StrengthSafetyGateReasonCode,
+} from './StrengthSafetyGate'
 export { ScheduleOptimizer, optimizeSchedule } from './ScheduleOptimizer'
+export {
+  MAX_ROLLING_MUSCLE_SETS,
+  MAX_SESSION_PRIMARY_MUSCLE_SETS,
+  PRIMARY_MUSCLE_SET_WEIGHT,
+  SECONDARY_MUSCLE_SET_WEIGHT,
+  STRENGTH_VOLUME_POLICY_VERSION,
+  addPlannedSets,
+  calculatePlannedMuscleVolume,
+  calculateSessionPrimaryMuscleVolume,
+  calculateRollingMuscleVolume,
+  mergeMuscleVolume,
+  maximumAdditionalSets,
+} from './StrengthVolumePolicy'
+export type { MuscleVolume, VersionedStrengthSet } from './StrengthVolumePolicy'
+export {
+  LEGACY_CALENDAR_TIME_ZONE,
+  LOCAL_CALENDAR_POLICY_VERSION,
+  createLocalCalendarContext,
+  instantForLocalDateTime,
+  localCalendarDate,
+  mondayWeekAnchor,
+  validateCalendarTimeZone,
+  weekdayForLocalDate,
+  weekdayInTimeZone,
+} from './LocalCalendarPolicy'
+export type { LocalCalendarContext } from './LocalCalendarPolicy'
+export {
+  STRENGTH_WEEK_POLICY_VERSION,
+  STRENGTH_WEEK_REASON_CODES,
+  createStrengthWeekBlueprint,
+  evaluateStrengthRoleStructure,
+  finalizeStrengthWeekPlan,
+  initialStrengthWeekMaterializationState,
+  maximumWeeklySetProgression,
+  materializeStrengthWeekSession,
+  movementPatternsForRole,
+  refreshStrengthRoleStructureDecision,
+  strengthWeekRoleStructure,
+  strengthWeekRoleLabelFi,
+  strengthGoalRange,
+} from './StrengthWeekPolicy'
+export type {
+  StrengthWeekBlueprint,
+  StrengthWeekGoalRange,
+  StrengthWeekMaterializationState,
+  StrengthWeekRoleSlot,
+  StrengthWeekRoleStructure,
+} from './StrengthWeekPolicy'
+export {
+  ADULT_STRENGTH_TIME_POLICY,
+  ADULT_STRENGTH_TIME_POLICY_VERSION,
+  STRENGTH_TIME_REASON_CODES,
+  STRENGTH_TIME_INVARIANT_CODES,
+  auditStrengthPrescriptionTime,
+  estimatePrescriptionTime,
+  fitStrengthPrescriptionToTimeBudget,
+  refreshStrengthPrescriptionTimeEstimate,
+} from './TimeBudgetPolicy'
+export type { StrengthTimeBudgetPolicy, StrengthTimeFitResult } from './TimeBudgetPolicy'
+export {
+  ReturnToStrengthPolicy,
+  STRENGTH_RETURN_POLICY_VERSION,
+  evaluateStrengthReturn,
+  reduceReturnWorkingSets,
+  strengthTrainingBackgroundFrom,
+} from './ReturnToStrengthPolicy'
+export type {
+  StrengthReturnDecision,
+  StrengthTrainingBackground,
+} from './ReturnToStrengthPolicy'
+export {
+  VERIFIED_NEXT_LOAD_POLICY_VERSION,
+  automaticLoadIncreaseRatio,
+  findVerifiedNextLoad,
+  isAutomaticLoadIncreaseAllowed,
+  isKilogramLoadType,
+  isVerifiedNextLoadContext,
+  upsertVerifiedNextLoad,
+  verifiedNextLoadsFrom,
+  verifyNextLoad,
+} from './VerifiedNextLoad'
+export type {
+  VerifiedNextLoadAuthorizationContext,
+  VerifiedNextLoadIdentity,
+  VerifyNextLoadResult,
+} from './VerifiedNextLoad'
 export {
   SportAdapterRegistry,
   getSportAdapter,
@@ -24,9 +204,16 @@ export { getGoalStrategy, goalStrategies } from './strategies'
 export {
   TrainingPrescriptionEngine,
   adaptPrescription,
+  evaluatePrescriptionAdaptationSafety,
   exerciseSubstitutions,
   prescribeSession,
+  resolvePrescription,
   TRAINING_RULE_VERSION,
+} from './TrainingPrescriptionEngine'
+export type {
+  PrescriptionAdaptationProgressContext,
+  PrescriptionAdaptationSafetyContext,
+  PrescriptionProfile,
 } from './TrainingPrescriptionEngine'
 export {
   WorkoutFeedbackEngine,

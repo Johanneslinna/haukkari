@@ -49,7 +49,7 @@ export function RemindersPage() {
 
   const submit = async (event: FormEvent) => {
     event.preventDefault()
-    if (!selectedDays.length) {
+    if (intervalWeeks !== 0 && !selectedDays.length) {
       setMessage('Valitse vähintään yksi viikonpäivä.')
       return
     }
@@ -64,9 +64,9 @@ export function RemindersPage() {
           local_time: time,
           timezone,
           weekdays: selectedDays,
-          interval_weeks: intervalWeeks,
+          interval_weeks: intervalWeeks === 0 ? 4 : intervalWeeks,
           anchor_date: new Date().toISOString().slice(0, 10),
-          enabled: true,
+          enabled: intervalWeeks !== 0,
         }),
       )
       setMessage('Muistutus tallennettiin.')
@@ -195,10 +195,10 @@ export function RemindersPage() {
               value={intervalWeeks}
               onChange={(event) => setIntervalWeeks(Number(event.target.value))}
             >
+              <option value={0}>Pois käytöstä</option>
               <option value={1}>Joka viikko</option>
               <option value={2}>Joka toinen viikko</option>
-              <option value={4}>Neljän viikon välein</option>
-              <option value={8}>Kahdeksan viikon välein</option>
+              <option value={4}>Kuukausittain</option>
             </select>
           </label>
           <p className="muted-copy">Aikavyöhyke: {timezone}</p>
@@ -218,12 +218,17 @@ export function RemindersPage() {
                   <li key={record.id}>
                     <strong>{stringValue(record.data.title)}</strong>
                     <span>
+                      {!enabled && 'Pois käytöstä · '}
                       {stringValue(record.data.local_time).slice(0, 5)} ·{' '}
                       {weekdays
                         .filter((day) => recordDays.includes(day.value))
                         .map((day) => day.label)
                         .join(' ')}
-                      {interval > 1 ? ` · ${interval} viikon välein` : ''}
+                      {interval === 2
+                        ? ' · joka toinen viikko'
+                        : interval === 4
+                          ? ' · kuukausittain'
+                          : ''}
                     </span>
                     <div className="button-row">
                       <button

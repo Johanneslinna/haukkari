@@ -21,6 +21,50 @@ const remoteRecordSchema = z
   })
   .loose()
 
+export const trainingPlanInsertPayloadSchema = z
+  .object({
+    id: z.uuid(),
+    user_id: z.uuid(),
+    plan_version_id: z.uuid(),
+    week_count: z.number().int().min(1).max(104),
+    status: z.enum(['DRAFT', 'ACTIVE', 'ARCHIVED']),
+    plan: z.record(z.string(), z.json()),
+    created_at: z.iso.datetime({ offset: true }),
+    updated_at: z.iso.datetime({ offset: true }),
+    deleted_at: z.iso.datetime({ offset: true }).nullable(),
+    version: z.number().int().positive(),
+  })
+  .strict()
+
+const weeklyMaterializationPayloadSchema = z.object({
+  id: z.uuid(),
+  goal_period_id: z.uuid(),
+  snapshot: z.object({
+    plan: z.record(z.string(), z.json()),
+    materialization: z.object({
+      idempotencyKey: z.string().min(1),
+      trainingPlanId: z.uuid(),
+      weekAnchorDate: z.iso.date(),
+      calendarPolicyVersion: z.string().min(1),
+      strengthWeekPolicyVersion: z.string().min(1),
+    }),
+  }),
+})
+
+const weeklyMaterializationResultSchema = z
+  .array(
+    z.object({
+      reason_code: z.enum([
+        'NEW_CANONICAL_WEEK_CREATED',
+        'EXISTING_CANONICAL_WEEK_RETURNED',
+        'OLDER_WEEK_MATERIALIZED_ARCHIVED',
+      ]),
+      plan_version: remoteRecordSchema,
+      training_plan: remoteRecordSchema,
+    }),
+  )
+  .nonempty()
+
 type GatewayConfiguration = {
   apiUrl: string
   anonKey: string
@@ -38,6 +82,69 @@ function sameIntendedFields(remote: RemoteRecord, operation: OutboxOperation) {
     if (field === 'version' || field === 'updated_at') return true
     return JSON.stringify(remote[field]) === JSON.stringify(value)
   })
+}
+
+function jsonObject(value: unknown): Record<string, unknown> {
+  return value !== null && typeof value === 'object' && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : {}
+}
+
+function isWeeklyMaterializationInsert(operation: OutboxOperation) {
+  return (
+    operation.kind === 'INSERT' &&
+    operation.table === 'plan_versions' &&
+    operation.payload.change_reason === 'WEEKLY_MATERIALIZATION'
+  )
+}
+
+function isWeeklyMaterializationArchive(operation: OutboxOperation) {
+  if (
+    operation.kind !== 'UPDATE' ||
+    operation.table !== 'training_plans' ||
+    operation.payload.status !== 'ARCHIVED'
+  ) {
+    return false
+  }
+  const strengthWeek = jsonObject(jsonObject(operation.payload.plan).strengthWeek)
+  return typeof strengthWeek.weekAnchorDate === 'string'
+}
+
+function sameWeeklyMaterializationIdentity(
+  remote: RemoteRecord,
+  operation: OutboxOperation,
+) {
+  if (operation.kind !== 'INSERT') return false
+  if (operation.table === 'plan_versions') {
+    if (
+      remote.change_reason !== 'WEEKLY_MATERIALIZATION' ||
+      operation.payload.change_reason !== 'WEEKLY_MATERIALIZATION'
+    ) {
+      return false
+    }
+    const remoteMaterialization = jsonObject(jsonObject(remote.snapshot).materialization)
+    const localMaterialization = jsonObject(
+      jsonObject(operation.payload.snapshot).materialization,
+    )
+    return (
+      remote.goal_period_id === operation.payload.goal_period_id &&
+      remoteMaterialization.weekAnchorDate === localMaterialization.weekAnchorDate &&
+      remoteMaterialization.calendarPolicyVersion ===
+        localMaterialization.calendarPolicyVersion &&
+      remoteMaterialization.strengthWeekPolicyVersion ===
+        localMaterialization.strengthWeekPolicyVersion
+    )
+  }
+  if (operation.table === 'training_plans') {
+    const remoteWeek = jsonObject(jsonObject(remote.plan).strengthWeek)
+    const localWeek = jsonObject(jsonObject(operation.payload.plan).strengthWeek)
+    return (
+      remote.plan_version_id === operation.payload.plan_version_id &&
+      remoteWeek.weekAnchorDate === localWeek.weekAnchorDate &&
+      remoteWeek.policyVersion === localWeek.policyVersion
+    )
+  }
+  return false
 }
 
 export class SupabaseSyncGateway implements SyncRemoteGateway {
@@ -183,7 +290,19 @@ export class SupabaseSyncGateway implements SyncRemoteGateway {
   }
 
   private async applyMutation(operation: OutboxOperation): Promise<PushResult> {
+    if (isWeeklyMaterializationInsert(operation)) {
+      return this.materializeWeeklyPlan(operation)
+    }
+    if (isWeeklyMaterializationArchive(operation)) {
+      const remoteRecord = await this.getRecord(operation)
+      return remoteRecord
+        ? { outcome: 'APPLIED', record: remoteRecord }
+        : { outcome: 'RETRY', message: 'Arkistoitavaa suunnitelmaa ei löytynyt.' }
+    }
     if (operation.kind === 'INSERT') {
+      if (operation.table === 'training_plans') {
+        trainingPlanInsertPayloadSchema.parse(operation.payload)
+      }
       const result = await this.request(`/rest/v1/${operation.table}`, {
         method: 'POST',
         headers: { Prefer: 'return=representation' },
@@ -222,9 +341,33 @@ export class SupabaseSyncGateway implements SyncRemoteGateway {
     if (!remoteRecord) {
       return { outcome: 'RETRY', message: 'Palvelimen tietuetta ei löytynyt.' }
     }
-    return sameIntendedFields(remoteRecord, operation)
+    return sameIntendedFields(remoteRecord, operation) ||
+      sameWeeklyMaterializationIdentity(remoteRecord, operation)
       ? { outcome: 'APPLIED', record: remoteRecord }
       : { outcome: 'CONFLICT', remoteRecord }
+  }
+
+  private async materializeWeeklyPlan(operation: OutboxOperation): Promise<PushResult> {
+    const payload = weeklyMaterializationPayloadSchema.parse(operation.payload)
+    const materialization = payload.snapshot.materialization
+    const result = await this.request('/rest/v1/rpc/materialize_weekly_training_plan', {
+      method: 'POST',
+      headers: { Prefer: 'return=representation' },
+      body: JSON.stringify({
+        p_goal_period_id: payload.goal_period_id,
+        p_plan_version_id: payload.id,
+        p_training_plan_id: materialization.trainingPlanId,
+        p_week_anchor_date: materialization.weekAnchorDate,
+        p_calendar_policy_version: materialization.calendarPolicyVersion,
+        p_strength_week_policy_version: materialization.strengthWeekPolicyVersion,
+        p_idempotency_key: materialization.idempotencyKey,
+        p_plan: payload.snapshot.plan,
+        p_snapshot: payload.snapshot,
+      }),
+    })
+    if (!result.response.ok) return this.retryFrom(result)
+    const canonical = weeklyMaterializationResultSchema.parse(result.data)[0]
+    return { outcome: 'APPLIED', record: canonical.plan_version as RemoteRecord }
   }
 
   private async getRecord(operation: OutboxOperation) {

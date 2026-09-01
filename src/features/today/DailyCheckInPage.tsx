@@ -14,6 +14,8 @@ import {
 } from '../coaching/coachingActions'
 import {
   booleanValue,
+  calendarContextForProfile,
+  numberValue,
   objectValue,
   planSessions,
   readinessLabels,
@@ -41,15 +43,23 @@ const symptoms: Array<{ value: SafetySymptom; label: string }> = [
 export function DailyCheckInPage() {
   const data = useAppData()
   const profile = data.latest('profiles')
+  const clock = calendarContextForProfile(profile)
   const goal = stringValue(
     activeGoalRecord(data)?.data.primary_goal,
     'GENERAL_FITNESS',
   ) as GoalType
-  const weekday = new Date().getDay() || 7
+  const weekday = clock.weekday
   const planned = planSessions(activeTrainingPlan(data)).find(
     (session) => session.day === weekday,
   )
   const appSettings = objectValue(profile?.data.app_settings)
+  const minutesByDay = objectValue(appSettings.minutesByDay)
+  const defaultAvailableMinutes = numberValue(
+    minutesByDay[String(weekday)],
+    planned?.timeBudgetMinutes ??
+      planned?.durationMinutes ??
+      numberValue(appSettings.minutesPerSession, 45),
+  )
   const menstrualTrackingEnabled = booleanValue(appSettings.menstrualTrackingOptIn, false)
   const [sleep, setSleep] = useState<'POOR' | 'NORMAL' | 'GOOD'>('NORMAL')
   const [energy, setEnergy] = useState<'LOW' | 'NORMAL' | 'HIGH'>('NORMAL')
@@ -58,10 +68,14 @@ export function DailyCheckInPage() {
   const [soreness, setSoreness] = useState<'LOW' | 'NORMAL' | 'HIGH'>('NORMAL')
   const [safetySymptoms, setSafetySymptoms] = useState<SafetySymptom[]>([])
   const [illnessSymptoms, setIllnessSymptoms] = useState(false)
+  const [unilateralCalfSwelling, setUnilateralCalfSwelling] = useState(false)
+  const [calfPainAtRest, setCalfPainAtRest] = useState(false)
   const [painLocation, setPainLocation] = useState('')
   const [painSeverity, setPainSeverity] = useState<'MILD' | 'MODERATE' | 'SEVERE'>('MILD')
   const [altersGait, setAltersGait] = useState(false)
-  const [availableMinutes, setAvailableMinutes] = useState('45')
+  const [availableMinutes, setAvailableMinutes] = useState(() =>
+    String(defaultAvailableMinutes),
+  )
   const [wantedSession, setWantedSession] = useState<SessionKind>(
     planned?.kind ?? 'EASY_ENDURANCE',
   )
@@ -71,6 +85,7 @@ export function DailyCheckInPage() {
   const [menstrualImpact, setMenstrualImpact] = useState<
     'NONE' | 'MILD' | 'MODERATE' | 'HIGH'
   >('NONE')
+  const [expanded, setExpanded] = useState(false)
   const [decision, setDecision] = useState<ReadinessDecision | null>(null)
   const [reasons, setReasons] = useState<string[]>([])
   const [pending, setPending] = useState(false)
@@ -84,8 +99,7 @@ export function DailyCheckInPage() {
     )
   }
 
-  const submit = async (event: FormEvent) => {
-    event.preventDefault()
+  const evaluate = async (detailed: boolean) => {
     const parsedAvailableMinutes = Number(availableMinutes)
     if (
       availableMinutes.trim() === '' ||
@@ -102,20 +116,28 @@ export function DailyCheckInPage() {
       const result = await saveDailyCheckIn(data, {
         goal,
         plannedSession: wantedSession,
-        safetySymptoms,
-        sleep,
-        energy,
-        stress,
-        motivation,
-        soreness,
-        illnessSymptoms,
-        newPain: painLocation
-          ? { location: painLocation, severity: painSeverity, altersGait }
+        safetySymptoms: detailed ? safetySymptoms : [],
+        sleep: detailed ? sleep : 'NORMAL',
+        energy: detailed ? energy : 'NORMAL',
+        stress: detailed ? stress : 'NORMAL',
+        motivation: detailed ? motivation : 'NORMAL',
+        soreness: detailed ? soreness : 'NORMAL',
+        illnessSymptoms: detailed ? illnessSymptoms : false,
+        vascularSymptoms: detailed
+          ? {
+              rapidlyIncreasingUnilateralCalfSwelling: unilateralCalfSwelling,
+              painAtRest: calfPainAtRest,
+            }
           : undefined,
+        newPain:
+          detailed && painLocation
+            ? { location: painLocation, severity: painSeverity, altersGait }
+            : undefined,
         availableMinutes: parsedAvailableMinutes,
-        menstrualCycle: menstrualTrackingEnabled
-          ? { phase: menstrualPhase, symptomsImpact: menstrualImpact }
-          : undefined,
+        menstrualCycle:
+          detailed && menstrualTrackingEnabled
+            ? { phase: menstrualPhase, symptomsImpact: menstrualImpact }
+            : undefined,
       })
       setDecision(result.decision)
       setReasons(result.reasons.map((reason) => reason.message))
@@ -126,6 +148,11 @@ export function DailyCheckInPage() {
     } finally {
       setPending(false)
     }
+  }
+
+  const submit = (event: FormEvent) => {
+    event.preventDefault()
+    void evaluate(true)
   }
 
   if (decision) {
@@ -173,6 +200,62 @@ export function DailyCheckInPage() {
     )
   }
 
+  if (!expanded) {
+    return (
+      <div className="page-stack narrow-page">
+        <header className="section-heading">
+          <div>
+            <p className="eyebrow">Päivän kuntotarkistus</p>
+            <h1>Onko jokin tänään poikkeavaa?</h1>
+            <p>
+              Kerro tarkemmin vain, jos sinulla on turvallisuusoire, uusi kipu tai vamma,
+              sairausoire tai selvästi tavallisesta poikkeava olo.
+            </p>
+          </div>
+        </header>
+        <section className="surface-card form page-stack compact-stack">
+          <label className="field">
+            <span>Käytettävissä oleva aika tänään (min)</span>
+            <input
+              type="number"
+              min="0"
+              max="240"
+              value={availableMinutes}
+              inputMode="numeric"
+              onChange={(event) => setAvailableMinutes(event.target.value)}
+            />
+          </label>
+          <p className="muted-copy">
+            Jos mikään ei poikkea, käytämme tavallista oloasi vastaavia oletuksia.
+            Ajanpuute lyhentää harjoitusta, mutta ei muuta terveydellistä valmiutta.
+          </p>
+          {error && (
+            <p className="form-error" role="alert">
+              {error}
+            </p>
+          )}
+          <div className="button-row">
+            <button
+              className="button button-primary"
+              type="button"
+              disabled={pending}
+              onClick={() => void evaluate(false)}
+            >
+              {pending ? 'Arvioidaan…' : 'Ei mitään poikkeavaa'}
+            </button>
+            <button
+              className="button button-secondary"
+              type="button"
+              onClick={() => setExpanded(true)}
+            >
+              Haluan kertoa tarkemmin
+            </button>
+          </div>
+        </section>
+      </div>
+    )
+  }
+
   return (
     <form className="page-stack narrow-page" onSubmit={submit}>
       <header className="section-heading">
@@ -184,6 +267,9 @@ export function DailyCheckInPage() {
           </p>
         </div>
       </header>
+      <button className="back-link" type="button" onClick={() => setExpanded(false)}>
+        Takaisin pikakysymykseen
+      </button>
       <fieldset className="surface-card form">
         <legend>Turvallisuusoireet</legend>
         <p className="muted-copy">Valitse kaikki, jotka koskevat tätä hetkeä.</p>
@@ -253,7 +339,7 @@ export function DailyCheckInPage() {
           >
             <option value="LOW">Vähäinen</option>
             <option value="NORMAL">Tavallinen</option>
-            <option value="HIGH">Voimakas</option>
+            <option value="HIGH">Voimakas ja haittaa liikkumista</option>
           </select>
         </label>
         <label className="field">
@@ -320,6 +406,29 @@ export function DailyCheckInPage() {
             onChange={(event) => setAltersGait(event.target.checked)}
           />
           <span>Kipu muuttaa kävelyä tai askelta.</span>
+        </label>
+      </fieldset>
+      <fieldset className="surface-card form">
+        <legend>Pohkeen uusi turvotus</legend>
+        <p className="muted-copy">
+          Vastaa molempiin kohtiin. Yhdistelmä estää harjoittelun ja ohjaa arvioon; ilman
+          rinta- tai hengitysoiretta sovellus ei anna automaattista 112-ohjetta.
+        </p>
+        <label className="checkbox-field">
+          <input
+            type="checkbox"
+            checked={unilateralCalfSwelling}
+            onChange={(event) => setUnilateralCalfSwelling(event.target.checked)}
+          />
+          <span>Toisessa pohkeessa on uusi, nopeasti lisääntyvä turvotus.</span>
+        </label>
+        <label className="checkbox-field">
+          <input
+            type="checkbox"
+            checked={calfPainAtRest}
+            onChange={(event) => setCalfPainAtRest(event.target.checked)}
+          />
+          <span>Samassa pohkeessa tuntuu kipua myös levossa.</span>
         </label>
       </fieldset>
       {menstrualTrackingEnabled && (

@@ -39,14 +39,64 @@ export type RuleDecision = {
   evidenceIds: string[]
 }
 
+export type DecisionTraceValue =
+  | string
+  | number
+  | boolean
+  | null
+  | DecisionTraceValue[]
+  | { [key: string]: DecisionTraceValue }
+
 export type DecisionTrace = {
   ruleVersion: string
+  engineVersion?: string
+  contentReleaseId?: string
   generatedAt: string
   safetyOutcome: SafetyOutcome
   confidence: 'HIGH' | 'MODERATE' | 'LOW'
   inputSummary: string[]
   missingData: string[]
   rules: RuleDecision[]
+  sessionObjective?: SessionObjective
+  evidenceClaimIds?: string[]
+  ruleIds?: string[]
+  selectedExercises?: {
+    code: string
+    version: string
+    scoreComponents: Record<string, number>
+  }[]
+  rejectedExercises?: { code: string; reasonCodes: string[] }[]
+  capabilityEstimates?: CapabilityEstimate[]
+  adaptations?: {
+    original: DecisionTraceValue
+    adjusted: DecisionTraceValue
+    reasonCodes: string[]
+  }[]
+  /** Versionoitu voimaharjoittelun tauolta paluun päätös. */
+  strengthReturn?: StrengthReturnDecisionTrace
+  /** Versionoitu viikkosuunnittelun tila, jolla harjoitusrunko muodostettiin. */
+  strengthWeek?: StrengthWeekContext
+}
+
+export type StrengthReturnState =
+  | 'NOVICE_COLD_START'
+  | 'ACTIVE'
+  | 'BREAK_8_TO_14_DAYS'
+  | 'BREAK_15_TO_27_DAYS'
+  | 'RETURN_BLOCK_28_TO_55_DAYS'
+  | 'RETURNING_56_PLUS_DAYS'
+
+export type StrengthReturnDecisionTrace = {
+  state: StrengthReturnState
+  policyVersion: string
+  source: 'APP_HISTORY' | 'USER_CONFIRMED' | 'NONE'
+  breakDays: number | null
+  episodeStartedAt: string | null
+  approvedReturnWorkoutCount: number
+  requiredApprovedWorkoutCount: number
+  reentryEndsAt: string | null
+  historyAuthorityCutoffAt: string | null
+  reasonCodes: string[]
 }
 
 export type SessionKind =
@@ -63,6 +113,16 @@ export type SessionKind =
 export type LoadRegion = 'LOWER' | 'UPPER' | 'FULL_BODY' | 'CARDIO' | 'NONE'
 export type SessionIntensity = 'EASY' | 'MODERATE' | 'HARD'
 export type ExperienceLevel = 'BEGINNER' | 'INTERMEDIATE' | 'ADVANCED'
+export type ConfirmedLimitationTag =
+  | 'ACUTE_KNEE_PAIN'
+  | 'ACUTE_BACK_PAIN'
+  | 'ACUTE_SHOULDER_PAIN'
+  | 'ACUTE_WRIST_PAIN'
+  | 'GAIT_ALTERING_PAIN'
+  | 'OVERHEAD_RESTRICTION'
+  | 'ACHILLES_PAIN'
+  | 'CALF_INJURY'
+  | 'HAMSTRING_INJURY'
 export type EnergyFocus =
   | 'MAINTENANCE'
   | 'APPROVED_MODERATE_DEFICIT'
@@ -173,6 +233,88 @@ export type GoalChangePreview = {
   }
 }
 
+export type StrengthWeekSessionRole =
+  | 'FULL_BODY'
+  | 'FULL_BODY_A'
+  | 'FULL_BODY_B'
+  | 'FULL_BODY_C'
+  | 'UPPER_A'
+  | 'LOWER_A'
+  | 'UPPER_B'
+  | 'LOWER_B'
+
+export type StrengthMovementPattern =
+  'SQUAT' | 'HINGE' | 'HORIZONTAL_PUSH' | 'HORIZONTAL_PULL' | 'CORE'
+
+export type StrengthExerciseProgrammingRole =
+  'PRIMARY' | 'SECONDARY_COMPOUND' | 'ACCESSORY' | 'CORE_CONTROL'
+
+export type StrengthRoleStructureDecision = {
+  role: StrengthWeekSessionRole
+  status: 'COMPLETE' | 'CONSTRAINED' | 'INVALID'
+  minimumExerciseCount: number
+  targetExerciseCount: number
+  actualExerciseCount: number
+  requiredSlotIds: string[]
+  filledRequiredSlotIds: string[]
+  reasonCodes: string[]
+  messageFi: string
+}
+
+export type StrengthWeekContext = {
+  policyVersion: string
+  weekAnchorDate: string
+  role: StrengthWeekSessionRole
+  sequenceIndex: number
+  plannedExposureCount: number
+  completedVolume: Record<string, number>
+  plannedVolumeBefore: Record<string, number>
+  plannedVolumeAfter: Record<string, number>
+  remainingMinimumVolume?: Record<string, number>
+  remainingTargetVolume: Record<string, number>
+  hardCapRemaining: Record<string, number>
+  movementPatternCoverage: StrengthMovementPattern[]
+  missingMovementPatterns: StrengthMovementPattern[]
+  reasonCodes: string[]
+  /** Uusissa snapshot-versioissa roolikohtaisen rakenteen auditoitava tulos. */
+  roleStructure?: StrengthRoleStructureDecision
+}
+
+export type StrengthWeekPlan = {
+  policyVersion: string
+  weekAnchorDate: string
+  status: 'SUPPORTED' | 'PARTIAL' | 'UNSUPPORTED'
+  supportDecision: {
+    reasonCode: string
+    messageFi: string
+    actionFi: string
+    evidence: {
+      remainingTimeSeconds: number
+      minimumPolicyAdditionSeconds: number
+      unsupportedSessionCount: number
+    }
+  }
+  targetSessions: number
+  appSessionCount: number
+  fixedStrengthExposureCount: number
+  sessionExposureCount: number
+  minimumSetsPerMuscle: number
+  targetSetsPerMuscle: number
+  completedVolume: Record<string, number>
+  plannedVolume: Record<string, number>
+  remainingTargetVolume: Record<string, number>
+  hardCapRemaining: Record<string, number>
+  movementPatternCoverage: StrengthMovementPattern[]
+  missingMovementPatterns: StrengthMovementPattern[]
+  reasonCodes: string[]
+  /** Vanhoista suunnitelmasnapshoteista puuttuva additiivinen rakennetieto. */
+  structureStatus?: 'SUPPORTED' | 'CONSTRAINED' | 'INVALID'
+  roleStructures?: StrengthRoleStructureDecision[]
+  minimumVolumeStatus?: 'MET' | 'BELOW_MINIMUM'
+  targetVolumeStatus?: 'MET' | 'BELOW_TARGET'
+  remainingMinimumVolume?: Record<string, number>
+}
+
 export type PlannedSession = {
   id: string
   day: number
@@ -180,6 +322,8 @@ export type PlannedSession = {
   title?: string
   prescription?: string[]
   durationMinutes: number
+  /** Päiväkohtainen enimmäisaika; durationMinutes voi olla laskettu toteutusaika. */
+  timeBudgetMinutes?: number
   intensity: SessionIntensity
   loadRegion: LoadRegion
   fixed: boolean
@@ -188,10 +332,15 @@ export type PlannedSession = {
   notes?: string[]
   variants?: WorkoutVariant[]
   prescriptionDetail?: PrescribedSession
+  unsupportedPrescription?: UnsupportedPrescription
+  /** Sama viikkokonteksti säilyy esikatselusta harjoituksen suorittamiseen. */
+  strengthWeekContext?: StrengthWeekContext
 }
 
 export type WorkoutVariant = {
   kind: 'FULL' | 'LIGHT' | 'COMPACT_10' | 'COMPACT_20' | 'COMPACT_30'
+  /** Käyttäjän enimmäisaika. durationMinutes on käyttäjälle näytettävä laskettu kesto. */
+  timeBudgetMinutes?: number
   durationMinutes: number
   volumeMultiplier: number
 }
@@ -205,9 +354,165 @@ export type ExerciseLoadType =
   | 'LEVEL'
   | 'NONE'
 
+export type StrengthSetsDose = {
+  kind: 'STRENGTH_SETS'
+  sets: number
+  repetitions: string
+  restSeconds: number
+  targetRpe: number
+  targetRir?: number
+}
+
+export type ContinuousTimeDose = {
+  kind: 'CONTINUOUS_TIME'
+  durationSeconds: number
+  targetRpe: number
+  intensityCue: string
+}
+
+export type IntervalBlocksDose = {
+  kind: 'INTERVAL_BLOCKS'
+  repetitions: number
+  workSeconds: number
+  recoverySeconds: number
+  targetRpe: number
+  intensityCue: string
+}
+
+export type SprintRepsDose = {
+  kind: 'SPRINT_REPS'
+  repetitions: number
+  distanceMeters: number
+  recoverySeconds: number
+  targetRpe: number
+  qualityStopRule: string
+}
+
+export type JumpRepsDose = {
+  kind: 'JUMP_REPS'
+  sets: number
+  repetitions: number
+  recoverySeconds: number
+  targetRpe: number
+  qualityStopRule: string
+}
+
+export type SkillDrillDose = {
+  kind: 'SKILL_DRILL'
+  sets: number
+  repetitions?: string
+  durationSeconds?: number
+  recoverySeconds: number
+  targetRpe: number
+  qualityCue: string
+}
+
+export type PrescriptionDose =
+  | StrengthSetsDose
+  | ContinuousTimeDose
+  | IntervalBlocksDose
+  | SprintRepsDose
+  | JumpRepsDose
+  | SkillDrillDose
+
+export type SessionObjective = {
+  primary: string
+  secondary: string[]
+  fatigueBudget: 'LOW' | 'MODERATE' | 'HIGH'
+  avoid: string[]
+  primaryAdaptation?: string
+  secondaryAdaptations?: string[]
+  sessionKind?: SessionKind
+  durationMinutes?: number
+  intensityIntent?: string
+  fatigueLimits?: {
+    systemic: number
+    lowerBody: number
+    upperBody: number
+    eccentric: number
+  }
+  requiredMovementPatterns?: string[]
+  optionalMovementPatterns?: string[]
+  avoidTags?: string[]
+  evidenceClaimIds?: string[]
+}
+
+export type CapabilityEstimate = {
+  exerciseCode: string
+  estimated1RmKg?: number
+  workingLoadRangeKg?: [number, number]
+  confidence: 'LOW' | 'MODERATE' | 'HIGH'
+  supportingSetCount: number
+  /** Eri tallennettujen harjoituskertojen määrä; sarjojen määrä ei korvaa tätä. */
+  supportingSessionCount?: number
+  /** Päätöksessä käytetyt pseudonyymit WorkoutRecord-tunnisteet. */
+  supportingSessionIds?: string[]
+  latestValidSetAt?: string
+  calibrationRequired: boolean
+  reasons: string[]
+}
+
+export type ExerciseProgressionDecision = {
+  action:
+    | 'RECALIBRATE_LOAD'
+    | 'KEEP_LOAD'
+    | 'INCREASE_REPETITIONS'
+    | 'INCREASE_LOAD'
+    | 'INCREASE_SETS'
+  /** Viimeisimpien vertailukelpoisten harjoitusten toteutunut kuorma. */
+  currentLoadKg?: number
+  nextLoadKg?: number
+  nextRepetitions?: number
+  nextSets?: number
+  changedVariable: 'NONE' | 'LOAD' | 'REPETITIONS' | 'SETS'
+  reasonCodes: string[]
+  /** Eri WorkoutRecord-tunnisteet, joihin progression päätös perustuu. */
+  supportingSessionIds: string[]
+}
+
+/**
+ * Käyttäjän vahvistama todellinen seuraava käytettävissä oleva kuorma.
+ *
+ * Vahvistus koskee aina yhtä liikeversiota, kuormakontekstia ja nykyistä
+ * kuormaa. Näin eri välineiden ja kuorman mukaan muuttuvia portaita ei
+ * typistetä yhdeksi pysyväksi increment-arvoksi.
+ */
+export type VerifiedNextLoad = {
+  exerciseCode: string
+  exerciseVersion: string
+  loadContextId: string
+  currentLoadKg: number
+  nextAvailableLoadKg: number
+  confirmedAt: string
+  policyVersion: string
+}
+
+export type UnsupportedPrescription = {
+  status: 'UNSUPPORTED'
+  sessionKind: SessionKind
+  reasonCode:
+    | 'YOUTH_ENGINE_NOT_AVAILABLE'
+    | 'OLDER_ADULT_ENGINE_NOT_AVAILABLE'
+    | 'SAFETY_INFORMATION_INCOMPLETE'
+    | 'READINESS_RED_STOP'
+    | 'READINESS_RECOVERY_ONLY'
+    | 'NO_SAFE_STRENGTH_DOSE_AVAILABLE'
+    | 'PULL_PATTERN_EQUIPMENT_REQUIRED'
+    | 'HEALTH_ENGINE_NOT_AVAILABLE'
+    | 'SPEED_POWER_ENGINE_NOT_REVIEWED'
+    | 'SPORT_ENGINE_NOT_REVIEWED'
+    | 'MATCH_ENGINE_NOT_REVIEWED'
+  userMessage: string
+}
+
+export type PrescriptionResult =
+  { status: 'SUPPORTED'; prescription: PrescribedSession } | UnsupportedPrescription
+
 export type ExercisePrescription = {
   id: string
   code: string
+  /** Harjoitteen muuttumaton sisältöversio. */
+  contentVersion?: string
   nameFi: string
   category: string
   equipment: string[]
@@ -218,25 +523,85 @@ export type ExercisePrescription = {
   restSeconds: number
   targetRpe: number
   targetRir?: number
+  /** Valinnainen tavoiteväli esimerkiksi tauolta paluun RIR 3–4 -ohjaukseen. */
+  targetRirRange?: [number, number]
+  /** Liikekohtaiset lämmittely-/kalibrointisarjat ennen työsarjoja. */
+  warmupSets?: number
+  /** Versionoidun aikamallin käyttämä arvio yhden työsarjan kestosta. */
+  estimatedWorkSetSeconds?: number
   loadGuidance: string
   stopCondition: string
   substitutions: string[]
   loadType: ExerciseLoadType
   loadLabelFi: string
   loadOptions?: string[]
+  /** @deprecated Legacy-snapshotin lukutuki; uusi tuotantopolku käyttää VerifiedNextLoad-vahvistusta. */
+  loadIncrementKg?: number
+  /** Versionoitu konteksti, jonka sisällä kilogrammat ovat vertailukelpoisia. */
+  loadContextId?: string
+  /** Kanoninen liikekohtainen seuraavan harjoituskerran progressiopäätös. */
+  progressionDecision?: ExerciseProgressionDecision
   techniqueVideoUrl?: string
+  /** Harjoitekirjaston v2-metatiedot; puuttuvat vanhoista snapshot-versioista. */
+  difficulty?: 'BEGINNER' | 'INTERMEDIATE' | 'ADVANCED'
+  trainingEffects?: string[]
+  fatigueCost?: 'LOW' | 'MODERATE' | 'HIGH'
+  contraindications?: string[]
+  /** Lihasmetatiedot snapshotataan, jotta vanhaa historiaa ei tulkita uudelleen. */
+  primaryMuscles?: string[]
+  secondaryMuscles?: string[]
+  techniqueReviewStatus?: 'VERIFIED' | 'PENDING_REVIEW'
+  /** Harjoituksen sisäinen annostelurooli; puuttuu ennen tätä versiota tallennetuista snapshot-versioista. */
+  programmingRole?: StrengthExerciseProgrammingRole
+  /** Viikkorakenteen paikka, jonka tämä liike täyttää. */
+  programmingSlotId?: string
+  /** Roolipaikan annostelukatto; puuttuu legacy-snapshotista. */
+  programmingSetCap?: number
   keyExercise: boolean
+  /** V2:n yksikäsitteinen annos. Puuttuu vain ennen v2:ta tallennetuista snapshoteista. */
+  dose?: PrescriptionDose
+}
+
+export type PrescriptionTimeBreakdown = {
+  warmupSeconds: number
+  exerciseWarmupSeconds: number
+  workSeconds: number
+  restSeconds: number
+  transitionSeconds: number
+  equipmentSetupSeconds: number
+  cooldownSeconds: number
+  bufferSeconds: number
+  totalSeconds: number
+  policyVersion: string
 }
 
 export type PrescribedSession = {
+  /** Puuttuva arvo tarkoittaa ennen v2:ta tallennettua legacy-snapshotia. */
+  schemaVersion?: 1 | 2
+  engineVersion?: string
   id: string
   title: string
   kind: SessionKind
   goal: GoalType
   durationMinutes: number
+  timeBudgetMinutes?: number
+  calculatedTotalSeconds?: number
+  timePolicyVersion?: string
+  timeBreakdown?: PrescriptionTimeBreakdown
+  timeAdjustmentReasonCodes?: string[]
+  /** Paluusovitus voi säilyttää alkuperäisen kanonisen aikapuskurin. */
+  minimumTimeBufferSeconds?: number
+  /** Roolikohtaisen täyden version auditoitava rakennuspäätös. */
+  strengthRoleStructure?: StrengthRoleStructureDecision
+  objective?: SessionObjective
+  confidence?: DecisionTrace['confidence']
   warmup: string[]
+  warmupMinutes?: number
   exercises: ExercisePrescription[]
+  /** V2-nimi suoritusjärjestyksessä oleville harjoitusblokeille. */
+  blocks?: ExercisePrescription[]
   cooldown: string[]
+  cooldownMinutes?: number
   progression: string
   decisionTrace: DecisionTrace
 }
@@ -251,20 +616,39 @@ export type WorkoutFeedback = {
   painLocation: string
   felt: 'WORSE' | 'SAME' | 'BETTER'
   notes: string
-  stopReason?: 'PAIN' | 'DIZZINESS' | 'BREATHING' | 'TECHNIQUE' | 'EQUIPMENT' | 'OTHER'
+  stopReason?:
+    | 'PAIN'
+    | 'DIZZINESS'
+    | 'BREATHING'
+    | 'NEUROLOGICAL'
+    | 'TECHNIQUE'
+    | 'EQUIPMENT'
+    | 'OTHER'
   exerciseResults?: WorkoutExerciseResult[]
 }
 
 export type WorkoutExerciseResult = {
   exerciseCode: string
+  exerciseVersion?: string
   exerciseName: string
   loadType: ExerciseLoadType
+  loadContextId?: string
+  /** @deprecated Vanhan historian lukutuki; ei valtuuta uutta kilogrammaprogressiota. */
+  loadIncrementKg?: number
   completedSets: number
   plannedSets: number
+  completed?: boolean[]
   repetitions: Array<number | null>
   loads: Array<string | null>
+  rirs?: Array<number | null>
+  painResponses?: Array<SetPainResponse | null>
+  techniqueOk?: Array<boolean | null>
   targetRepetitions?: string
   targetRpe: number
+  /** Tallennettu prescription-tavoite paluuharjoituksen hyväksyntää varten. */
+  targetRirRange?: [number, number]
+  primaryMuscles?: string[]
+  secondaryMuscles?: string[]
 }
 
 export type WorkoutProgressionDecision = {
@@ -282,8 +666,15 @@ export type CompletedSet = {
   repetitions: number | null
   loadKg: number | null
   loadText?: string | null
+  rir?: number | null
   completed: boolean
+  painResponse?: SetPainResponse
+  techniqueOk?: boolean
+  adaptationReasonCodes?: string[]
 }
+
+export type SetPainResponse =
+  'NONE' | 'MILD' | 'WORSENING' | 'SHARP' | 'FUNCTION_ALTERING' | 'SEVERE'
 
 export type CompetitionEvent = {
   id: string
@@ -299,6 +690,7 @@ export type TrainingPlan = {
   startingEnduranceMinutes: number
   assessments: string[]
   ruleVersion: string
+  strengthWeek?: StrengthWeekPlan
 }
 
 export type ReadinessState = 'GREEN' | 'YELLOW' | 'ORANGE_RECOVERY' | 'RED_STOP'
@@ -323,6 +715,10 @@ export type ReadinessInput = {
   motivation: RelativeLevel
   soreness: RelativeLevel
   illnessSymptoms: boolean
+  vascularSymptoms?: {
+    rapidlyIncreasingUnilateralCalfSwelling: boolean
+    painAtRest: boolean
+  }
   newPain?: {
     location: string
     severity: 'MILD' | 'MODERATE' | 'SEVERE'

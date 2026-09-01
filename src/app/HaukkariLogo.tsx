@@ -13,7 +13,10 @@ export function HaukkariLogo({ compact = false, inverse = false }: HaukkariLogoP
       className={`haukkari-logo${compact ? ' is-compact' : ''}${inverse ? ' is-inverse' : ''}`}
     >
       <img className="haukkari-logo-mark" src="/favicon.svg" alt="" />
-      <span className="haukkari-wordmark">HAUKKARI</span>
+      <span className="haukkari-logo-copy">
+        <span className="haukkari-wordmark">HAUKKARI</span>
+        <span className="haukkari-beta-label">INTERNAL BETA</span>
+      </span>
     </span>
   )
 }

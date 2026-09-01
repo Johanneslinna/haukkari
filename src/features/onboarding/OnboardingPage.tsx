@@ -1,7 +1,7 @@
 import { useState, type FormEvent, type ReactNode } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { goalStrategies } from '../../domain/coaching'
-import type { GoalType } from '../../domain/coaching/types'
+import type { ConfirmedLimitationTag, GoalType } from '../../domain/coaching/types'
 import { useAppData } from '../app-data/appDataContextValue'
 import {
   completeOnboarding,
@@ -36,15 +36,38 @@ const equipmentOptions = [
   'Polkupyörä, kuntopyörä tai pyörätraineri',
 ]
 
+const equipmentPresets = [
+  { label: 'Ei välineitä', equipment: ['Kehonpaino'] },
+  {
+    label: 'Koti',
+    equipment: ['Kehonpaino', 'Käsipainot', 'Kahvakuula', 'Vastuskuminauhat'],
+  },
+  { label: 'Kuntosali', equipment: equipmentOptions },
+] as const
+
 const metricOptions = [
   'Harjoitusten toteuma',
   'Voimatasot',
   'Kestävyyskunto',
+  'Juoksutulos',
+  'Nopeus ja hyppy',
+  'Liikkuvuus ja toimintakyky',
   'Paino',
   'Vyötärönympärys',
   'Koettu energia ja palautuminen',
-  'Liikkuvuus ja toimintakyky',
-  'Nopeus ja räjähtävä voima',
+  'Kipuvapaat harjoitukset',
+]
+
+const limitationOptions: Array<{ value: ConfirmedLimitationTag; label: string }> = [
+  { value: 'ACUTE_KNEE_PAIN', label: 'Akuutti polvikipu' },
+  { value: 'ACUTE_BACK_PAIN', label: 'Akuutti selkäkipu' },
+  { value: 'ACUTE_SHOULDER_PAIN', label: 'Akuutti olkapääkipu' },
+  { value: 'ACUTE_WRIST_PAIN', label: 'Akuutti rannekipu' },
+  { value: 'GAIT_ALTERING_PAIN', label: 'Kipu muuttaa kävelyä tai askelta' },
+  { value: 'OVERHEAD_RESTRICTION', label: 'Vältä liikettä pään yläpuolelle' },
+  { value: 'ACHILLES_PAIN', label: 'Akillesjänteen kipu' },
+  { value: 'CALF_INJURY', label: 'Pohjevamma' },
+  { value: 'HAMSTRING_INJURY', label: 'Takareisivamma' },
 ]
 
 const dataControllerName =
@@ -62,6 +85,8 @@ const initialForm: OnboardingForm = {
   secondaryGoals: ['BODY_RECOMPOSITION'],
   targetDate: '',
   experience: 'BEGINNER',
+  previousRegularStrengthTraining: false,
+  lastStrengthWorkoutDate: '',
   availableDays: [1, 3, 5],
   minutesPerSession: 45,
   minutesByDay: {
@@ -74,6 +99,7 @@ const initialForm: OnboardingForm = {
     '7': 45,
   },
   currentEnduranceMinutes: 90,
+  weeklyActivities: [],
   currentWeeklyTraining: '',
   enduranceSportBackground: '',
   physicalLoad: 'MODERATE',
@@ -89,6 +115,7 @@ const initialForm: OnboardingForm = {
   pregnancyStatus: 'NOT_APPLICABLE',
   doctorRestrictions: '',
   currentInjuries: '',
+  confirmedLimitationTags: [],
   pelvicFloorSymptoms: '',
   exertionWarningSymptoms: false,
   eatingDisorderHistory: false,
@@ -125,12 +152,50 @@ export function OnboardingPage() {
     }))
   }
 
+  const toggleLimitation = (tag: ConfirmedLimitationTag) => {
+    setForm((current) => ({
+      ...current,
+      confirmedLimitationTags: current.confirmedLimitationTags.includes(tag)
+        ? current.confirmedLimitationTags.filter((item) => item !== tag)
+        : [...current.confirmedLimitationTags, tag],
+    }))
+  }
+
   const toggleString = (field: 'equipment' | 'desiredMetrics', value: string) => {
     setForm((current) => ({
       ...current,
       [field]: current[field].includes(value)
         ? current[field].filter((item) => item !== value)
         : [...current[field], value],
+    }))
+  }
+
+  const addWeeklyActivity = () => {
+    const day = form.availableDays[0] ?? 1
+    setForm((current) => ({
+      ...current,
+      weeklyActivities: [
+        ...current.weeklyActivities,
+        {
+          id: crypto.randomUUID(),
+          kind: 'SPORT',
+          day,
+          durationMinutes: 60,
+          intensity: 'MODERATE',
+        },
+      ],
+    }))
+  }
+
+  const updateWeeklyActivity = (
+    id: string,
+    patch: Partial<OnboardingForm['weeklyActivities'][number]>,
+  ) => {
+    setForm((current) => ({
+      ...current,
+      weeklyActivities: current.weeklyActivities.map((activity) =>
+        activity.id === id ? { ...activity, ...patch } : activity,
+      ),
     }))
   }
 
@@ -197,42 +262,37 @@ export function OnboardingPage() {
               </label>
               <label className="field">
                 <span>Ikä</span>
-                <input
+                <ClearableNumberInput
                   inputMode="numeric"
-                  type="number"
-                  min="16"
+                  min="18"
                   max="100"
                   value={form.age}
-                  onChange={(event) =>
-                    setForm({ ...form, age: Number(event.target.value) })
-                  }
+                  onValueChange={(age) => setForm({ ...form, age })}
                 />
+                <small>
+                  Automaattinen ohjelmointi on tässä versiossa tarkoitettu vähintään
+                  18-vuotiaille. Junioriohjelmointi ei ole vielä käytössä.
+                </small>
               </label>
               <label className="field">
                 <span>Pituus (cm)</span>
-                <input
+                <ClearableNumberInput
                   inputMode="decimal"
-                  type="number"
                   min="80"
                   max="250"
                   value={form.heightCm}
-                  onChange={(event) =>
-                    setForm({ ...form, heightCm: Number(event.target.value) })
-                  }
+                  onValueChange={(heightCm) => setForm({ ...form, heightCm })}
                 />
               </label>
               <label className="field">
                 <span>Paino (kg)</span>
-                <input
+                <ClearableNumberInput
                   inputMode="decimal"
-                  type="number"
                   step="0.1"
                   min="20"
                   max="400"
                   value={form.weightKg}
-                  onChange={(event) =>
-                    setForm({ ...form, weightKg: Number(event.target.value) })
-                  }
+                  onValueChange={(weightKg) => setForm({ ...form, weightKg })}
                 />
               </label>
               <label className="field">
@@ -246,6 +306,103 @@ export function OnboardingPage() {
                 />
               </label>
             </div>
+            <fieldset className="surface-card form">
+              <legend>Nykyiset säännölliset harjoitukset</legend>
+              <p className="muted-copy">
+                Nämä lasketaan viikkokuormaan kiinteinä tapahtumina. Vapaa tekstikenttä
+                jää niiden alle vain lisätietoja varten.
+              </p>
+              {form.weeklyActivities.length === 0 ? (
+                <p className="empty-state">Ei lisättyjä säännöllisiä tapahtumia.</p>
+              ) : (
+                <div className="page-stack compact-stack">
+                  {form.weeklyActivities.map((activity) => (
+                    <div className="surface-card form-grid" key={activity.id}>
+                      <label className="field">
+                        <span>Harjoitustyyppi</span>
+                        <select
+                          value={activity.kind}
+                          onChange={(event) =>
+                            updateWeeklyActivity(activity.id, {
+                              kind: event.target.value as typeof activity.kind,
+                            })
+                          }
+                        >
+                          <option value="RUNNING">Juoksu tai kestävyys</option>
+                          <option value="STRENGTH">Voimaharjoittelu</option>
+                          <option value="SPORT">Lajiharjoitus</option>
+                          <option value="OTHER">Muu liikunta</option>
+                        </select>
+                      </label>
+                      <label className="field">
+                        <span>Viikonpäivä</span>
+                        <select
+                          value={activity.day}
+                          onChange={(event) =>
+                            updateWeeklyActivity(activity.id, {
+                              day: Number(event.target.value),
+                            })
+                          }
+                        >
+                          {weekdays.map((day) => (
+                            <option value={day.value} key={day.value}>
+                              {day.label}
+                            </option>
+                          ))}
+                        </select>
+                      </label>
+                      <label className="field">
+                        <span>Kesto (min)</span>
+                        <ClearableNumberInput
+                          min="10"
+                          max="300"
+                          value={activity.durationMinutes}
+                          onValueChange={(durationMinutes) =>
+                            updateWeeklyActivity(activity.id, { durationMinutes })
+                          }
+                        />
+                      </label>
+                      <label className="field">
+                        <span>Kuormittavuus</span>
+                        <select
+                          value={activity.intensity}
+                          onChange={(event) =>
+                            updateWeeklyActivity(activity.id, {
+                              intensity: event.target.value as typeof activity.intensity,
+                            })
+                          }
+                        >
+                          <option value="EASY">Kevyt</option>
+                          <option value="MODERATE">Kohtalainen</option>
+                          <option value="HARD">Kova</option>
+                        </select>
+                      </label>
+                      <button
+                        className="button button-secondary"
+                        type="button"
+                        onClick={() =>
+                          setForm((current) => ({
+                            ...current,
+                            weeklyActivities: current.weeklyActivities.filter(
+                              (item) => item.id !== activity.id,
+                            ),
+                          }))
+                        }
+                      >
+                        Poista tapahtuma
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
+              <button
+                className="button button-secondary"
+                type="button"
+                onClick={addWeeklyActivity}
+              >
+                Lisää säännöllinen harjoitus
+              </button>
+            </fieldset>
             <fieldset className="surface-card form">
               <legend>Päätavoite</legend>
               <div className="choice-grid">
@@ -322,15 +479,51 @@ export function OnboardingPage() {
                   tavoite-RPE:n ja palautusajat. Aloittelijalle ei määrätä maksimitestejä.
                 </FieldHelp>
               </label>
+              <label className="check-row">
+                <input
+                  type="checkbox"
+                  checked={form.previousRegularStrengthTraining}
+                  onChange={(event) =>
+                    setForm({
+                      ...form,
+                      previousRegularStrengthTraining: event.target.checked,
+                      lastStrengthWorkoutDate: event.target.checked
+                        ? form.lastStrengthWorkoutDate
+                        : '',
+                    })
+                  }
+                />
+                <span>
+                  Olen harjoitellut voimaa aiemmin säännöllisesti vähintään 12 viikkoa.
+                </span>
+              </label>
+              {form.previousRegularStrengthTraining && (
+                <label className="field">
+                  <span>Milloin teit viimeisen voimaharjoituksen?</span>
+                  <input
+                    type="date"
+                    max={new Date().toISOString().slice(0, 10)}
+                    value={form.lastStrengthWorkoutDate}
+                    onChange={(event) =>
+                      setForm({ ...form, lastStrengthWorkoutDate: event.target.value })
+                    }
+                    required
+                  />
+                  <FieldHelp>
+                    Tietoa kysytään vain tauolta paluun turvalliseen annosteluun. Se ei
+                    muuta kokemustasoasi, ja puuttuva tieto johtaa tavalliseen
+                    kalibroivaan aloitukseen.
+                  </FieldHelp>
+                </label>
+              )}
               <label className="field">
                 <span>Oletusaika uusille harjoituspäiville (min)</span>
-                <input
-                  type="number"
+                <ClearableNumberInput
                   min="10"
                   max="240"
                   value={form.minutesPerSession}
-                  onChange={(event) =>
-                    setForm({ ...form, minutesPerSession: Number(event.target.value) })
+                  onValueChange={(minutesPerSession) =>
+                    setForm({ ...form, minutesPerSession })
                   }
                 />
                 <FieldHelp>
@@ -341,16 +534,12 @@ export function OnboardingPage() {
               </label>
               <label className="field">
                 <span>Nykyinen kestävyysmäärä (min/vko)</span>
-                <input
-                  type="number"
+                <ClearableNumberInput
                   min="0"
                   max="2000"
                   value={form.currentEnduranceMinutes}
-                  onChange={(event) =>
-                    setForm({
-                      ...form,
-                      currentEnduranceMinutes: Number(event.target.value),
-                    })
+                  onValueChange={(currentEnduranceMinutes) =>
+                    setForm({ ...form, currentEnduranceMinutes })
                   }
                 />
                 <FieldHelp>
@@ -381,15 +570,13 @@ export function OnboardingPage() {
               </label>
               <label className="field">
                 <span>Tavallinen uni (h/yö)</span>
-                <input
-                  type="number"
+                <ClearableNumberInput
+                  inputMode="decimal"
                   step="0.5"
                   min="0"
                   max="16"
                   value={form.sleepHours}
-                  onChange={(event) =>
-                    setForm({ ...form, sleepHours: Number(event.target.value) })
-                  }
+                  onValueChange={(sleepHours) => setForm({ ...form, sleepHours })}
                 />
                 <FieldHelp>
                   Tämä määrittää oman tavallisen unesi vertailutason. Päivän
@@ -450,19 +637,18 @@ export function OnboardingPage() {
                   .map((day) => (
                     <label className="field" key={`minutes-${day.value}`}>
                       <span>{day.label}: enimmäisaika (min)</span>
-                      <input
-                        type="number"
+                      <ClearableNumberInput
                         min="10"
                         max="240"
                         value={
                           form.minutesByDay[String(day.value)] ?? form.minutesPerSession
                         }
-                        onChange={(event) =>
+                        onValueChange={(minutes) =>
                           setForm({
                             ...form,
                             minutesByDay: {
                               ...form.minutesByDay,
-                              [String(day.value)]: Number(event.target.value),
+                              [String(day.value)]: minutes,
                             },
                           })
                         }
@@ -477,6 +663,19 @@ export function OnboardingPage() {
                 Valitse vain välineet, joita voit käyttää tavallisella treenikerralla.
                 Liikkeet ja niiden korvaavat vaihtoehdot rajataan näiden mukaan.
               </p>
+              <div className="button-row" aria-label="Välineiden esivalinnat">
+                {equipmentPresets.map((preset) => (
+                  <button
+                    className="button button-secondary"
+                    type="button"
+                    key={preset.label}
+                    onClick={() => setForm({ ...form, equipment: [...preset.equipment] })}
+                  >
+                    {preset.label}
+                  </button>
+                ))}
+                <span className="muted-copy">Oma valinta: muokkaa ruutuja alta.</span>
+              </div>
               <div className="choice-grid">
                 {equipmentOptions.map((equipment) => (
                   <label className="choice-card" key={equipment}>
@@ -658,6 +857,26 @@ export function OnboardingPage() {
                   käytännön rajoitus, jos tiedät sen.
                 </FieldHelp>
               </label>
+              <fieldset className="form embedded-fieldset">
+                <legend>Vahvistetut liikerajoitteet</legend>
+                <p className="muted-copy">
+                  Vain tässä vahvistetut tunnisteet vaikuttavat automaattiseen
+                  liikevalintaan. Alla olevia vapaita tekstejä ei tulkita diagnoosiksi tai
+                  automaattiseksi liikerajoitteeksi.
+                </p>
+                <div className="choice-grid">
+                  {limitationOptions.map((option) => (
+                    <label className="choice-card" key={option.value}>
+                      <input
+                        type="checkbox"
+                        checked={form.confirmedLimitationTags.includes(option.value)}
+                        onChange={() => toggleLimitation(option.value)}
+                      />
+                      {option.label}
+                    </label>
+                  ))}
+                </div>
+              </fieldset>
               <label className="field">
                 <span>Kivut, vammat, leikkaukset ja liikerajoitteet</span>
                 <textarea
@@ -668,9 +887,9 @@ export function OnboardingPage() {
                   }
                 />
                 <FieldHelp>
-                  Tieto välitetään liikevalinnan rajoitteeksi ja kovatehoinen aloitus
-                  poistetaan. Päivän kuntotarkistuksessa uusi kipu voi vielä keventää tai
-                  estää harjoituksen.
+                  Teksti tallennetaan lisätiedoksi ja voi johtaa vahvistuspyyntöön, mutta
+                  moottori ei tee siitä automaattista lääketieteellistä päätöstä. Päivän
+                  kuntotarkistuksessa uusi kipu voi keventää tai estää harjoituksen.
                 </FieldHelp>
               </label>
               <label className="field">
@@ -856,5 +1075,44 @@ function FieldHelp({ children }: { children: ReactNode }) {
       <summary>Mitä tämä tarkoittaa?</summary>
       <p>{children}</p>
     </details>
+  )
+}
+
+function ClearableNumberInput({
+  value,
+  onValueChange,
+  inputMode = 'numeric',
+  min,
+  max,
+  step,
+}: {
+  value: number
+  onValueChange: (value: number) => void
+  inputMode?: 'numeric' | 'decimal'
+  min?: string
+  max?: string
+  step?: string
+}) {
+  const [draft, setDraft] = useState(String(value))
+
+  return (
+    <input
+      inputMode={inputMode}
+      type="number"
+      min={min}
+      max={max}
+      step={step}
+      value={draft}
+      onChange={(event) => {
+        const next = event.target.value
+        setDraft(next)
+        if (next.trim() === '') return
+        const parsed = Number(next)
+        if (Number.isFinite(parsed)) onValueChange(parsed)
+      }}
+      onBlur={() => {
+        if (draft.trim() === '') setDraft(String(value))
+      }}
+    />
   )
 }

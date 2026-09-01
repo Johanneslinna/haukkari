@@ -1,4 +1,5 @@
 dist
+/.deploy/
 coverage
 node_modules
 playwright-report
@@ -8,3 +9,5 @@ test-results
 dev-dist
 supabase/.temp
 src/infrastructure/supabase/database.types.ts
+docs/audits/Haukkari_voimaharjoittelu_hyvaksyntaraportti_2026-08-27.md
+scripts/audits/engine-audit.mjs

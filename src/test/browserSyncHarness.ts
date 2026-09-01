@@ -1,6 +1,8 @@
 import { recordKey } from '../domain/sync/types'
+import type { JsonObject } from '../domain/sync/types'
 import { localDatabase } from '../infrastructure/storage/localDatabase'
 import { LocalWriteService } from '../infrastructure/storage/localWriteService'
+import { buildBrowserWeeklyMaterializationFixture } from './browserWeeklyMaterializationFixture'
 
 const writes = new LocalWriteService(localDatabase)
 
@@ -11,21 +13,52 @@ async function deviceId(userId: string) {
 }
 
 export type BrowserSyncHarness = {
-  createWorkout: (userId: string, notes: string) => Promise<string>
+  createWorkout: (
+    userId: string,
+    notes: string,
+    decisionTrace?: JsonObject,
+  ) => Promise<string>
   updateWorkout: (userId: string, id: string, notes: string) => Promise<void>
   deleteWorkout: (userId: string, id: string) => Promise<void>
   getWorkout: (userId: string, id: string) => Promise<unknown>
   outboxCount: (userId: string) => Promise<number>
+  outboxOperations: (userId: string) => Promise<
+    Array<{
+      table: string
+      kind: string
+      entityId: string
+      state: string
+      attempts: number
+      lastError: string | null
+    }>
+  >
+  createWeeklyMaterialization: (
+    userId: string,
+    input: {
+      goalPeriodId: string
+      weekAnchorDate: string
+      writer?: string
+    },
+  ) => Promise<{ planVersionId: string; trainingPlanId: string }>
+  getWeeklyMaterialization: (
+    userId: string,
+    planVersionId: string,
+    trainingPlanId: string,
+  ) => Promise<unknown>
 }
 
 export function installBrowserSyncHarness() {
   const harness: BrowserSyncHarness = {
-    async createWorkout(userId, notes) {
+    async createWorkout(userId, notes, decisionTrace) {
       const record = await writes.create({
         userId,
         deviceId: await deviceId(userId),
         table: 'workout_logs',
-        data: { performed_at: new Date().toISOString(), notes },
+        data: {
+          performed_at: new Date().toISOString(),
+          notes,
+          ...(decisionTrace ? { decision_trace: decisionTrace } : {}),
+        },
       })
       return record.id
     },
@@ -61,6 +94,64 @@ export function installBrowserSyncHarness() {
     },
     outboxCount(userId) {
       return localDatabase.outbox.where('userId').equals(userId).count()
+    },
+    async outboxOperations(userId) {
+      const operations = await localDatabase.outbox
+        .where('userId')
+        .equals(userId)
+        .toArray()
+      return operations
+        .sort(
+          (left, right) =>
+            left.createdAt.localeCompare(right.createdAt) ||
+            left.operationId.localeCompare(right.operationId),
+        )
+        .map(({ table, kind, entityId, state, attempts, lastError }) => ({
+          table,
+          kind,
+          entityId,
+          state,
+          attempts,
+          lastError,
+        }))
+    },
+    async createWeeklyMaterialization(userId, input) {
+      const { ids, materialization, plan } =
+        await buildBrowserWeeklyMaterializationFixture(userId, input)
+      await writes.create({
+        userId,
+        deviceId: await deviceId(userId),
+        table: 'plan_versions',
+        id: ids.planVersionId,
+        data: {
+          goal_period_id: input.goalPeriodId,
+          previous_plan_version_id: null,
+          version_number: 1,
+          effective_from: input.weekAnchorDate,
+          change_reason: 'WEEKLY_MATERIALIZATION',
+          snapshot: { plan, materialization },
+        },
+      })
+      await writes.create({
+        userId,
+        deviceId: await deviceId(userId),
+        table: 'training_plans',
+        id: ids.trainingPlanId,
+        data: {
+          plan_version_id: ids.planVersionId,
+          week_count: 1,
+          status: 'ACTIVE',
+          plan,
+        },
+      })
+      return ids
+    },
+    async getWeeklyMaterialization(userId, planVersionId, trainingPlanId) {
+      const [version, plan] = await Promise.all([
+        localDatabase.records.get(recordKey(userId, 'plan_versions', planVersionId)),
+        localDatabase.records.get(recordKey(userId, 'training_plans', trainingPlanId)),
+      ])
+      return { version, plan }
     },
   }
   window.__treenikompassiSyncTest = harness

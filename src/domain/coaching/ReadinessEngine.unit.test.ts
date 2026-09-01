@@ -35,12 +35,89 @@ describe('ReadinessEngine', () => {
     expect(result.decision.volumeMultiplier).toBe(0.6)
   })
 
+  it('31: voimakas liikkumista haittaava DOMS puolittaa voimaharjoituksen määrän', () => {
+    const result = evaluateReadiness(
+      healthyInput({ plannedSession: 'STRENGTH', soreness: 'HIGH' }),
+    )
+
+    expect(result.decision).toMatchObject({
+      state: 'YELLOW',
+      allowedSession: 'STRENGTH',
+      volumeMultiplier: 0.5,
+      maximumAttemptsAllowed: false,
+    })
+    expect(result.reasons.map((reason) => reason.code)).toContain(
+      'SEVERE_DOMS_STRENGTH_DELOAD',
+    )
+    expect(result.decision.action).toContain('50 %')
+  })
+
+  it('voimakkaan DOMS:n lisäkevennys ei muuta muiden harjoitustyyppien yhden lipun sääntöä', () => {
+    const result = evaluateReadiness(
+      healthyInput({ plannedSession: 'EASY_ENDURANCE', soreness: 'HIGH' }),
+    )
+
+    expect(result.decision).toMatchObject({
+      state: 'YELLOW',
+      allowedSession: 'EASY_ENDURANCE',
+      volumeMultiplier: 0.75,
+    })
+    expect(result.reasons.map((reason) => reason.code)).not.toContain(
+      'SEVERE_DOMS_STRENGTH_DELOAD',
+    )
+  })
+
   it('kolme palautumistekijää ohjaa palauttavaan harjoitukseen', () => {
     const result = evaluateReadiness(
       healthyInput({ sleep: 'POOR', energy: 'LOW', stress: 'HIGH' }),
     )
     expect(result.decision.state).toBe('ORANGE_RECOVERY')
     expect(result.decision.allowedSession).toBe('RECOVERY')
+  })
+
+  it.each([
+    {
+      label: 'vakava kipu',
+      patch: {
+        newPain: { location: 'selkä', severity: 'SEVERE' as const, altersGait: false },
+      },
+      state: 'RED_STOP',
+    },
+    {
+      label: 'neurologinen oire',
+      patch: { safetySymptoms: ['NEW_NEUROLOGICAL_SYMPTOM' as const] },
+      state: 'RED_STOP',
+    },
+    {
+      label: 'toispuoleinen pohjeturvotus ja lepokipu',
+      patch: {
+        vascularSymptoms: {
+          rapidlyIncreasingUnilateralCalfSwelling: true,
+          painAtRest: true,
+        },
+      },
+      state: 'RED_STOP',
+    },
+    {
+      label: 'sairausoire',
+      patch: { illnessSymptoms: true },
+      state: 'ORANGE_RECOVERY',
+    },
+    {
+      label: 'kolme palautumistekijää',
+      patch: { sleep: 'POOR' as const, energy: 'LOW' as const, stress: 'HIGH' as const },
+      state: 'ORANGE_RECOVERY',
+    },
+  ])('P0-tulos $label voittaa samanaikaisen voimakkaan DOMS:n', ({ patch, state }) => {
+    const result = evaluateReadiness(
+      healthyInput({ plannedSession: 'STRENGTH', soreness: 'HIGH', ...patch }),
+    )
+
+    expect(result.decision.state).toBe(state)
+    expect(result.decision.allowedSession).not.toBe('STRENGTH')
+    expect(result.reasons.map((reason) => reason.code)).not.toContain(
+      'SEVERE_DOMS_STRENGTH_DELOAD',
+    )
   })
 
   it('27: kävelyä muuttava polvikipu estää juoksun', () => {

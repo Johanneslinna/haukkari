@@ -15,15 +15,19 @@ type TrendPoint = { label: string; value: number }
 
 const metricDescriptions: Record<string, string> = {
   'Harjoitusten toteuma': 'Kertyneet loppuun tai osittain tehdyt harjoitukset.',
-  Voimatasot: 'Suurin kirjattu kilogrammakuorma harjoitusta kohti.',
+  Voimatasot: 'Saman voimaliikkeen toistoista ja kuormasta arvioitu e1RM-kehitys.',
   Kestävyyskunto: 'Kirjattujen kestävyysharjoitusten kesto.',
+  Juoksutulos: 'Vertailukelpoisten juoksujen keskivauhti minuutteina kilometrille.',
   Paino: 'Omat painomittauksesi aikajärjestyksessä.',
   Vyötärönympärys: 'Omat vyötärömittauksesi aikajärjestyksessä.',
   'Koettu energia ja palautuminen': 'Päivän kuntotarkistuksessa ilmoitettu energia.',
   'Liikkuvuus ja toimintakyky':
-    'Vertailukelpoinen testi lisätään, kun ensimmäinen toimintakykymittaus on kirjattu.',
+    'Saman liikkuvuus- tai toimintakykytestin vertailukelpoiset tulokset.',
+  'Nopeus ja hyppy': 'Saman nopeus- tai hyppytestin vertailukelpoiset tulokset.',
   'Nopeus ja räjähtävä voima':
-    'Vertailukelpoinen nopeus- tai hyppytesti lisätään, kun ensimmäinen testi on kirjattu.',
+    'Saman nopeus- tai hyppytestin vertailukelpoiset tulokset.',
+  'Kipuvapaat harjoitukset':
+    'Niiden tallennettujen harjoitusten osuus, joissa et ilmoittanut kipua.',
 }
 
 const progressLabels = {
@@ -74,20 +78,7 @@ export function ProgressPage() {
     label: shortDate(stringValue(record.data.performed_at, record.createdAt)),
     value: index + 1,
   }))
-  const strengthPoints = chronologicalLogs.flatMap((record) => {
-    const values = arrayValue(objectValue(record.data.feedback).exerciseResults)
-      .flatMap((result) => arrayValue(objectValue(result).loads))
-      .map((value) => (typeof value === 'string' ? Number(value) : Number.NaN))
-      .filter(Number.isFinite)
-    return values.length
-      ? [
-          {
-            label: shortDate(stringValue(record.data.performed_at, record.createdAt)),
-            value: Math.max(...values),
-          },
-        ]
-      : []
-  })
+  const strengthTrend = strengthTrendPoints(chronologicalLogs)
   const endurancePoints = chronologicalLogs.flatMap((record) => {
     const workout = workoutsById.get(stringValue(record.data.workout_id))
     const kind = stringValue(objectValue(workout?.data.prescription).kind)
@@ -114,6 +105,51 @@ export function ProgressPage() {
         ? [{ label: shortDate(stringValue(record.data.checkin_date)), value }]
         : []
     })
+  const runningPoints = [...data.list('run_logs')]
+    .sort((left, right) =>
+      stringValue(left.data.started_at, left.createdAt).localeCompare(
+        stringValue(right.data.started_at, right.createdAt),
+      ),
+    )
+    .flatMap((record) => {
+      const durationSeconds = numberValue(record.data.duration_seconds)
+      const distanceMeters = numberValue(record.data.distance_m)
+      if (durationSeconds <= 0 || distanceMeters <= 0) return []
+      return [
+        {
+          label: shortDate(stringValue(record.data.started_at, record.createdAt)),
+          value: Math.round((durationSeconds / 60 / (distanceMeters / 1000)) * 100) / 100,
+        },
+      ]
+    })
+  const assessmentRecords = [
+    ...data.list('baseline_tests'),
+    ...data.list('reassessments'),
+  ]
+  const mobilityTrend = assessmentTrendPoints(assessmentRecords, [
+    'MOBILITY',
+    'FUNCTION',
+    'LIIKKUVUUS',
+    'TOIMINTAKYKY',
+  ])
+  const speedTrend = assessmentTrendPoints(assessmentRecords, [
+    'SPRINT',
+    'SPEED',
+    'JUMP',
+    'HYPPY',
+    'NOPEUS',
+  ])
+  const painFreePoints = chronologicalLogs.map((record, index) => {
+    const painFreeCount = chronologicalLogs
+      .slice(0, index + 1)
+      .filter(
+        (item) => stringValue(objectValue(item.data.feedback).pain) === 'NONE',
+      ).length
+    return {
+      label: shortDate(stringValue(record.data.performed_at, record.createdAt)),
+      value: Math.round((painFreeCount / (index + 1)) * 100),
+    }
+  })
   const trends: Record<string, { points: TrendPoint[]; unit: string; empty: string }> = {
     'Harjoitusten toteuma': {
       points: adherencePoints,
@@ -121,14 +157,21 @@ export function ProgressPage() {
       empty: 'Ensimmäinen tallennettu harjoitus aloittaa graafin.',
     },
     Voimatasot: {
-      points: strengthPoints,
-      unit: ' kg',
-      empty: 'Kirjaa voimaliikkeen kuorma, jotta vertailukelpoinen trendi alkaa.',
+      points: strengthTrend.points,
+      unit: ' kg e1RM',
+      empty:
+        strengthTrend.exerciseName ||
+        'Kirjaa saman voimaliikkeen kuorma ja toistot vähintään kerran.',
     },
     Kestävyyskunto: {
       points: endurancePoints,
       unit: ' min',
       empty: 'Tee ja tallenna kestävyysharjoitus, jotta kestotrendi alkaa.',
+    },
+    Juoksutulos: {
+      points: runningPoints,
+      unit: ' min/km',
+      empty: 'Kirjaa juoksun aika ja matka, jotta vauhtitrendi alkaa.',
     },
     Paino: {
       points: weightPoints,
@@ -146,14 +189,24 @@ export function ProgressPage() {
       empty: 'Päivän kuntotarkistus aloittaa energiatrendin.',
     },
     'Liikkuvuus ja toimintakyky': {
-      points: [],
-      unit: '',
-      empty: metricDescriptions['Liikkuvuus ja toimintakyky']!,
+      points: mobilityTrend.points,
+      unit: mobilityTrend.unit,
+      empty: 'Kirjaa kaksi saman nimistä liikkuvuus- tai toimintakykytestiä.',
+    },
+    'Nopeus ja hyppy': {
+      points: speedTrend.points,
+      unit: speedTrend.unit,
+      empty: 'Kirjaa kaksi saman nimistä nopeus- tai hyppytestiä.',
     },
     'Nopeus ja räjähtävä voima': {
-      points: [],
-      unit: '',
-      empty: metricDescriptions['Nopeus ja räjähtävä voima']!,
+      points: speedTrend.points,
+      unit: speedTrend.unit,
+      empty: 'Kirjaa kaksi saman nimistä nopeus- tai hyppytestiä.',
+    },
+    'Kipuvapaat harjoitukset': {
+      points: painFreePoints,
+      unit: ' %',
+      empty: 'Harjoituksen jälkeinen kipupalaute aloittaa trendin.',
     },
   }
 
@@ -395,6 +448,83 @@ function metricPoints(
           },
         ]
       : [],
+  )
+}
+
+function strengthTrendPoints(records: ReturnType<typeof useAppData>['records']) {
+  const byExercise = new Map<string, { exerciseName: string; points: TrendPoint[] }>()
+  for (const record of records) {
+    for (const value of arrayValue(objectValue(record.data.feedback).exerciseResults)) {
+      const result = objectValue(value)
+      const exerciseCode = stringValue(result.exerciseCode)
+      if (!exerciseCode) continue
+      const loads = arrayValue(result.loads)
+      const repetitions = arrayValue(result.repetitions)
+      const estimates = loads.flatMap((load, index) => {
+        if (typeof load !== 'string') return []
+        const kilograms = Number(load.replace(',', '.'))
+        const reps = repetitions[index]
+        if (!Number.isFinite(kilograms) || kilograms <= 0 || typeof reps !== 'number') {
+          return []
+        }
+        return [kilograms * (1 + reps / 30)]
+      })
+      if (!estimates.length) continue
+      const current = byExercise.get(exerciseCode) ?? {
+        exerciseName: stringValue(result.exerciseName, exerciseCode),
+        points: [],
+      }
+      current.points.push({
+        label: shortDate(stringValue(record.data.performed_at, record.createdAt)),
+        value: Math.round(Math.max(...estimates) * 10) / 10,
+      })
+      byExercise.set(exerciseCode, current)
+    }
+  }
+  const selected = [...byExercise.values()].sort(
+    (left, right) => right.points.length - left.points.length,
+  )[0]
+  return selected ?? { exerciseName: '', points: [] }
+}
+
+function assessmentTrendPoints(
+  records: ReturnType<typeof useAppData>['records'],
+  acceptedTypeParts: string[],
+) {
+  const series = new Map<string, { unit: string; points: TrendPoint[] }>()
+  for (const record of records) {
+    const result = objectValue(record.data.result)
+    const testType = stringValue(
+      record.data.test_type,
+      stringValue(result.test_type, stringValue(result.testType)),
+    )
+    const normalizedType = testType.toLocaleUpperCase('fi-FI')
+    if (!acceptedTypeParts.some((part) => normalizedType.includes(part))) continue
+    const candidates = [result.value, result.result, result.score]
+    const value = candidates.find(
+      (candidate): candidate is number =>
+        typeof candidate === 'number' && Number.isFinite(candidate),
+    )
+    if (value === undefined) continue
+    const current = series.get(testType) ?? {
+      unit: stringValue(result.unit),
+      points: [],
+    }
+    current.points.push({
+      label: shortDate(
+        stringValue(
+          record.data.tested_on,
+          stringValue(record.data.assessed_on, record.createdAt),
+        ),
+      ),
+      value,
+    })
+    series.set(testType, current)
+  }
+  return (
+    [...series.values()].sort(
+      (left, right) => right.points.length - left.points.length,
+    )[0] ?? { unit: '', points: [] }
   )
 }
 

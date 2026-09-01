@@ -1,0 +1,162 @@
+[
+  {
+    "id": "ACSM-RT-2026",
+    "type": "POSITION_STAND",
+    "title": "American College of Sports Medicine Position Stand. Resistance Training Prescription for Muscle Function, Hypertrophy, and Physical Performance in Healthy Adults",
+    "year": 2026,
+    "pmid": "41843416",
+    "organization": "American College of Sports Medicine",
+    "status": "ACTIVE"
+  },
+  {
+    "id": "CURRIER-RT-NMA-2023",
+    "type": "META_ANALYSIS",
+    "title": "Resistance training prescription for muscle strength and hypertrophy in healthy adults: a systematic review and Bayesian network meta-analysis",
+    "authors": ["Currier BS", "McLeod JC", "Banfield L"],
+    "year": 2023,
+    "pmid": "37414459",
+    "status": "ACTIVE"
+  },
+  {
+    "id": "GRGIC-FAILURE-2021",
+    "type": "SYSTEMATIC_REVIEW",
+    "title": "Effects of resistance training performed to repetition failure or non-failure on muscular strength and hypertrophy: a systematic review and meta-analysis",
+    "authors": ["Grgic J", "Schoenfeld BJ", "Orazem J", "Sabol F"],
+    "year": 2021,
+    "pmid": "33497853",
+    "status": "ACTIVE"
+  },
+  {
+    "id": "BASTOS-RIR-2024",
+    "type": "SYSTEMATIC_REVIEW",
+    "title": "Repetitions in reserve scale in resistance training: a scoping review",
+    "authors": ["Bastos ESM", "de Souza EO"],
+    "year": 2024,
+    "pmid": "38563729",
+    "status": "ACTIVE"
+  },
+  {
+    "id": "LOPEZ-LOAD-2021",
+    "type": "META_ANALYSIS",
+    "title": "Resistance Training Load Effects on Muscle Hypertrophy and Strength Gain: Systematic Review and Network Meta-analysis",
+    "authors": ["Lopez P", "Radaelli R", "Taaffe DR"],
+    "year": 2021,
+    "doi": "10.1249/MSS.0000000000002585",
+    "pmid": "33433148",
+    "status": "ACTIVE"
+  },
+  {
+    "id": "PELLAND-DOSE-2026",
+    "type": "META_ANALYSIS",
+    "title": "Resistance training dose-response effects on strength and hypertrophy in healthy adults",
+    "authors": ["Pelland JC"],
+    "year": 2026,
+    "pmid": "41343037",
+    "status": "ACTIVE"
+  },
+  {
+    "id": "ALIZADEH-ROM-2023",
+    "type": "SYSTEMATIC_REVIEW",
+    "title": "Resistance Training Induces Improvements in Range of Motion: A Systematic Review and Meta-Analysis",
+    "authors": ["Alizadeh S"],
+    "year": 2023,
+    "pmid": "36622555",
+    "status": "ACTIVE"
+  },
+  {
+    "id": "WHO-PA-2020",
+    "type": "CONSENSUS",
+    "title": "WHO Guidelines on Physical Activity and Sedentary Behaviour",
+    "year": 2020,
+    "organization": "World Health Organization",
+    "status": "ACTIVE"
+  },
+  {
+    "id": "SCHUMANN-CONCURRENT-2022",
+    "type": "META_ANALYSIS",
+    "title": "Compatibility of Concurrent Aerobic and Strength Training for Skeletal Muscle Size and Function: An Updated Systematic Review and Meta-Analysis",
+    "authors": ["Schumann M", "Feito Y", "Figueiredo C"],
+    "year": 2022,
+    "pmid": "34757594",
+    "status": "ACTIVE"
+  },
+  {
+    "id": "NSCA-YOUTH-2009",
+    "type": "POSITION_STAND",
+    "title": "Youth resistance training: updated position statement paper from the National Strength and Conditioning Association",
+    "year": 2009,
+    "pmid": "19620931",
+    "organization": "National Strength and Conditioning Association",
+    "status": "ACTIVE"
+  },
+  {
+    "id": "OLIVER-YOUTH-TEAM-SPORT-2024",
+    "type": "META_ANALYSIS",
+    "title": "The Effects of Strength, Plyometric and Combined Training on Strength, Power and Speed Characteristics in High-Level, Highly Trained Male Youth Soccer Players",
+    "authors": ["Oliver JL"],
+    "year": 2024,
+    "pmid": "37897637",
+    "status": "ACTIVE"
+  },
+  {
+    "id": "LUO-FEMALE-YOUTH-2025",
+    "type": "META_ANALYSIS",
+    "title": "Effects of Strength and Plyometric Training on Vertical Jump, Linear Sprint, and Change-of-Direction Speed in Female Adolescent Team Sport Athletes",
+    "authors": ["Luo S"],
+    "year": 2025,
+    "pmid": "40469857",
+    "status": "ACTIVE"
+  },
+  {
+    "id": "DAEHLIN-HOCKEY-2017",
+    "type": "RANDOMIZED_TRIAL",
+    "title": "Improvement of Ice Hockey Players' On-Ice Sprint With Combined Plyometric and Strength Training",
+    "authors": ["Dæhlin TE"],
+    "year": 2017,
+    "pmid": "27918670",
+    "status": "ACTIVE"
+  },
+  {
+    "id": "DIETZE-HERMOSA-HOCKEY-2024",
+    "type": "RANDOMIZED_TRIAL",
+    "title": "The Impact of an 8-Week Resisted Sprint Training Program on Ice Skating Performance in Male Youth Ice Hockey Players",
+    "authors": ["Dietze-Hermosa MS"],
+    "year": 2024,
+    "pmid": "38620058",
+    "status": "ACTIVE"
+  },
+  {
+    "id": "AKERLUND-FLOORBALL-2020",
+    "type": "RANDOMIZED_TRIAL",
+    "title": "Forty-five per cent lower acute injury incidence but no effect on overuse injury prevalence in youth floorball players who used an injury prevention exercise programme",
+    "authors": ["Åkerlund I"],
+    "year": 2020,
+    "pmid": "31992545",
+    "status": "ACTIVE"
+  },
+  {
+    "id": "FIFA11-COLLEGIATE-2015",
+    "type": "RANDOMIZED_TRIAL",
+    "title": "The FIFA 11+ injury prevention program in collegiate football",
+    "year": 2015,
+    "pmid": "26378030",
+    "status": "ACTIVE"
+  },
+  {
+    "id": "NORDIC-HAMSTRING-2017",
+    "type": "META_ANALYSIS",
+    "title": "Effect of Injury Prevention Programs that Include the Nordic Hamstring Exercise on Hamstring Injury Rates in Soccer Players",
+    "year": 2017,
+    "pmid": "27752982",
+    "status": "ACTIVE"
+  },
+  {
+    "id": "STOJANOVIC-PLYOMETRIC-2017",
+    "type": "META_ANALYSIS",
+    "title": "Effect of Plyometric Training on Vertical Jump Performance in Female Athletes",
+    "authors": ["Stojanović E"],
+    "year": 2017,
+    "pmid": "27704484",
+    "status": "ACTIVE"
+  }
+]

@@ -24,49 +24,54 @@ import type {
   PlannedSession,
   ReadinessState,
 } from '../../domain/coaching/types'
+import { localCalendarDate } from '../../domain/coaching/LocalCalendarPolicy'
 import { useAppData } from '../app-data/appDataContextValue'
-import { activeGoalRecord, activeTrainingPlan } from '../coaching/coachingActions'
+import {
+  activeGoalRecord,
+  activeTrainingPlan,
+  ensureCurrentStrengthWeekPlan,
+} from '../coaching/coachingActions'
 import {
   goalLabels,
+  calendarContextForProfile,
   numberValue,
   planSessions,
   sessionLabels,
   stringValue,
-  todayIso,
 } from '../coaching/coachingData'
 import { useSync } from '../sync/syncContextValue'
 
 const shortWeekdays = ['Ma', 'Ti', 'Ke', 'To', 'Pe', 'La', 'Su']
 
-function localIso(date: Date) {
-  const year = date.getFullYear()
-  const month = String(date.getMonth() + 1).padStart(2, '0')
-  const day = String(date.getDate()).padStart(2, '0')
-  return `${year}-${month}-${day}`
-}
-
-function weekDates() {
-  const today = new Date()
-  const weekday = today.getDay() || 7
-  const monday = new Date(today)
-  monday.setHours(12, 0, 0, 0)
-  monday.setDate(today.getDate() - weekday + 1)
+function weekDates(weekAnchorDate: string) {
+  const monday = new Date(`${weekAnchorDate}T12:00:00.000Z`)
   return shortWeekdays.map((label, index) => {
     const date = new Date(monday)
-    date.setDate(monday.getDate() + index)
-    return { label, iso: localIso(date), date: date.getDate() }
+    date.setUTCDate(monday.getUTCDate() + index)
+    return {
+      label,
+      iso: date.toISOString().slice(0, 10),
+      date: date.getUTCDate(),
+    }
   })
 }
 
-function greeting(now: Date) {
-  const hour = now.getHours()
+function greeting(now: Date, timeZone: string) {
+  const hour = Number(
+    new Intl.DateTimeFormat('en-US', {
+      timeZone,
+      hour: '2-digit',
+      hourCycle: 'h23',
+    }).format(now),
+  )
   if (hour < 11) return 'Hyvää huomenta'
   if (hour < 18) return 'Hyvää päivää'
   return 'Hyvää iltaa'
 }
 
-function todayDateLabel(now: Date) {
+function todayDateLabel(now: Date, timeZone: string) {
   return new Intl.DateTimeFormat('fi-FI', {
+    timeZone,
     weekday: 'long',
     day: 'numeric',
     month: 'long',
@@ -153,18 +158,23 @@ export function TodayPage() {
     return () => window.clearInterval(timer)
   }, [])
 
+  useEffect(() => {
+    if (!data.loading) void ensureCurrentStrengthWeekPlan(data)
+  }, [data, data.loading])
+
   if (data.loading) return <TodayLoading />
 
   const profile = data.latest('profiles')
+  const clock = calendarContextForProfile(profile, now)
   const goalRecord = activeGoalRecord(data)
   const goal = stringValue(goalRecord?.data.primary_goal, 'GENERAL_FITNESS') as GoalType
   const plan = activeTrainingPlan(data)
   const sessions = planSessions(plan)
-  const weekday = new Date().getDay() || 7
+  const weekday = clock.weekday
   const todaySession = sessions.find((session) => session.day === weekday)
   const checkIn = data
     .list('daily_checkins')
-    .find((record) => record.data.checkin_date === todayIso())
+    .find((record) => record.data.checkin_date === clock.localDate)
   const readiness = stringValue(checkIn?.data.readiness) as ReadinessState | undefined
   const screeningReviewRequired =
     data.latest('health_screenings')?.data.status === 'NEEDS_REVIEW'
@@ -172,11 +182,17 @@ export function TodayPage() {
     .list('workout_logs')
     .filter((record) => record.data.completion_status !== 'IN_PROGRESS')
   const completedToday = workoutLogs.some(
-    (record) => stringValue(record.data.performed_at).slice(0, 10) === todayIso(),
+    (record) =>
+      localCalendarDate(stringValue(record.data.performed_at), clock.calendarTimeZone) ===
+      clock.localDate,
   )
-  const completedThisWeek = weekDates().filter(({ iso }) =>
+  const completedThisWeek = weekDates(clock.weekAnchorDate).filter(({ iso }) =>
     workoutLogs.some(
-      (record) => stringValue(record.data.performed_at).slice(0, 10) === iso,
+      (record) =>
+        localCalendarDate(
+          stringValue(record.data.performed_at),
+          clock.calendarTimeZone,
+        ) === iso,
     ),
   ).length
   const state = screeningReviewRequired
@@ -198,9 +214,10 @@ export function TodayPage() {
     <div className={`page-stack today-page today-state-${state.key}`}>
       <header className="today-heading">
         <div>
-          <p className="eyebrow">{todayDateLabel(now)}</p>
+          <p className="eyebrow">{todayDateLabel(now, clock.calendarTimeZone)}</p>
           <h1>
-            {greeting(now)}, {stringValue(profile?.data.display_name, 'sinä')}
+            {greeting(now, clock.calendarTimeZone)},{' '}
+            {stringValue(profile?.data.display_name, 'sinä')}
           </h1>
           <p>Tässä on tämän päivän selkeä seuraava askel.</p>
         </div>
@@ -276,6 +293,9 @@ export function TodayPage() {
 
         <WeekRhythm
           logs={workoutLogs.map((record) => stringValue(record.data.performed_at))}
+          weekAnchorDate={clock.weekAnchorDate}
+          localDate={clock.localDate}
+          calendarTimeZone={clock.calendarTimeZone}
         />
       </div>
     </div>
@@ -520,8 +540,18 @@ function NextWeek({ sessions }: { sessions: PlannedSession[] }) {
   )
 }
 
-function WeekRhythm({ logs }: { logs: string[] }) {
-  const days = weekDates()
+function WeekRhythm({
+  logs,
+  weekAnchorDate,
+  localDate,
+  calendarTimeZone,
+}: {
+  logs: string[]
+  weekAnchorDate: string
+  localDate: string
+  calendarTimeZone: string
+}) {
+  const days = weekDates(weekAnchorDate)
   return (
     <section className="week-rhythm" aria-labelledby="week-rhythm-title">
       <div className="week-rhythm-heading">
@@ -536,8 +566,11 @@ function WeekRhythm({ logs }: { logs: string[] }) {
       </div>
       <ol className="rhythm-days">
         {days.map((day) => {
-          const complete = logs.some((value) => value.slice(0, 10) === day.iso)
-          const current = day.iso === todayIso()
+          const complete = logs.some(
+            (value) =>
+              Boolean(value) && localCalendarDate(value, calendarTimeZone) === day.iso,
+          )
+          const current = day.iso === localDate
           return (
             <li
               className={`${complete ? 'is-complete' : ''}${current ? ' is-today' : ''}`}

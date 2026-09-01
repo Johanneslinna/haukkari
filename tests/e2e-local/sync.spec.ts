@@ -1,12 +1,16 @@
 import { randomUUID } from 'node:crypto'
 import process from 'node:process'
 import { createClient } from '@supabase/supabase-js'
-import { expect, test, type Page } from '@playwright/test'
+import { expect, test, type Page, type TestInfo } from '@playwright/test'
+import { browserSyncCalendarFixture } from '../../src/test/browserWeeklyMaterializationFixture'
 
 const apiUrl = process.env.LOCAL_SUPABASE_API_URL ?? ''
 const anonKey = process.env.LOCAL_SUPABASE_ANON_KEY ?? ''
 const adminKey = process.env.LOCAL_SUPABASE_ADMIN_KEY ?? ''
 const password = 'Haukkari-e2e-2026!'
+const syncCompletionTimeout = 20_000
+const syncCalendar = browserSyncCalendarFixture()
+const weekAnchorDate = syncCalendar.weekAnchorDate
 const email = `sync-e2e-${Date.now()}-${randomUUID()}@example.invalid`
 const admin = createClient(apiUrl, adminKey, {
   auth: { autoRefreshToken: false, persistSession: false },
@@ -16,6 +20,10 @@ const userClient = createClient(apiUrl, anonKey, {
 })
 
 let userId = ''
+const goalProfileId = randomUUID()
+const goalPeriodId = randomUUID()
+let weeklyPlanVersionId = ''
+let weeklyTrainingPlanId = ''
 
 async function signIn(page: Page) {
   await page.goto('/kirjaudu')
@@ -30,6 +38,72 @@ async function signIn(page: Page) {
     timeout: 20_000,
   })
   await page.waitForFunction(() => Boolean(window.__treenikompassiSyncTest))
+}
+
+async function pageSyncDiagnostic(page: Page) {
+  const [outboxCount, outboxOperations, heading, conflictAction] = await Promise.all([
+    page
+      .evaluate((id) => window.__treenikompassiSyncTest!.outboxCount(id), userId)
+      .catch((reason: unknown) => `Virhe: ${String(reason)}`),
+    page
+      .evaluate((id) => window.__treenikompassiSyncTest!.outboxOperations(id), userId)
+      .catch((reason: unknown) => `Virhe: ${String(reason)}`),
+    page
+      .locator('#sync-heading')
+      .textContent()
+      .catch((reason: unknown) => `Virhe: ${String(reason)}`),
+    page
+      .getByRole('link', { name: /Ratkaise ristiriidat/u })
+      .allTextContents()
+      .catch((reason: unknown) => [`Virhe: ${String(reason)}`]),
+  ])
+  return { outboxCount, outboxOperations, heading, conflictAction }
+}
+
+async function readOutboxOperations(page: Page) {
+  return page.evaluate(
+    (id) => window.__treenikompassiSyncTest!.outboxOperations(id),
+    userId,
+  )
+}
+
+async function attachConcurrentSyncDiagnostic(
+  testInfo: TestInfo,
+  pageA: Page,
+  pageB: Page,
+) {
+  const [deviceA, deviceB, remoteVersions, remotePlans] = await Promise.all([
+    pageSyncDiagnostic(pageA),
+    pageSyncDiagnostic(pageB),
+    userClient
+      .from('plan_versions')
+      .select('id,version')
+      .eq('goal_period_id', goalPeriodId)
+      .eq('change_reason', 'WEEKLY_MATERIALIZATION'),
+    userClient
+      .from('training_plans')
+      .select('id,plan_version_id,status,version,plan')
+      .eq('plan_version_id', weeklyPlanVersionId),
+  ])
+  await testInfo.attach('concurrent-sync-diagnostic', {
+    body: JSON.stringify(
+      {
+        deviceA,
+        deviceB,
+        remoteVersions: {
+          data: remoteVersions.data,
+          error: remoteVersions.error?.message ?? null,
+        },
+        remotePlans: {
+          data: remotePlans.data,
+          error: remotePlans.error?.message ?? null,
+        },
+      },
+      null,
+      2,
+    ),
+    contentType: 'application/json',
+  })
 }
 
 test.beforeAll(async () => {
@@ -49,6 +123,20 @@ test.beforeAll(async () => {
   if (prepared.error) throw new Error(prepared.error.message)
   const signedIn = await userClient.auth.signInWithPassword({ email, password })
   if (signedIn.error) throw new Error(signedIn.error.message)
+  const goalProfile = await userClient.from('goal_profiles').insert({
+    id: goalProfileId,
+    user_id: userId,
+    primary_goal: 'MAX_STRENGTH',
+  })
+  if (goalProfile.error) throw new Error(goalProfile.error.message)
+  const goalPeriod = await userClient.from('goal_periods').insert({
+    id: goalPeriodId,
+    user_id: userId,
+    goal_profile_id: goalProfileId,
+    starts_on: weekAnchorDate,
+    status: 'ACTIVE',
+  })
+  if (goalPeriod.error) throw new Error(goalPeriod.error.message)
 })
 
 test.afterAll(async () => {
@@ -57,32 +145,203 @@ test.afterAll(async () => {
 
 test('offline-uudelleenkäynnistys, kaksi selainkontekstia, konflikti ja tombstone', async ({
   browser,
-}) => {
+}, testInfo) => {
   const contextA = await browser.newContext()
   const contextB = await browser.newContext()
   const pageA = await contextA.newPage()
   const pageB = await contextB.newPage()
+  const outboxCheckpoints: Record<string, unknown> = {}
 
   try {
     await signIn(pageA)
     await signIn(pageB)
+    await contextA.setOffline(true)
+    await contextB.setOffline(true)
+    const weeklyInput = {
+      goalPeriodId,
+      weekAnchorDate,
+    }
+    const deviceAIds = await pageA.evaluate(
+      ({ id, input }) =>
+        window.__treenikompassiSyncTest!.createWeeklyMaterialization(id, input),
+      { id: userId, input: { ...weeklyInput, writer: 'device-a' } },
+    )
+    const deviceBIds = await pageB.evaluate(
+      ({ id, input }) =>
+        window.__treenikompassiSyncTest!.createWeeklyMaterialization(id, input),
+      { id: userId, input: { ...weeklyInput, writer: 'device-b' } },
+    )
+    expect(deviceBIds).toEqual(deviceAIds)
+    weeklyPlanVersionId = deviceAIds.planVersionId
+    weeklyTrainingPlanId = deviceAIds.trainingPlanId
+    await Promise.all([contextA.setOffline(false), contextB.setOffline(false)])
+    await Promise.all([
+      pageA.getByRole('button', { name: 'Synkronoi nyt' }).click(),
+      pageB.getByRole('button', { name: 'Synkronoi nyt' }).click(),
+    ])
+    try {
+      await expect
+        .poll(
+          () =>
+            Promise.all(
+              [pageA, pageB].map((page) =>
+                page.evaluate(
+                  (id) => window.__treenikompassiSyncTest!.outboxCount(id),
+                  userId,
+                ),
+              ),
+            ),
+          {
+            message: 'Molempien selainkontekstien outboxien pitää tyhjentyä',
+            timeout: syncCompletionTimeout,
+          },
+        )
+        .toEqual([0, 0])
+      await Promise.all(
+        [pageA, pageB].map((page) =>
+          expect(page.getByRole('heading', { name: 'Synkronoitu' })).toBeVisible({
+            timeout: syncCompletionTimeout,
+          }),
+        ),
+      )
+      const materializationOutboxes = await Promise.all(
+        [pageA, pageB].map((page) => readOutboxOperations(page)),
+      )
+      outboxCheckpoints.afterWeeklyMaterialization = {
+        deviceA: materializationOutboxes[0],
+        deviceB: materializationOutboxes[1],
+      }
+      expect(materializationOutboxes).toEqual([[], []])
+    } catch (reason) {
+      try {
+        await attachConcurrentSyncDiagnostic(testInfo, pageA, pageB)
+      } catch (diagnosticReason) {
+        console.error(
+          'Synkronoinnin diagnostiikan tallennus epäonnistui.',
+          diagnosticReason,
+        )
+      }
+      throw reason
+    }
+    for (const page of [pageA, pageB]) {
+      await expect(page.getByRole('link', { name: /Ratkaise ristiriidat/u })).toHaveCount(
+        0,
+      )
+    }
+    const remoteVersions = await userClient
+      .from('plan_versions')
+      .select('id,snapshot')
+      .eq('goal_period_id', goalPeriodId)
+      .eq('change_reason', 'WEEKLY_MATERIALIZATION')
+    expect(remoteVersions.error).toBeNull()
+    expect(remoteVersions.data).toHaveLength(1)
+    expect(remoteVersions.data?.[0]?.id).toBe(weeklyPlanVersionId)
+    const remotePlans = await userClient
+      .from('training_plans')
+      .select('id,status,plan')
+      .eq('plan_version_id', weeklyPlanVersionId)
+    expect(remotePlans.error).toBeNull()
+    expect(remotePlans.data).toHaveLength(1)
+    expect(remotePlans.data?.[0]).toMatchObject({
+      id: weeklyTrainingPlanId,
+      status: 'ACTIVE',
+    })
+    const canonicalWriter = remotePlans.data?.[0]?.plan.writer
+    expect(['device-a', 'device-b']).toContain(canonicalWriter)
+    expect(remoteVersions.data?.[0]?.snapshot).toMatchObject({
+      plan: { writer: canonicalWriter },
+    })
+    for (const page of [pageA, pageB]) {
+      await expect
+        .poll(() =>
+          page.evaluate(
+            ({ id, versionId, planId }) =>
+              window.__treenikompassiSyncTest!.getWeeklyMaterialization(
+                id,
+                versionId,
+                planId,
+              ),
+            { id: userId, versionId: weeklyPlanVersionId, planId: weeklyTrainingPlanId },
+          ),
+        )
+        .toMatchObject({
+          version: {
+            id: weeklyPlanVersionId,
+            data: { snapshot: { plan: { writer: canonicalWriter } } },
+          },
+          plan: {
+            id: weeklyTrainingPlanId,
+            data: { status: 'ACTIVE', plan: { writer: canonicalWriter } },
+          },
+        })
+    }
+
     await pageA.evaluate(() => navigator.serviceWorker.ready)
     await pageA.goto('/')
     await pageA.reload()
     await expect(pageA.getByRole('heading', { name: /Synkronointitesti/u })).toBeVisible()
     await pageA.waitForFunction(() => Boolean(window.__treenikompassiSyncTest))
 
+    await expect
+      .poll(
+        async () => {
+          const operations = await readOutboxOperations(pageA)
+          outboxCheckpoints.afterTodayReloadBeforeOffline = operations
+          return operations
+        },
+        {
+          message:
+            'TodayPage- ja service worker -reloadin jälkeen outboxin pitää olla tyhjä ennen offline-vaihetta',
+          timeout: syncCompletionTimeout,
+        },
+      )
+      .toEqual([])
+    const remoteVersionsAfterTodayReload = await userClient
+      .from('plan_versions')
+      .select('id')
+      .eq('goal_period_id', goalPeriodId)
+      .eq('change_reason', 'WEEKLY_MATERIALIZATION')
+    expect(remoteVersionsAfterTodayReload.error).toBeNull()
+    expect(remoteVersionsAfterTodayReload.data).toEqual([{ id: weeklyPlanVersionId }])
+
     await contextA.setOffline(true)
     const workoutId = await pageA.evaluate(
-      ({ id, notes }) => window.__treenikompassiSyncTest!.createWorkout(id, notes),
-      { id: userId, notes: 'Offline-selaimen merkintä' },
+      ({ id, notes, decisionTrace }) =>
+        window.__treenikompassiSyncTest!.createWorkout(id, notes, decisionTrace),
+      {
+        id: userId,
+        notes: 'Offline-selaimen merkintä',
+        decisionTrace: {
+          ruleIds: ['adult-strength-severe-doms-1.0.0'],
+          rules: [{ ruleId: 'READINESS-SEVERE-DOMS-001', outcome: 'MODIFY' }],
+          adaptations: [
+            {
+              original: { workingSetCount: 10 },
+              adjusted: {
+                workingSetCount: 5,
+                maximumTargetRpe: 6,
+                policyVersion: 'adult-strength-severe-doms-1.0.0',
+              },
+              reasonCodes: [
+                'SEVERE_DOMS_STRENGTH_DELOAD',
+                'SEVERE_DOMS_STRENGTH_PROGRESSION_FROZEN',
+              ],
+            },
+          ],
+        },
+      },
     )
-    expect(
-      await pageA.evaluate(
-        (id) => window.__treenikompassiSyncTest!.outboxCount(id),
-        userId,
-      ),
-    ).toBe(1)
+    const offlineWorkoutOutbox = await readOutboxOperations(pageA)
+    outboxCheckpoints.afterOfflineWorkout = offlineWorkoutOutbox
+    expect(offlineWorkoutOutbox).toHaveLength(1)
+    expect(offlineWorkoutOutbox[0]).toMatchObject({
+      table: 'workout_logs',
+      kind: 'INSERT',
+      entityId: workoutId,
+      state: 'PENDING',
+      attempts: 0,
+      lastError: null,
+    })
 
     await pageA.reload()
     await expect(pageA.getByRole('heading', { name: /Synkronointitesti/u })).toBeVisible()
@@ -92,7 +351,28 @@ test('offline-uudelleenkäynnistys, kaksi selainkontekstia, konflikti ja tombsto
         window.__treenikompassiSyncTest!.getWorkout(id, recordId),
       { userId, workoutId },
     )
-    expect(persisted).toMatchObject({ data: { notes: 'Offline-selaimen merkintä' } })
+    expect(persisted).toMatchObject({
+      data: {
+        notes: 'Offline-selaimen merkintä',
+        decision_trace: {
+          ruleIds: ['adult-strength-severe-doms-1.0.0'],
+          adaptations: [
+            {
+              original: { workingSetCount: 10 },
+              adjusted: {
+                workingSetCount: 5,
+                maximumTargetRpe: 6,
+                policyVersion: 'adult-strength-severe-doms-1.0.0',
+              },
+              reasonCodes: [
+                'SEVERE_DOMS_STRENGTH_DELOAD',
+                'SEVERE_DOMS_STRENGTH_PROGRESSION_FROZEN',
+              ],
+            },
+          ],
+        },
+      },
+    })
 
     await contextA.setOffline(false)
     await pageA.goto('/synkronointi')
@@ -107,7 +387,27 @@ test('offline-uudelleenkäynnistys, kaksi selainkontekstia, konflikti ja tombsto
           { userId, workoutId },
         ),
       )
-      .toMatchObject({ data: { notes: 'Offline-selaimen merkintä' } })
+      .toMatchObject({
+        data: {
+          notes: 'Offline-selaimen merkintä',
+          decision_trace: {
+            ruleIds: ['adult-strength-severe-doms-1.0.0'],
+            adaptations: [
+              {
+                adjusted: {
+                  workingSetCount: 5,
+                  maximumTargetRpe: 6,
+                  policyVersion: 'adult-strength-severe-doms-1.0.0',
+                },
+                reasonCodes: [
+                  'SEVERE_DOMS_STRENGTH_DELOAD',
+                  'SEVERE_DOMS_STRENGTH_PROGRESSION_FROZEN',
+                ],
+              },
+            ],
+          },
+        },
+      })
 
     await contextA.setOffline(true)
     await contextB.setOffline(true)
@@ -180,6 +480,10 @@ test('offline-uudelleenkäynnistys, kaksi selainkontekstia, konflikti ja tombsto
       )
       .toMatchObject({ deletedAt: expect.any(String) })
   } finally {
+    await testInfo.attach('outbox-checkpoints', {
+      body: JSON.stringify(outboxCheckpoints, null, 2),
+      contentType: 'application/json',
+    })
     await contextA.close()
     await contextB.close()
   }

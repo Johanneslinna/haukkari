@@ -1,18 +1,20 @@
 import { useEffect, useState } from 'react'
-import { Moon, Sun } from 'lucide-react'
+import { Moon, Sun, SunMoon } from 'lucide-react'
 
-type ThemePreference = 'LIGHT' | 'DARK'
+type ThemePreference = 'AUTO' | 'LIGHT' | 'DARK'
 
 const themeStorageKey = 'treenikompassi.theme'
 
 function storedTheme(): ThemePreference {
   const value = localStorage.getItem(themeStorageKey)
-  if (value === 'LIGHT' || value === 'DARK') return value
-  return matchMedia('(prefers-color-scheme: dark)').matches ? 'DARK' : 'LIGHT'
+  if (value === 'AUTO' || value === 'LIGHT' || value === 'DARK') return value
+  return 'AUTO'
 }
 
 function applyTheme(preference: ThemePreference) {
-  const dark = preference === 'DARK'
+  const dark =
+    preference === 'DARK' ||
+    (preference === 'AUTO' && matchMedia('(prefers-color-scheme: dark)').matches)
   document.documentElement.dataset.theme = dark ? 'dark' : 'light'
   document.documentElement.style.colorScheme = dark ? 'dark' : 'light'
 }
@@ -21,16 +23,23 @@ export function ThemeToggle() {
   const [preference, setPreference] = useState(storedTheme)
 
   useEffect(() => {
-    applyTheme(preference)
+    const media = matchMedia('(prefers-color-scheme: dark)')
+    const update = () => applyTheme(preference)
+    update()
     localStorage.setItem(themeStorageKey, preference)
+    if (preference === 'AUTO') media.addEventListener('change', update)
+    return () => media.removeEventListener('change', update)
   }, [preference])
 
   const next = () => {
-    setPreference((current) => (current === 'LIGHT' ? 'DARK' : 'LIGHT'))
+    setPreference((current) =>
+      current === 'AUTO' ? 'LIGHT' : current === 'LIGHT' ? 'DARK' : 'AUTO',
+    )
   }
-  const Icon = preference === 'LIGHT' ? Moon : Sun
-  const actionLabel =
-    preference === 'LIGHT' ? 'Vaihda tummaan teemaan' : 'Vaihda vaaleaan teemaan'
+  const Icon = preference === 'AUTO' ? SunMoon : preference === 'LIGHT' ? Sun : Moon
+  const modeLabel =
+    preference === 'AUTO' ? 'automaattinen' : preference === 'LIGHT' ? 'vaalea' : 'tumma'
+  const actionLabel = `Teema: ${modeLabel}. Vaihda seuraavaan tilaan.`
 
   return (
     <button

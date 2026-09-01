@@ -1,0 +1,68 @@
+[
+  {
+    "id": "ADULT-ONLY-001",
+    "version": "1.0.0",
+    "claimIds": ["CLAIM-ADULT-RT-BASE-001"],
+    "populationPredicate": "age >= 18 && healthStatus == HEALTHY",
+    "goalPredicate": "sessionKind == STRENGTH",
+    "action": "Allow the adult resistance prescription pipeline.",
+    "safetyClass": "PROCEED",
+    "policyBasis": "PRODUCT_POLICY",
+    "status": "PUBLISHED"
+  },
+  {
+    "id": "RT-BASE-DOSE-001",
+    "version": "1.0.0",
+    "claimIds": ["CLAIM-ADULT-RT-BASE-001", "CLAIM-ADULT-RT-LOAD-001"],
+    "populationPredicate": "age >= 18 && healthStatus == HEALTHY",
+    "goalPredicate": "goal in [GENERAL_FITNESS, MAX_STRENGTH, MUSCLE_GAIN, BODY_RECOMPOSITION]",
+    "action": "Select goal- and experience-specific sets, repetitions, and rest inside the published dose envelope.",
+    "safetyClass": "PROCEED",
+    "policyBasis": "EVIDENCE",
+    "status": "PUBLISHED"
+  },
+  {
+    "id": "RT-RIR-001",
+    "version": "1.0.0",
+    "claimIds": ["CLAIM-ADULT-RT-EFFORT-001"],
+    "populationPredicate": "age >= 18 && healthStatus == HEALTHY",
+    "goalPredicate": "sessionKind == STRENGTH",
+    "action": "Prescribe a conservative repetitions-in-reserve range and record completed-set RIR.",
+    "safetyClass": "PROCEED",
+    "policyBasis": "EVIDENCE",
+    "status": "PUBLISHED"
+  },
+  {
+    "id": "RT-NO-FAILURE-001",
+    "version": "1.0.0",
+    "claimIds": ["CLAIM-ADULT-RT-EFFORT-001"],
+    "populationPredicate": "age >= 18",
+    "goalPredicate": "sessionKind == STRENGTH",
+    "action": "Do not prescribe routine momentary muscular failure.",
+    "safetyClass": "MODIFY",
+    "policyBasis": "PRODUCT_POLICY",
+    "status": "PUBLISHED"
+  },
+  {
+    "id": "RT-CALIBRATION-001",
+    "version": "1.0.0",
+    "claimIds": ["CLAIM-ADULT-RT-EFFORT-001", "CLAIM-ADULT-RT-LOAD-001"],
+    "populationPredicate": "comparableSetCount < 2",
+    "goalPredicate": "sessionKind == STRENGTH",
+    "action": "Use a conservative calibration set without a precise kilogram prescription.",
+    "safetyClass": "MODIFY",
+    "policyBasis": "PRODUCT_POLICY",
+    "status": "PUBLISHED"
+  },
+  {
+    "id": "RT-PROGRESSION-001",
+    "version": "1.0.0",
+    "claimIds": ["CLAIM-ADULT-RT-BASE-001", "CLAIM-ADULT-RT-EFFORT-001"],
+    "populationPredicate": "comparableSuccessfulSessions >= 2 && pain == NONE",
+    "goalPredicate": "sessionKind == STRENGTH",
+    "action": "Change only one primary prescription variable. Use one available load increment; allow a smallest-available-increment exception above five percent only after two pain-free, technically sound sessions in the target RIR range.",
+    "safetyClass": "MODIFY",
+    "policyBasis": "PRODUCT_POLICY",
+    "status": "PUBLISHED"
+  }
+]

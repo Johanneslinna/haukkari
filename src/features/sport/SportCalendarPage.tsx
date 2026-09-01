@@ -1,7 +1,14 @@
 import { useState, type FormEvent } from 'react'
 import { getSportAdapter, listFullySupportedDisciplines } from '../../domain/coaching'
+import type { LocalRecord } from '../../domain/sync/types'
+import { featureFlags } from '../../config/featureFlags'
 import { useAppData } from '../app-data/appDataContextValue'
-import { addCompetition, addFixedSportSession } from '../coaching/coachingActions'
+import {
+  addCompetition,
+  addFixedSportSession,
+  removeCalendarRecord,
+  rescheduleCalendarRecord,
+} from '../coaching/coachingActions'
 import { fiDate, objectValue, stringValue } from '../coaching/coachingData'
 
 const sportLabels: Record<string, string> = {
@@ -17,7 +24,10 @@ const sportLabels: Record<string, string> = {
   'powerlifting-bench-press': 'Voimanosto – penkkipunnerrus',
   'powerlifting-deadlift': 'Voimanosto – maastaveto',
   'powerlifting-competition': 'Voimanostokilpailu',
+  'ice-hockey-adult-amateur-skater': 'Jääkiekko – aikuinen amatöörikenttäpelaaja (beta)',
 }
+
+const hockeyBetaEnabled = featureFlags.hockeyBeta
 
 export function SportCalendarPage() {
   const data = useAppData()
@@ -27,13 +37,38 @@ export function SportCalendarPage() {
   const [durationMinutes, setDurationMinutes] = useState(60)
   const [rpe, setRpe] = useState(6)
   const [coachDefined, setCoachDefined] = useState(false)
+  const [recurrence, setRecurrence] = useState<'NONE' | 'WEEKLY'>('NONE')
+  const [eventKind, setEventKind] = useState<
+    'ICE_PRACTICE' | 'OTHER_ACTIVITY' | 'PHYSICAL_LOAD'
+  >('OTHER_ACTIVITY')
+  const [seasonPhase, setSeasonPhase] = useState<
+    'OFF_SEASON' | 'PRE_SEASON' | 'IN_SEASON' | 'CONGESTED' | 'TRANSITION'
+  >('IN_SEASON')
+  const [hockeyEligibilityConfirmed, setHockeyEligibilityConfirmed] = useState(false)
   const [eventName, setEventName] = useState('')
   const [eventDate, setEventDate] = useState('')
   const [priority, setPriority] = useState<'A' | 'B' | 'TRAINING'>('A')
   const [pending, setPending] = useState(false)
   const [message, setMessage] = useState('')
+  const [editingId, setEditingId] = useState<string | null>(null)
+  const [editingStartsAt, setEditingStartsAt] = useState('')
+  const [calendarOpenedAt] = useState(() => Date.now())
   const selectedSport = sportCode === 'other' ? customSport.trim() : sportCode
-  const adapter = getSportAdapter(selectedSport)
+  const adapter = getSportAdapter(selectedSport, { hockeyBeta: hockeyBetaEnabled })
+  const hockeySelected = selectedSport === 'ice-hockey-adult-amateur-skater'
+  const futureFixedSessions = data.list('fixed_sport_sessions').filter((record) => {
+    const recurrence = objectValue(objectValue(record.data.session_data).recurrence)
+    return (
+      recurrence.frequency === 'WEEKLY' ||
+      new Date(stringValue(record.data.starts_at)).getTime() >= calendarOpenedAt
+    )
+  })
+  const futureCompetitions = data
+    .list('competition_events')
+    .filter(
+      (record) =>
+        new Date(stringValue(record.data.starts_at)).getTime() >= calendarOpenedAt,
+    )
 
   const saveSession = async (event: FormEvent) => {
     event.preventDefault()
@@ -46,6 +81,9 @@ export function SportCalendarPage() {
         durationMinutes,
         rpe,
         coachDefined,
+        recurrence,
+        eventKind: hockeySelected ? 'ICE_PRACTICE' : eventKind,
+        seasonPhase: hockeySelected ? seasonPhase : undefined,
       })
       setMessage('Lajiharjoitus tallennettiin ja lasketaan kokonaiskuormaan.')
     } catch (reason) {
@@ -67,6 +105,45 @@ export function SportCalendarPage() {
     } catch (reason) {
       setMessage(
         reason instanceof Error ? reason.message : 'Tapahtumaa ei voitu tallentaa.',
+      )
+    } finally {
+      setPending(false)
+    }
+  }
+
+  const beginReschedule = (record: LocalRecord) => {
+    setEditingId(record.id)
+    setEditingStartsAt(toLocalDateTimeInput(stringValue(record.data.starts_at)))
+    setMessage('')
+  }
+
+  const saveReschedule = async (record: LocalRecord) => {
+    setPending(true)
+    setMessage('')
+    try {
+      await rescheduleCalendarRecord(data, record, editingStartsAt)
+      setEditingId(null)
+      setMessage('Ajankohta päivitettiin. Tuleville harjoituksille luotiin uusi versio.')
+    } catch (reason) {
+      setMessage(
+        reason instanceof Error ? reason.message : 'Ajankohtaa ei voitu muuttaa.',
+      )
+    } finally {
+      setPending(false)
+    }
+  }
+
+  const removeEvent = async (record: LocalRecord) => {
+    if (!confirm('Poistetaanko tämä tuleva kalenteritapahtuma?')) return
+    setPending(true)
+    setMessage('')
+    try {
+      await removeCalendarRecord(data, record)
+      setEditingId(null)
+      setMessage('Tapahtuma poistettiin. Mennyt historia säilyi ennallaan.')
+    } catch (reason) {
+      setMessage(
+        reason instanceof Error ? reason.message : 'Tapahtumaa ei voitu poistaa.',
       )
     } finally {
       setPending(false)
@@ -98,11 +175,13 @@ export function SportCalendarPage() {
               value={sportCode}
               onChange={(event) => setSportCode(event.target.value)}
             >
-              {listFullySupportedDisciplines().map((code) => (
-                <option key={code} value={code}>
-                  {sportLabels[code] ?? code}
-                </option>
-              ))}
+              {listFullySupportedDisciplines({ hockeyBeta: hockeyBetaEnabled }).map(
+                (code) => (
+                  <option key={code} value={code}>
+                    {sportLabels[code] ?? code}
+                  </option>
+                ),
+              )}
               <option value="other">Muu laji</option>
             </select>
           </label>
@@ -115,6 +194,13 @@ export function SportCalendarPage() {
                 onChange={(event) => setCustomSport(event.target.value)}
               />
             </label>
+          )}
+          {hockeySelected && (
+            <div className="status-banner preview-notice">
+              <strong>Suljettu jääkiekkobeta.</strong> Tämä profiili on tarkoitettu vain
+              18 vuotta täyttäneelle amatöörikenttäpelaajalle. Juniori- ja
+              maalivahtilogiikka eivät ole käytössä.
+            </div>
           )}
           <label className="field">
             <span>Alkaa</span>
@@ -147,6 +233,61 @@ export function SportCalendarPage() {
               />
             </label>
           </div>
+          <div className="form-grid">
+            <label className="field">
+              <span>Tapahtuman tyyppi</span>
+              <select
+                value={hockeySelected ? 'ICE_PRACTICE' : eventKind}
+                disabled={hockeySelected}
+                onChange={(event) => setEventKind(event.target.value as typeof eventKind)}
+              >
+                {hockeySelected && <option value="ICE_PRACTICE">Jääharjoitus</option>}
+                <option value="OTHER_ACTIVITY">Lajiharjoitus tai muu liikunta</option>
+                <option value="PHYSICAL_LOAD">Fyysisesti kuormittava päivä</option>
+              </select>
+            </label>
+            <label className="field">
+              <span>Toistuvuus</span>
+              <select
+                value={recurrence}
+                onChange={(event) =>
+                  setRecurrence(event.target.value as typeof recurrence)
+                }
+              >
+                <option value="NONE">Kerran</option>
+                <option value="WEEKLY">Viikoittain</option>
+              </select>
+            </label>
+          </div>
+          {hockeySelected && (
+            <>
+              <label className="field">
+                <span>Kauden vaihe</span>
+                <select
+                  value={seasonPhase}
+                  onChange={(event) =>
+                    setSeasonPhase(event.target.value as typeof seasonPhase)
+                  }
+                >
+                  <option value="OFF_SEASON">Harjoituskausi</option>
+                  <option value="PRE_SEASON">Kauteen valmistava</option>
+                  <option value="IN_SEASON">Kilpailukausi</option>
+                  <option value="CONGESTED">Ruuhkainen ottelujakso</option>
+                  <option value="TRANSITION">Siirtymäkausi</option>
+                </select>
+              </label>
+              <label className="checkbox-field">
+                <input
+                  type="checkbox"
+                  checked={hockeyEligibilityConfirmed}
+                  onChange={(event) =>
+                    setHockeyEligibilityConfirmed(event.target.checked)
+                  }
+                />
+                <span>Vahvistan olevani 18+ amatöörikenttäpelaaja.</span>
+              </label>
+            </>
+          )}
           <label className="checkbox-field">
             <input
               type="checkbox"
@@ -155,7 +296,12 @@ export function SportCalendarPage() {
             />
             <span>Valmentajan määräämä – sovellus ei saa siirtää.</span>
           </label>
-          <button className="button button-primary" disabled={pending || !selectedSport}>
+          <button
+            className="button button-primary"
+            disabled={
+              pending || !selectedSport || (hockeySelected && !hockeyEligibilityConfirmed)
+            }
+          >
             Tallenna lajiharjoitus
           </button>
         </form>
@@ -204,8 +350,8 @@ export function SportCalendarPage() {
         <article className="surface-card">
           <p className="eyebrow">Tulevat lajiharjoitukset</p>
           <ul className="list-reset stack-list">
-            {data.list('fixed_sport_sessions').length ? (
-              data.list('fixed_sport_sessions').map((record) => {
+            {futureFixedSessions.length ? (
+              futureFixedSessions.map((record) => {
                 const sessionData = objectValue(record.data.session_data)
                 const code = stringValue(sessionData.sport_code)
                 return (
@@ -216,6 +362,16 @@ export function SportCalendarPage() {
                       {String(record.data.duration_minutes ?? '')} min · RPE{' '}
                       {String(record.data.rpe ?? '')}
                     </span>
+                    <CalendarRecordActions
+                      editing={editingId === record.id}
+                      editingStartsAt={editingStartsAt}
+                      pending={pending}
+                      onEdit={() => beginReschedule(record)}
+                      onEditingStartsAt={setEditingStartsAt}
+                      onSave={() => void saveReschedule(record)}
+                      onCancel={() => setEditingId(null)}
+                      onRemove={() => void removeEvent(record)}
+                    />
                   </li>
                 )
               })
@@ -227,12 +383,22 @@ export function SportCalendarPage() {
         <article className="surface-card">
           <p className="eyebrow">Tapahtumat</p>
           <ul className="list-reset stack-list">
-            {data.list('competition_events').length ? (
-              data.list('competition_events').map((record) => (
+            {futureCompetitions.length ? (
+              futureCompetitions.map((record) => (
                 <li key={record.id}>
                   <span className="pill">{stringValue(record.data.priority)}</span>
                   <strong>{stringValue(record.data.name)}</strong>
                   <span>{fiDate(stringValue(record.data.starts_at))}</span>
+                  <CalendarRecordActions
+                    editing={editingId === record.id}
+                    editingStartsAt={editingStartsAt}
+                    pending={pending}
+                    onEdit={() => beginReschedule(record)}
+                    onEditingStartsAt={setEditingStartsAt}
+                    onSave={() => void saveReschedule(record)}
+                    onCancel={() => setEditingId(null)}
+                    onRemove={() => void removeEvent(record)}
+                  />
                 </li>
               ))
             ) : (
@@ -243,4 +409,76 @@ export function SportCalendarPage() {
       </section>
     </div>
   )
+}
+
+function CalendarRecordActions({
+  editing,
+  editingStartsAt,
+  pending,
+  onEdit,
+  onEditingStartsAt,
+  onSave,
+  onCancel,
+  onRemove,
+}: {
+  editing: boolean
+  editingStartsAt: string
+  pending: boolean
+  onEdit: () => void
+  onEditingStartsAt: (value: string) => void
+  onSave: () => void
+  onCancel: () => void
+  onRemove: () => void
+}) {
+  return editing ? (
+    <div className="form-stack compact-form-stack">
+      <label className="field">
+        <span>Uusi ajankohta</span>
+        <input
+          type="datetime-local"
+          value={editingStartsAt}
+          onChange={(event) => onEditingStartsAt(event.target.value)}
+        />
+      </label>
+      <div className="button-row">
+        <button
+          className="button button-primary"
+          type="button"
+          disabled={pending || !editingStartsAt}
+          onClick={onSave}
+        >
+          Tallenna siirto
+        </button>
+        <button
+          className="button button-secondary"
+          type="button"
+          disabled={pending}
+          onClick={onCancel}
+        >
+          Peruuta
+        </button>
+      </div>
+    </div>
+  ) : (
+    <div className="button-row">
+      <button
+        className="button button-secondary"
+        type="button"
+        disabled={pending}
+        onClick={onEdit}
+      >
+        Siirrä
+      </button>
+      <button className="text-button" type="button" disabled={pending} onClick={onRemove}>
+        Poista
+      </button>
+    </div>
+  )
+}
+
+function toLocalDateTimeInput(value: string) {
+  const date = new Date(value)
+  if (!Number.isFinite(date.getTime())) return ''
+  const local = new Date(date.getTime() - date.getTimezoneOffset() * 60_000)
+  return local.toISOString().slice(0, 16)
 }

@@ -1,7 +1,11 @@
 import { ArrowLeft, ChevronRight } from 'lucide-react'
 import { Link, useParams } from 'react-router-dom'
 import {
+  doseLabelFi,
+  doseUnitCount,
   evaluateWorkoutFeedback,
+  legacyDose,
+  normalizePrescriptionV2,
   type PrescribedSession,
   type WorkoutFeedback,
 } from '../../domain/coaching'
@@ -41,9 +45,30 @@ function findWorkout(data: ReturnType<typeof useAppData>, log: LocalRecord) {
 
 function prescriptionFrom(workout: LocalRecord | null) {
   const value = objectValue(workout?.data.prescription)
-  return typeof value.id === 'string' && Array.isArray(value.exercises)
-    ? (value as unknown as PrescribedSession)
-    : null
+  if (
+    typeof value.id !== 'string' ||
+    (!Array.isArray(value.exercises) && !Array.isArray(value.blocks))
+  ) {
+    return null
+  }
+  const legacy = value as unknown as PrescribedSession
+  return normalizePrescriptionV2({
+    ...legacy,
+    exercises: Array.isArray(value.exercises) ? legacy.exercises : (legacy.blocks ?? []),
+  })
+}
+
+function historyUnitLabel(
+  exercise: PrescribedSession['exercises'][number],
+  index: number,
+) {
+  const dose = legacyDose(exercise)
+  if (dose.kind === 'INTERVAL_BLOCKS' || dose.kind === 'SPRINT_REPS') {
+    return `${index + 1}. veto`
+  }
+  if (dose.kind === 'CONTINUOUS_TIME') return 'Työosuus'
+  if (dose.kind === 'SKILL_DRILL') return `${index + 1}. osuus`
+  return `${index + 1}. sarja`
 }
 
 function feedbackFrom(log: LocalRecord) {
@@ -165,7 +190,7 @@ function HistoryDetail({ log }: { log: LocalRecord }) {
     (record) => objectValue(record.data.data).completed === true,
   ).length
   const plannedSets = prescription?.exercises.reduce(
-    (total, exercise) => total + exercise.sets,
+    (total, exercise) => total + doseUnitCount(exercise),
     0,
   )
   const status = stringValue(
@@ -202,7 +227,7 @@ function HistoryDetail({ log }: { log: LocalRecord }) {
           <p>0 = lepo, 10 = maksimaalinen</p>
         </div>
         <div className="surface-card metric-card">
-          <span>Sarjat</span>
+          <span>Kirjatut osuudet</span>
           <strong>
             {completedSets}/{plannedSets ?? setLogs.length}
           </strong>
@@ -212,7 +237,7 @@ function HistoryDetail({ log }: { log: LocalRecord }) {
 
       <section className="surface-card">
         <p className="eyebrow">Suunnitelma verrattuna toteumaan</p>
-        <h2>Liikkeet ja sarjat</h2>
+        <h2>Liikkeet ja työosuudet</h2>
         {prescription ? (
           <ol className="history-exercise-list">
             {prescription.exercises.map((exercise) => {
@@ -226,10 +251,7 @@ function HistoryDetail({ log }: { log: LocalRecord }) {
                     <div>
                       <h3>{exercise.nameFi}</h3>
                       <p>
-                        Suunnitelma: {exercise.sets} ×{' '}
-                        {exercise.repetitions ??
-                          `${Math.round((exercise.durationSeconds ?? 0) / 60)} min`}{' '}
-                        · RPE {exercise.targetRpe}
+                        Suunnitelma: {doseLabelFi(exercise)} · RPE {exercise.targetRpe}
                       </p>
                     </div>
                     <span className="pill">
@@ -238,14 +260,14 @@ function HistoryDetail({ log }: { log: LocalRecord }) {
                           (record) => objectValue(record.data.data).completed === true,
                         ).length
                       }
-                      /{exercise.sets} sarjaa
+                      /{doseUnitCount(exercise)} osuutta
                     </span>
                   </div>
                   {actual.length > 0 && (
                     <div className="history-set-list">
                       {actual.map((record, index) => (
                         <span key={record.id}>
-                          {index + 1}. sarja:{' '}
+                          {historyUnitLabel(exercise, index)}:{' '}
                           {objectValue(record.data.data).completed === true
                             ? 'valmis'
                             : 'ei valmis'}

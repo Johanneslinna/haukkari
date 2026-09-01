@@ -1,0 +1,220 @@
+name: Haukkari release gate
+
+on:
+  pull_request:
+    branches:
+      - main
+  push:
+    branches:
+      - main
+  merge_group:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-gate-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+env:
+  NODE_VERSION: '24'
+
+jobs:
+  quality:
+    name: Quality gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Use Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+
+      - name: Install locked dependencies
+        run: npm ci
+
+      - name: Run content, static, unit, integration, privacy, build, and PWA gates
+        run: npm run check
+
+  browser:
+    name: Browser E2E
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Use Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+
+      - name: Install locked dependencies
+        run: npm ci
+
+      - name: Install Playwright browsers and system dependencies
+        run: npx playwright install --with-deps chromium webkit
+
+      - name: Run general browser regression suite
+        run: npm run e2e
+
+      - name: Run application and PWA browser suite
+        run: npm run e2e:app
+
+      - name: Upload Playwright diagnostics on failure
+        if: failure()
+        uses: actions/upload-artifact@v6
+        with:
+          name: playwright-diagnostics-${{ github.run_id }}
+          path: |
+            playwright-report/
+            playwright-report-app/
+            test-results/
+          if-no-files-found: ignore
+          retention-days: 7
+
+  database:
+    name: Database, sync, and Edge Functions
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Use Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+
+      - name: Install locked dependencies
+        run: npm ci
+
+      - name: Start and reset isolated local Supabase
+        run: |
+          npm run db:start
+          npm run db:reset
+
+      - name: Run pgTAP and RLS tests
+        run: npm run db:test
+
+      - name: Run Auth, REST, and Storage isolation tests
+        run: npm run db:test-api
+
+      - name: Run local sync integration tests
+        run: npm run db:test-sync
+
+      - name: Install Chromium for two-browser sync tests
+        run: npx playwright install --with-deps chromium
+
+      - name: Run two-browser sync E2E tests
+        run: npm run db:test-sync-e2e
+
+      - name: Upload sync Playwright diagnostics on failure
+        if: failure()
+        uses: actions/upload-artifact@v6
+        with:
+          name: sync-playwright-diagnostics-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            playwright-report-sync/
+            test-results/
+          if-no-files-found: ignore
+          retention-days: 7
+
+      - name: Prepare ephemeral Edge Function test configuration
+        shell: bash
+        run: |
+          node <<'NODE' > "$RUNNER_TEMP/vapid.env"
+          const { generateKeyPairSync } = require('node:crypto')
+          const { privateKey } = generateKeyPairSync('ec', { namedCurve: 'P-256' })
+          const jwk = privateKey.export({ format: 'jwk' })
+          const publicKey = Buffer.concat([
+            Buffer.from([4]),
+            Buffer.from(jwk.x, 'base64url'),
+            Buffer.from(jwk.y, 'base64url'),
+          ]).toString('base64url')
+          process.stdout.write(`VAPID_PUBLIC_KEY=${publicKey}\nVAPID_PRIVATE_KEY=${jwk.d}\n`)
+          NODE
+          {
+            echo 'APP_PUBLIC_URL=http://127.0.0.1:4173'
+            echo 'PUSH_CRON_SECRET=local-phase5-cron-test-secret'
+            echo 'VAPID_SUBJECT=mailto:ci@haukkari.invalid'
+            cat "$RUNNER_TEMP/vapid.env"
+          } > "$RUNNER_TEMP/haukkari-functions.env"
+
+      - name: Serve local Edge Functions
+        shell: bash
+        run: |
+          npx supabase functions serve \
+            --env-file "$RUNNER_TEMP/haukkari-functions.env" \
+            > "$RUNNER_TEMP/supabase-functions.log" 2>&1 &
+          echo $! > "$RUNNER_TEMP/supabase-functions.pid"
+          for attempt in {1..60}; do
+            status="$(curl --silent --output /dev/null --write-out '%{http_code}' \
+              --request POST \
+              http://127.0.0.1:54321/functions/v1/send-reminders || true)"
+            if [ "$status" = '401' ]; then
+              exit 0
+            fi
+            sleep 1
+          done
+          cat "$RUNNER_TEMP/supabase-functions.log"
+          exit 1
+
+      - name: Run account deletion Edge Function test
+        run: npm run db:test-delete-account
+
+      - name: Run reminder Edge Function test
+        env:
+          PHASE5_CRON_TEST_SECRET: local-phase5-cron-test-secret
+        run: npm run db:test-reminders
+
+      - name: Upload Supabase diagnostics on failure
+        if: failure()
+        uses: actions/upload-artifact@v6
+        with:
+          name: supabase-diagnostics-${{ github.run_id }}
+          path: ${{ runner.temp }}/supabase-functions.log
+          if-no-files-found: ignore
+          retention-days: 7
+
+      - name: Stop isolated local services
+        if: always()
+        shell: bash
+        run: |
+          if [ -f "$RUNNER_TEMP/supabase-functions.pid" ]; then
+            kill "$(cat "$RUNNER_TEMP/supabase-functions.pid")" || true
+          fi
+          npm run db:stop || true
+
+  release-gate:
+    name: Release gate
+    if: always()
+    needs:
+      - quality
+      - browser
+      - database
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require every release gate
+        env:
+          QUALITY_RESULT: ${{ needs.quality.result }}
+          BROWSER_RESULT: ${{ needs.browser.result }}
+          DATABASE_RESULT: ${{ needs.database.result }}
+        shell: bash
+        run: |
+          if [ "$QUALITY_RESULT" != 'success' ] || \
+             [ "$BROWSER_RESULT" != 'success' ] || \
+             [ "$DATABASE_RESULT" != 'success' ]; then
+            echo "Quality: $QUALITY_RESULT"
+            echo "Browser: $BROWSER_RESULT"
+            echo "Database: $DATABASE_RESULT"
+            exit 1
+          fi
+          echo 'All Haukkari release gates passed.'

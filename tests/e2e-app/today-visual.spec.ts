@@ -2,8 +2,6 @@ import { expect, test } from '@playwright/test'
 import { mkdir } from 'node:fs/promises'
 import path from 'node:path'
 
-const outputDirectory = path.resolve('docs/ui-validation/haukkari-today')
-
 test('Tänään-näkymän responsiiviset koot ja keskeiset tilat', async ({
   page,
 }, testInfo) => {
@@ -11,6 +9,8 @@ test('Tänään-näkymän responsiiviset koot ja keskeiset tilat', async ({
     testInfo.project.name !== 'desktop-keyboard',
     'Visuaaliset kuvat tuotetaan kerran Chromiumilla.',
   )
+  const outputDirectory = testInfo.outputPath('haukkari-today')
+  await page.clock.install({ time: new Date('2026-08-27T08:00:00.000Z') })
   await mkdir(outputDirectory, { recursive: true })
   await page.addInitScript(() => {
     localStorage.setItem('treenikompassi.theme', 'LIGHT')
@@ -76,7 +76,11 @@ test('Tänään-näkymän responsiiviset koot ja keskeiset tilat', async ({
 
   await page.setViewportSize({ width: 390, height: 844 })
   await page.goto('/?today-state=normal')
-  await page.getByRole('button', { name: 'Vaihda tummaan teemaan' }).click()
+  await page
+    .getByRole('button', {
+      name: 'Teema: vaalea. Vaihda seuraavaan tilaan.',
+    })
+    .click()
   await expect(page.locator('html')).toHaveAttribute('data-theme', 'dark')
   await expect(page.getByRole('link', { name: 'Aloita treeni' })).toBeVisible()
   await page.evaluate(() => localStorage.setItem('treenikompassi.theme', 'LIGHT'))
@@ -92,6 +96,7 @@ test('Tänään-näkymän responsiiviset koot ja keskeiset tilat', async ({
 
   for (const state of states) {
     await page.goto(`/?today-state=${state.query}`)
+    await expect(page.locator('.today-page')).toBeVisible()
     if (state.query === 'red-stop') {
       await expect(page.getByText('Harjoittelua ei suositella')).toBeVisible()
       await expect(page.getByRole('link', { name: 'Aloita treeni' })).toHaveCount(0)

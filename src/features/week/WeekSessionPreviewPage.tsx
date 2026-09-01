@@ -1,7 +1,17 @@
 import { Link, useParams } from 'react-router-dom'
+import { doseLabelFi, strengthWeekRoleLabelFi } from '../../domain/coaching'
 import { useAppData } from '../app-data/appDataContextValue'
 import { activeTrainingPlan } from '../coaching/coachingActions'
-import { planSessions, sessionLabels } from '../coaching/coachingData'
+import {
+  calendarContextForProfile,
+  formatEstimatedSeconds,
+  planSessions,
+  planStrengthWeek,
+  prescriptionDecisionReasons,
+  prescriptionTimeBreakdownItems,
+  sessionLabels,
+  sessionTotalDurationMinutes,
+} from '../coaching/coachingData'
 
 const weekdays = [
   'Maanantai',
@@ -30,9 +40,10 @@ const variantLabels = {
 export function WeekSessionPreviewPage() {
   const data = useAppData()
   const { sessionId = '' } = useParams()
-  const session = planSessions(activeTrainingPlan(data)).find(
-    (candidate) => candidate.id === sessionId,
-  )
+  const clock = calendarContextForProfile(data.latest('profiles'))
+  const activePlan = activeTrainingPlan(data)
+  const weekDecision = planStrengthWeek(activePlan)
+  const session = planSessions(activePlan).find((candidate) => candidate.id === sessionId)
 
   if (!session) {
     return (
@@ -52,8 +63,12 @@ export function WeekSessionPreviewPage() {
   }
 
   const prescription = session.prescriptionDetail
+  const strengthWeek = session.strengthWeekContext
   const title = session.title ?? sessionLabels[session.kind]
-  const isToday = session.day === (new Date().getDay() || 7)
+  const isToday = session.day === clock.weekday
+  const totalDurationMinutes = sessionTotalDurationMinutes(session)
+  const timeBreakdown = prescription ? prescriptionTimeBreakdownItems(prescription) : []
+  const decisionReasons = prescription ? prescriptionDecisionReasons(prescription) : []
 
   return (
     <div className="page-stack workout-page week-session-preview">
@@ -62,7 +77,7 @@ export function WeekSessionPreviewPage() {
           <p className="eyebrow">Harjoituksen ennakkonäkymä</p>
           <h1>{title}</h1>
           <p>
-            {weekdays[session.day - 1]} · {session.durationMinutes} min ·{' '}
+            {weekdays[session.day - 1]} · {totalDurationMinutes} min kokonaiskesto ·{' '}
             {intensityLabels[session.intensity]}
           </p>
         </div>
@@ -75,6 +90,52 @@ export function WeekSessionPreviewPage() {
         <strong>Tämä on ennakkonäkymä.</strong> Ohjelman katsominen ei käynnistä
         harjoitusta eikä merkitse sitä suoritetuksi.
       </div>
+
+      {weekDecision && (
+        <section
+          className={`status-banner ${
+            weekDecision.status === 'SUPPORTED'
+              ? 'status-banner-success'
+              : 'status-banner-warning'
+          }`}
+          aria-label="Voimaviikon tukitila"
+        >
+          <strong>
+            {weekDecision.status === 'SUPPORTED'
+              ? 'Viikko on tuettu.'
+              : weekDecision.status === 'PARTIAL'
+                ? 'Viikko on osittainen.'
+                : 'Viikkoa ei voida muodostaa tuettuna.'}
+          </strong>
+          <p>{weekDecision.supportDecision?.messageFi}</p>
+          <p>
+            <strong>Seuraava askel:</strong> {weekDecision.supportDecision?.actionFi}
+          </p>
+          {weekDecision.supportDecision?.reasonCode ===
+            'PULL_PATTERN_EQUIPMENT_REQUIRED' && (
+            <Link className="button button-secondary" to="/asetukset#harjoitusvalineet">
+              Päivitä harjoitusvälineet
+            </Link>
+          )}
+        </section>
+      )}
+
+      {strengthWeek && (
+        <section className="surface-card">
+          <p className="eyebrow">
+            Voimaviikon harjoitus {strengthWeek.sequenceIndex + 1}
+          </p>
+          <h2>{strengthWeekRoleLabelFi(strengthWeek.role)}</h2>
+          <p>
+            Tämä sama versionoitu harjoitusrunko avautuu suoritukseen. Päivän
+            kuntotarkistus voi vain keventää, lyhentää tai estää sen ja kertoo silloin
+            muutoksen syyn.
+          </p>
+          {session.notes?.map((note) => (
+            <p key={note}>{note}</p>
+          ))}
+        </section>
+      )}
 
       {session.variants && session.variants.length > 0 && (
         <section className="surface-card">
@@ -90,6 +151,26 @@ export function WeekSessionPreviewPage() {
           <p className="muted-copy">
             Päivän kuntotarkistus suosittelee näistä vointiin ja käytettävissä olevaan
             aikaan sopivaa versiota.
+          </p>
+        </section>
+      )}
+
+      {prescription?.timeBreakdown && (
+        <section className="surface-card" aria-labelledby="time-breakdown-heading">
+          <p className="eyebrow">Kokonaiskesto</p>
+          <h2 id="time-breakdown-heading">Mistä {totalDurationMinutes} min muodostuu?</h2>
+          <div className="preview-variant-list" aria-label="Harjoituksen ajan erittely">
+            {timeBreakdown.map((item) => (
+              <span key={item.label}>
+                <strong>{item.label}</strong>
+                <small>{formatEstimatedSeconds(item.seconds)}</small>
+              </span>
+            ))}
+          </div>
+          <p className="muted-copy">
+            Kokonaiskesto sisältää koko harjoituksen alusta loppuun. Päivän enimmäisaika
+            on {prescription.timeBudgetMinutes ?? totalDurationMinutes} min, jota
+            suunnitelma ei ylitä.
           </p>
         </section>
       )}
@@ -121,14 +202,10 @@ export function WeekSessionPreviewPage() {
                     <h3>{exercise.nameFi}</h3>
                     <p>{exercise.instructionsFi}</p>
                     <div className="exercise-dose">
-                      <strong>
-                        {exercise.repetitions ? `${exercise.sets} sarjaa` : '1 työosuus'}
-                      </strong>
-                      <span>
-                        {exercise.repetitions ??
-                          `${Math.round((exercise.durationSeconds ?? 0) / 60)} min`}
-                      </span>
-                      <span>{exercise.restSeconds} s palautus sarjojen välissä</span>
+                      <strong>{doseLabelFi(exercise)}</strong>
+                      {exercise.restSeconds > 0 && (
+                        <span>{exercise.restSeconds} s palautus suoritusten välissä</span>
+                      )}
                       <span>RPE {exercise.targetRpe}/10</span>
                     </div>
                     <small className="preview-load-guidance">
@@ -145,13 +222,20 @@ export function WeekSessionPreviewPage() {
             <details className="decision-details">
               <summary>Miksi tämä harjoitus on suunnitelmassa?</summary>
               <ul>
-                {prescription.decisionTrace.rules.map((rule) => (
-                  <li key={rule.ruleId}>{rule.message}</li>
+                {decisionReasons.map((reason) => (
+                  <li key={reason}>{reason}</li>
                 ))}
               </ul>
-              <p>{prescription.progression}</p>
             </details>
           </>
+        ) : session.unsupportedPrescription ? (
+          <div className="page-stack compact-stack status-banner status-banner-warning">
+            <strong>Harjoitusta ei voitu muodostaa turvallisesti.</strong>
+            <p>{session.unsupportedPrescription.userMessage}</p>
+            <small>
+              Syy: {session.unsupportedPrescription.reasonCode.replaceAll('_', ' ')}
+            </small>
+          </div>
         ) : (
           <div className="page-stack compact-stack">
             <p>

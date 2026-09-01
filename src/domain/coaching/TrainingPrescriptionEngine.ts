@@ -8,9 +8,66 @@ import type {
   SessionKind,
   WorkoutVariant,
   ExerciseLoadType,
+  ConfirmedLimitationTag,
+  PrescriptionDose,
+  VerifiedNextLoad,
+  StrengthWeekSessionRole,
 } from './types'
+import {
+  doseDurationSeconds,
+  legacyDose,
+  normalizePrescriptionV2,
+  prescriptionDurationSeconds,
+  prescriptionBlocks,
+  withExerciseDose,
+  withV2Blocks,
+} from './PrescriptionContract'
+import { DecisionRecorder } from './engine'
+import {
+  ADULT_RESISTANCE_RULE_VERSION,
+  defaultResistanceLoadContextId,
+  freezeSevereDomsProgression,
+  prescribeAdultResistanceSession,
+  type AdultResistanceSetHistory,
+} from './AdultResistanceEngine'
+import {
+  publishedExerciseCatalog,
+  TRAINING_CONTENT_RELEASE,
+} from './content/TrainingContent'
+import type { PrescriptionResult, UnsupportedPrescription } from './types'
+import {
+  evaluateStrengthSafetyGate,
+  strengthSafetyGateMessage,
+  type StrengthSafetyGateReasonCode,
+} from './StrengthSafetyGate'
+import {
+  addPlannedSets,
+  calculatePlannedMuscleVolume,
+  calculateRollingMuscleVolume,
+  maximumAdditionalSets,
+  mergeMuscleVolume,
+  type MuscleVolume,
+} from './StrengthVolumePolicy'
+import {
+  ADULT_STRENGTH_TIME_POLICY,
+  STRENGTH_TIME_REASON_CODES,
+  fitStrengthPrescriptionToTimeBudget,
+} from './TimeBudgetPolicy'
+import type { StrengthTrainingBackground } from './ReturnToStrengthPolicy'
+import {
+  refreshStrengthRoleStructureDecision,
+  STRENGTH_WEEK_REASON_CODES,
+} from './StrengthWeekPolicy'
+import {
+  SEVERE_DOMS_STRENGTH_MAXIMUM_RPE,
+  SEVERE_DOMS_STRENGTH_REASON_CODE,
+  SEVERE_DOMS_STRENGTH_POLICY_VERSION,
+  SEVERE_DOMS_STRENGTH_PROGRESSION_REASON_CODE,
+  SEVERE_DOMS_STRENGTH_ROUNDING_RULE,
+  SEVERE_DOMS_STRENGTH_VOLUME_MULTIPLIER,
+} from './ReadinessEngine'
 
-export const TRAINING_RULE_VERSION = '2026.08.25-v1'
+export const TRAINING_RULE_VERSION = '2026.08.31-v3'
 
 export type PrescriptionProfile = {
   goal: GoalType
@@ -21,281 +78,47 @@ export type PrescriptionProfile = {
   likes?: string
   dislikes?: string
   limitations?: string
+  confirmedLimitationTags?: ConfirmedLimitationTag[]
   healthBlocked?: boolean
+  enduranceBackgroundKnown?: boolean
+  medicationAffectsHeartRate?: boolean
   generatedAt?: string
+  age?: number
+  environment?: 'HOME' | 'GYM'
+  readiness?: ReadinessState
+  supervisionAvailable?: boolean
+  strengthHistory?: AdultResistanceSetHistory[]
+  /** Käyttäjän vahvistamat kuormakohtaiset seuraavat vaihtoehdot. */
+  verifiedNextLoads?: VerifiedNextLoad[]
+  strengthTrainingBackground?: StrengthTrainingBackground
+  strengthWeekRole?: StrengthWeekSessionRole
+  contentReleaseId?: string
+  ruleVersion?: string
 }
 
-type ExerciseTemplate = Omit<
-  ExercisePrescription,
-  | 'id'
-  | 'sets'
-  | 'repetitions'
-  | 'durationSeconds'
-  | 'restSeconds'
-  | 'targetRpe'
-  | 'targetRir'
-  | 'loadGuidance'
-  | 'loadType'
-  | 'loadLabelFi'
-  | 'loadOptions'
-  | 'techniqueVideoUrl'
-  | 'keyExercise'
->
-
-const exerciseLibrary: ExerciseTemplate[] = [
-  {
-    code: 'CHAIR_SQUAT',
-    nameFi: 'Tuolilta ylösnousu',
-    category: 'Kyykky',
-    equipment: ['Kehonpaino'],
-    instructionsFi:
-      'Pidä jalkapohjat maassa, nouse hallitusti ja kosketa tuolia kevyesti jokaisella toistolla.',
-    stopCondition:
-      'Lopeta, jos kipu voimistuu, tasapaino pettää tai tekniikka ei pysy hallittuna.',
-    substitutions: ['Kehonpainokyykky', 'Maljakyykky'],
-  },
-  {
-    code: 'GOBLET_SQUAT',
-    nameFi: 'Maljakyykky',
-    category: 'Kyykky',
-    equipment: ['Käsipainot', 'Kahvakuula'],
-    instructionsFi:
-      'Pidä paino rinnan edessä, polvet varpaiden suuntaan ja käytä kivutonta liikerataa.',
-    stopCondition: 'Lopeta, jos kipu voimistuu tai vartalon hallinta katoaa.',
-    substitutions: ['Tuolilta ylösnousu', 'Jalkaprässi'],
-  },
-  {
-    code: 'LEG_PRESS',
-    nameFi: 'Jalkaprässi',
-    category: 'Kyykky',
-    equipment: ['Kuntosalilaitteet'],
-    instructionsFi: 'Pidä alaselkä tuettuna ja työnnä polvet varpaiden suuntaan.',
-    stopCondition: 'Lopeta, jos polvi- tai selkäkipu voimistuu.',
-    substitutions: ['Maljakyykky', 'Tuolilta ylösnousu'],
-  },
-  {
-    code: 'GLUTE_BRIDGE',
-    nameFi: 'Lantionnosto',
-    category: 'Lannesarana',
-    equipment: ['Kehonpaino'],
-    instructionsFi:
-      'Paina jalkapohjat lattiaan, nosta lantio ilman alaselän yliojennusta ja laske rauhallisesti.',
-    stopCondition: 'Lopeta, jos alaselkään tai takareiteen tulee terävää kipua.',
-    substitutions: ['Romanialainen maastaveto', 'Bird dog'],
-  },
-  {
-    code: 'ROMANIAN_DEADLIFT',
-    nameFi: 'Romanialainen maastaveto',
-    category: 'Lannesarana',
-    equipment: ['Käsipainot', 'Kahvakuula', 'Levytanko ja painot'],
-    instructionsFi:
-      'Vie lantiota taakse, pidä kuorma lähellä vartaloa ja selkä hallitussa neutraaliasennossa.',
-    stopCondition: 'Lopeta, jos selän asento ei pysy tai kipu voimistuu.',
-    substitutions: ['Lantionnosto', 'Taljaveto jalkojen välistä'],
-  },
-  {
-    code: 'ELEVATED_PUSH_UP',
-    nameFi: 'Korotettu punnerrus',
-    category: 'Työntö',
-    equipment: ['Kehonpaino'],
-    instructionsFi:
-      'Tue kädet vakaalle tasolle, pidä vartalo suorana ja laske rinta hallitusti kohti tukea.',
-    stopCondition: 'Lopeta, jos olkapääkipu voimistuu tai vartalon linja pettää.',
-    substitutions: ['Punnerrus', 'Käsipainopenkkipunnerrus'],
-  },
-  {
-    code: 'DUMBBELL_FLOOR_PRESS',
-    nameFi: 'Käsipainopunnerrus lattialla',
-    category: 'Työntö',
-    equipment: ['Käsipainot'],
-    instructionsFi:
-      'Pidä ranteet suorina, laske olkavarret rauhallisesti lattiaan ja työnnä ilman kiirettä.',
-    stopCondition: 'Lopeta, jos rintaan tai olkapäähän tulee poikkeavaa kipua.',
-    substitutions: ['Korotettu punnerrus', 'Rintaprässi'],
-  },
-  {
-    code: 'CHEST_PRESS',
-    nameFi: 'Rintaprässi',
-    category: 'Työntö',
-    equipment: ['Kuntosalilaitteet'],
-    instructionsFi: 'Säädä istuin, tue selkä ja työnnä kahvat hallitusti eteen.',
-    stopCondition: 'Lopeta, jos olkapää- tai rintakipu voimistuu.',
-    substitutions: ['Korotettu punnerrus', 'Käsipainopunnerrus lattialla'],
-  },
-  {
-    code: 'PRONE_W_RAISE',
-    nameFi: 'Vatsamakuun W-nosto',
-    category: 'Veto',
-    equipment: ['Kehonpaino'],
-    instructionsFi:
-      'Makaa vatsallasi, vedä kyynärpäät W-asentoon ja nosta käsiä vain vähän puristaen lapoja yhteen.',
-    stopCondition: 'Lopeta, jos niska- tai olkapääkipu voimistuu.',
-    substitutions: ['Soutu vastuskuminauhalla', 'Yhden käden soutu'],
-  },
-  {
-    code: 'BAND_ROW',
-    nameFi: 'Soutu vastuskuminauhalla',
-    category: 'Veto',
-    equipment: ['Vastuskuminauhat'],
-    instructionsFi:
-      'Kiinnitä nauha varmasti, vedä kyynärpäät kohti kylkiä ja palauta rauhallisesti.',
-    stopCondition: 'Lopeta, jos kiinnitys liikkuu tai olkapääkipu voimistuu.',
-    substitutions: ['Yhden käden soutu', 'Soutu laitteessa'],
-  },
-  {
-    code: 'ONE_ARM_ROW',
-    nameFi: 'Yhden käden soutu',
-    category: 'Veto',
-    equipment: ['Käsipainot', 'Kahvakuula'],
-    instructionsFi:
-      'Tue vapaa käsi, vedä kyynärpää kohti kylkeä ja vältä vartalon kiertoa.',
-    stopCondition: 'Lopeta, jos selkä- tai olkapääkipu voimistuu.',
-    substitutions: ['Soutu vastuskuminauhalla', 'Soutu laitteessa'],
-  },
-  {
-    code: 'SEATED_ROW',
-    nameFi: 'Soutu laitteessa',
-    category: 'Veto',
-    equipment: ['Kuntosalilaitteet'],
-    instructionsFi: 'Pidä rintakehä ryhdikkäänä ja vedä kahvat kohti kylkiä.',
-    stopCondition: 'Lopeta, jos olkapää- tai selkäkipu voimistuu.',
-    substitutions: ['Yhden käden soutu', 'Soutu vastuskuminauhalla'],
-  },
-  {
-    code: 'BIRD_DOG',
-    nameFi: 'Bird dog',
-    category: 'Keskivartalo',
-    equipment: ['Kehonpaino'],
-    instructionsFi:
-      'Ojenna vastakkainen käsi ja jalka ilman lantion kiertoa. Pidä hengitys rauhallisena.',
-    stopCondition: 'Lyhennä liikettä tai lopeta, jos alaselkäkipu voimistuu.',
-    substitutions: ['Dead bug', 'Sivulankku polvet maassa'],
-  },
-  {
-    code: 'DEAD_BUG',
-    nameFi: 'Dead bug',
-    category: 'Keskivartalo',
-    equipment: ['Kehonpaino'],
-    instructionsFi:
-      'Pidä alaselkä hallittuna, hengitä ulos ojennuksen aikana ja käytä liikerataa, jonka hallitset.',
-    stopCondition: 'Lyhennä liikettä tai lopeta, jos selkäkipu voimistuu.',
-    substitutions: ['Bird dog', 'Sivulankku polvet maassa'],
-  },
-  {
-    code: 'SPLIT_SQUAT',
-    nameFi: 'Tuettu askelkyykky',
-    category: 'Yhden jalan voima',
-    equipment: ['Kehonpaino'],
-    instructionsFi:
-      'Ota tarvittaessa tukea, laskeudu suoraan alas ja pidä etummaisen jalan jalkapohja maassa.',
-    stopCondition: 'Lopeta, jos tasapaino pettää tai polvikipu voimistuu.',
-    substitutions: ['Tuolilta ylösnousu', 'Matala porrasnousu'],
-  },
-]
-
-const bodyweightCodes = new Set([
-  'CHAIR_SQUAT',
-  'GLUTE_BRIDGE',
-  'ELEVATED_PUSH_UP',
-  'PRONE_W_RAISE',
-  'BIRD_DOG',
-  'DEAD_BUG',
-  'SPLIT_SQUAT',
-])
-
-const techniqueVideos: Partial<Record<string, string>> = {
-  GOBLET_SQUAT: 'https://www.youtube.com/watch?v=nfX7IFK9UNI',
-  ROMANIAN_DEADLIFT: 'https://www.youtube.com/watch?v=H71kODJpFus',
-  DUMBBELL_FLOOR_PRESS: 'https://www.youtube.com/watch?v=qHCI9rK7HqM',
-  BIRD_DOG: 'https://www.youtube.com/watch?v=egKWoMZ6cXM',
+export type PrescriptionAdaptationSafetyContext = {
+  /** Nykyisestä profiilista laskettu ikä; ei prescription-snapshotista. */
+  age: number | undefined
+  /** Nykyisen päivän tallennettu kuntotarkistustulos. */
+  readiness: ReadinessState | undefined
+  /** Nykyisen terveysseulonnan nimenomainen estotila. */
+  healthBlocked: boolean | undefined
+  /** True vain, kun nykyiset turvallisuus- ja legacy-rajoitetiedot on vahvistettu. */
+  safetyInformationComplete: boolean | undefined
+  /** Nykyisen kuntotarkistuksen vakaat reason codet; vanha snapshot ei saa keksiä niitä. */
+  readinessReasonCodes?: readonly string[]
 }
 
-function loadTracking(template: ExerciseTemplate): {
-  loadType: ExerciseLoadType
-  loadLabelFi: string
-  loadOptions?: string[]
-} {
-  if (template.code === 'BAND_ROW') {
-    return {
-      loadType: 'BAND',
-      loadLabelFi: 'Nauhan vastus',
-      loadOptions: ['Erittäin kevyt', 'Kevyt', 'Keskivahva', 'Vahva', 'Erittäin vahva'],
-    }
-  }
-  if (bodyweightCodes.has(template.code)) {
-    return { loadType: 'BODYWEIGHT', loadLabelFi: 'Lisäpaino tai avustus (valinnainen)' }
-  }
-  if (template.equipment.includes('Kuntosalilaitteet')) {
-    return { loadType: 'MACHINE_KG', loadLabelFi: 'Laitteen kuorma kg' }
-  }
-  if (template.code === 'DUMBBELL_FLOOR_PRESS' || template.code === 'ONE_ARM_ROW') {
-    return { loadType: 'DUMBBELL_KG_EACH', loadLabelFi: 'Kuorma kg / käsipaino' }
-  }
-  return { loadType: 'EXTERNAL_KG', loadLabelFi: 'Kuorma kg' }
+export type PrescriptionAdaptationProgressContext = {
+  /** Jo pysyvästi kirjatut sarjat liike-id:n mukaan käynnissä olevaa harjoitusta varten. */
+  completedUnitsByExerciseId?: Readonly<Record<string, number>>
 }
 
-function hasEquipment(template: ExerciseTemplate, available: string[]) {
-  return template.equipment.some(
-    (item) => item === 'Kehonpaino' || available.includes(item),
+function strengthSafetyInformationComplete(profile: PrescriptionProfile) {
+  const hasLegacyLimitationText = (profile.limitations?.trim().length ?? 0) > 0
+  return !(
+    hasLegacyLimitationText && (profile.confirmedLimitationTags?.length ?? 0) === 0
   )
-}
-
-function chooseExercise(
-  category: string,
-  available: string[],
-  dislikes: string,
-  fallbackCode: string,
-) {
-  const candidates = exerciseLibrary
-    .filter((item) => item.category === category && hasEquipment(item, available))
-    .sort((left, right) => {
-      const leftSpecific = left.equipment.some(
-        (item) => item !== 'Kehonpaino' && available.includes(item),
-      )
-      const rightSpecific = right.equipment.some(
-        (item) => item !== 'Kehonpaino' && available.includes(item),
-      )
-      return Number(rightSpecific) - Number(leftSpecific)
-    })
-  const preferred = candidates.find(
-    (item) =>
-      !dislikes.includes(item.nameFi.toLocaleLowerCase('fi-FI')) &&
-      !dislikes.includes(item.category.toLocaleLowerCase('fi-FI')),
-  )
-  return (
-    preferred ??
-    candidates[0] ??
-    exerciseLibrary.find((item) => item.code === fallbackCode) ??
-    exerciseLibrary[0]!
-  )
-}
-
-function strengthParameters(goal: GoalType, experience: ExperienceLevel) {
-  if (goal === 'MAX_STRENGTH') {
-    return {
-      sets: experience === 'BEGINNER' ? 3 : 4,
-      repetitions: experience === 'BEGINNER' ? '5–6' : '3–5',
-      targetRpe: experience === 'BEGINNER' ? 7 : 8,
-      targetRir: experience === 'BEGINNER' ? 3 : 2,
-      restSeconds: experience === 'BEGINNER' ? 120 : 180,
-    }
-  }
-  if (goal === 'MUSCLE_GAIN' || goal === 'BODY_RECOMPOSITION') {
-    return {
-      sets: experience === 'BEGINNER' ? 3 : 4,
-      repetitions: '8–12',
-      targetRpe: experience === 'BEGINNER' ? 7 : 8,
-      targetRir: experience === 'BEGINNER' ? 3 : 2,
-      restSeconds: 90,
-    }
-  }
-  return {
-    sets: experience === 'BEGINNER' ? 2 : 3,
-    repetitions: '8–10',
-    targetRpe: experience === 'BEGINNER' ? 6 : 7,
-    targetRir: experience === 'BEGINNER' ? 4 : 3,
-    restSeconds: 75,
-  }
 }
 
 function decisionTrace(
@@ -305,11 +128,11 @@ function decisionTrace(
 ): DecisionTrace {
   const healthModified =
     profile.healthBlocked ||
-    profile.limitations?.trim() ||
+    (profile.confirmedLimitationTags?.length ?? 0) > 0 ||
     profile.physicalLoad === 'HIGH'
-  return {
+  return DecisionRecorder.record({
     ruleVersion: TRAINING_RULE_VERSION,
-    generatedAt: profile.generatedAt ?? new Date().toISOString(),
+    generatedAt: profile.generatedAt ?? TRAINING_CONTENT_RELEASE.publishedAt,
     safetyOutcome: profile.healthBlocked
       ? 'REFER'
       : healthModified
@@ -325,48 +148,106 @@ function decisionTrace(
     ],
     missingData,
     rules,
-  }
-}
-
-function toPrescription(
-  sessionId: string,
-  template: ExerciseTemplate,
-  index: number,
-  parameters: ReturnType<typeof strengthParameters>,
-  profile: PrescriptionProfile,
-): ExercisePrescription {
-  const modified = profile.physicalLoad === 'HIGH' || Boolean(profile.limitations?.trim())
-  const sets = Math.max(1, parameters.sets - (profile.physicalLoad === 'HIGH' ? 1 : 0))
-  const targetRpe = Math.max(4, parameters.targetRpe - (modified ? 1 : 0))
-  return {
-    ...template,
-    ...loadTracking(template),
-    techniqueVideoUrl: techniqueVideos[template.code],
-    id: `${sessionId}-${template.code.toLocaleLowerCase('en-US')}`,
-    sets,
-    repetitions: parameters.repetitions,
-    restSeconds: parameters.restSeconds,
-    targetRpe,
-    targetRir: Math.min(5, parameters.targetRir + (modified ? 1 : 0)),
-    loadGuidance:
-      'Valitse kuorma, jolla tavoitetoistot onnistuvat hallitusti ja sarjan lopussa jää ilmoitettu määrä hyviä toistoja varastoon.',
-    keyExercise: index < 2,
-  }
+  })
 }
 
 export function exerciseSubstitutions(
   exercise: ExercisePrescription,
   availableEquipment: string[],
+  constraints?: {
+    confirmedLimitationTags?: readonly ConfirmedLimitationTag[]
+    history?: readonly AdultResistanceSetHistory[]
+    generatedAt?: string
+    plannedExercises?: readonly ExercisePrescription[]
+  },
 ): ExercisePrescription[] {
   return exercise.substitutions.flatMap((name) => {
-    const template = exerciseLibrary.find((candidate) => candidate.nameFi === name)
-    if (!template || !hasEquipment(template, availableEquipment)) return []
+    const template = publishedExerciseCatalog
+      .listExercises()
+      .find((candidate) => candidate.nameFi === name && candidate.status === 'PUBLISHED')
+    if (
+      !template ||
+      !template.equipment.some((item) => availableEquipment.includes(item)) ||
+      template.contraindicationTags.some((tag) =>
+        constraints?.confirmedLimitationTags?.includes(tag as ConfirmedLimitationTag),
+      )
+    )
+      return []
+    if (constraints?.history && constraints.generatedAt) {
+      const rollingVolume = calculateRollingMuscleVolume({
+        sets: constraints.history,
+        at: constraints.generatedAt,
+        catalog: publishedExerciseCatalog,
+      })
+      const sessionPrimaryVolume: MuscleVolume = {}
+      for (const planned of constraints.plannedExercises ?? []) {
+        if (planned.id === exercise.id) continue
+        const definition = publishedExerciseCatalog.getExercise(planned.code)
+        if (!definition) continue
+        addPlannedSets({
+          exercise: definition,
+          sets: planned.sets,
+          rollingVolume,
+          sessionPrimaryVolume,
+          programmingRole: planned.programmingRole,
+        })
+      }
+      if (
+        maximumAdditionalSets({
+          exercise: template,
+          rollingVolume,
+          sessionPrimaryVolume,
+          programmingRole: exercise.programmingRole,
+        }) < exercise.sets
+      ) {
+        return []
+      }
+    }
+    const primaryLoadType = template.loadTypes[0]
+    const loadType: ExerciseLoadType =
+      primaryLoadType === 'BAND' ||
+      primaryLoadType === 'BODYWEIGHT' ||
+      primaryLoadType === 'DUMBBELL_KG_EACH' ||
+      primaryLoadType === 'MACHINE_KG'
+        ? primaryLoadType
+        : 'EXTERNAL_KG'
     return [
       {
         ...exercise,
-        ...template,
-        ...loadTracking(template),
-        techniqueVideoUrl: techniqueVideos[template.code],
+        code: template.code,
+        contentVersion: template.version,
+        nameFi: template.nameFi,
+        category: template.movementPatterns[0] ?? exercise.category,
+        equipment: [...template.equipment],
+        instructionsFi: template.instructionsFi.join(' '),
+        substitutions: template.substitutionCodes
+          .map((code) => publishedExerciseCatalog.getExercise(code)?.nameFi)
+          .filter((value): value is string => Boolean(value)),
+        loadType,
+        loadLabelFi:
+          loadType === 'BAND'
+            ? 'Nauhan vastus'
+            : loadType === 'BODYWEIGHT'
+              ? 'Variaatio tai lisäpaino'
+              : loadType === 'DUMBBELL_KG_EACH'
+                ? 'Kuorma kg / käsipaino'
+                : loadType === 'MACHINE_KG'
+                  ? 'Laitteen kuorma kg'
+                  : 'Kuorma kg',
+        loadOptions:
+          loadType === 'BAND'
+            ? ['Erittäin kevyt', 'Kevyt', 'Keskivahva', 'Vahva', 'Erittäin vahva']
+            : undefined,
+        loadContextId: defaultResistanceLoadContextId(template),
+        loadIncrementKg: undefined,
+        progressionDecision: {
+          action: 'RECALIBRATE_LOAD',
+          changedVariable: 'NONE',
+          reasonCodes: ['EXERCISE_SUBSTITUTION_REQUIRES_RECALIBRATION'],
+          supportingSessionIds: [],
+        },
+        primaryMuscles: [...template.primaryMuscles],
+        secondaryMuscles: [...template.secondaryMuscles],
         id: `${exercise.id}-sub-${template.code.toLocaleLowerCase('en-US')}`,
       },
     ]
@@ -376,86 +257,54 @@ export function exerciseSubstitutions(
 function prescribeStrength(
   sessionId: string,
   title: string,
-  kind: SessionKind,
   durationMinutes: number,
   profile: PrescriptionProfile,
 ): PrescribedSession {
+  const limitationTags = profile.confirmedLimitationTags ?? []
+  const likes = profile.likes?.toLocaleLowerCase('fi-FI') ?? ''
   const dislikes = profile.dislikes?.toLocaleLowerCase('fi-FI') ?? ''
-  const available = profile.equipment.length ? profile.equipment : ['Kehonpaino']
-  const categories = [
-    ['Kyykky', 'CHAIR_SQUAT'],
-    ['Lannesarana', 'GLUTE_BRIDGE'],
-    ['Työntö', 'ELEVATED_PUSH_UP'],
-    ['Veto', 'BAND_ROW'],
-    ['Keskivartalo', 'DEAD_BUG'],
-  ] as const
-  const parameters = strengthParameters(profile.goal, profile.experience)
-  const exercises = categories.map(([category, fallback], index) =>
-    toPrescription(
-      sessionId,
-      chooseExercise(category, available, dislikes, fallback),
-      index,
-      parameters,
-      profile,
-    ),
-  )
-  const missingData = available.every((item) => item === 'Kehonpaino')
-    ? [
-        'Vetoliikkeen kuormitusväline puuttuu; käytössä on konservatiivinen kehonpainovaihtoehto.',
-      ]
-    : []
-  return {
-    id: sessionId,
+  const likedExerciseCodes = publishedExerciseCatalog
+    .listExercises()
+    .filter((exercise) => likes.includes(exercise.nameFi.toLocaleLowerCase('fi-FI')))
+    .map((exercise) => exercise.code)
+  const dislikedExerciseCodes = publishedExerciseCatalog
+    .listExercises()
+    .filter((exercise) => dislikes.includes(exercise.nameFi.toLocaleLowerCase('fi-FI')))
+    .map((exercise) => exercise.code)
+  return prescribeAdultResistanceSession({
+    sessionId,
     title,
-    kind,
-    goal: profile.goal,
-    durationMinutes: Math.min(durationMinutes, profile.minutesPerSession),
-    warmup: [
-      '5 min rauhallista kävelyä tai muuta kevyttä sykettä nostavaa liikettä',
-      '1 kevyt harjoitussarja päivän kahdesta ensimmäisestä liikkeestä',
-    ],
-    exercises,
-    cooldown: ['3 min rauhallista liikettä ja hengityksen tasaus'],
-    progression:
-      'Kun kaikki sarjat osuvat toistoalueen yläpäähän samalla tai alemmalla RPE:llä kahdessa harjoituksessa, lisää pienin mahdollinen kuorma tai 1 toisto sarjaa kohti.',
-    decisionTrace: decisionTrace(
-      profile,
-      [
-        {
-          ruleId: 'RT-FREQUENCY-001',
-          outcome: 'PROCEED',
-          message:
-            'Voimaharjoitus käyttää suuria lihasryhmiä kattavaa kokovartalorakennetta.',
-          evidenceIds: ['ACSM-RT-2026', 'WHO-PA-2020'],
-        },
-        {
-          ruleId: 'RT-EFFORT-002',
-          outcome: profile.healthBlocked
-            ? 'REFER'
-            : profile.limitations
-              ? 'MODIFY'
-              : 'PROCEED',
-          message:
-            profile.experience === 'BEGINNER'
-              ? 'Aloittelijan sarjat jätetään vähintään noin kolme hyvää toistoa vajaiksi.'
-              : 'Kuorma ohjataan RPE/RIR-tavoitteella ilman pakollista uupumukseen harjoittelua.',
-          evidenceIds: ['ACSM-RT-2026', 'RPE-META-2022'],
-        },
-        ...(profile.physicalLoad === 'HIGH'
-          ? [
-              {
-                ruleId: 'LOAD-WORK-003',
-                outcome: 'MODIFY' as const,
-                message:
-                  'Korkea fyysinen arjen kuorma vähentää sarjamäärää ja tavoite-RPE:tä.',
-                evidenceIds: ['APP-CONSERVATIVE-LOAD-RULE'],
-              },
-            ]
-          : []),
-      ],
-      missingData,
-    ),
-  }
+    context: {
+      age: profile.age!,
+      contentReleaseId: profile.contentReleaseId ?? TRAINING_CONTENT_RELEASE.releaseId,
+      ruleVersion: profile.ruleVersion ?? ADULT_RESISTANCE_RULE_VERSION,
+      experience: profile.experience,
+      goal: profile.goal,
+      equipment: profile.equipment.length ? profile.equipment : ['Kehonpaino'],
+      environment:
+        profile.environment ??
+        (profile.equipment.includes('Kuntosalilaitteet') ||
+        profile.equipment.includes('Levytanko ja painot')
+          ? 'GYM'
+          : 'HOME'),
+      availableMinutes: Math.max(
+        10,
+        Math.min(durationMinutes, profile.minutesPerSession),
+      ),
+      generatedAt: profile.generatedAt ?? TRAINING_CONTENT_RELEASE.publishedAt,
+      physicalLoad: profile.physicalLoad,
+      readiness: profile.readiness!,
+      healthBlocked: profile.healthBlocked,
+      limitationTags,
+      dislikedExerciseCodes,
+      likedExerciseCodes,
+      supervisionAvailable: profile.supervisionAvailable ?? false,
+      verifiedNextLoads: profile.verifiedNextLoads,
+      strengthTrainingBackground: profile.strengthTrainingBackground,
+      strengthWeekRole: profile.strengthWeekRole,
+    },
+    history: profile.strengthHistory,
+  })
 }
 
 function aerobicMode(profile: PrescriptionProfile) {
@@ -474,26 +323,55 @@ function prescribeAerobic(
   durationMinutes: number,
   profile: PrescriptionProfile,
 ): PrescribedSession {
-  const total = Math.min(durationMinutes, profile.minutesPerSession)
+  const total = Math.max(5, Math.min(durationMinutes, profile.minutesPerSession))
   const mode = aerobicMode(profile)
-  const hardAllowed = !profile.healthBlocked && !profile.limitations?.trim()
+  const hardAllowed =
+    !profile.healthBlocked && (profile.confirmedLimitationTags?.length ?? 0) === 0
   const interval = kind === 'INTERVAL' && hardAllowed
-  const mainMinutes = Math.max(5, total - 10)
+  const warmupMinutes = total <= 10 ? 2 : total <= 20 ? 3 : 5
+  const cooldownMinutes = total <= 10 ? 1 : total <= 20 ? 2 : 5
+  const mainSeconds = Math.max(60, (total - warmupMinutes - cooldownMinutes) * 60)
+  const workSeconds = total <= 20 ? 120 : 180
+  const recoverySeconds = total <= 20 ? 60 : 120
+  const repetitions = Math.max(
+    1,
+    Math.min(
+      6,
+      Math.floor((mainSeconds + recoverySeconds) / (workSeconds + recoverySeconds)),
+    ),
+  )
+  const useIntervals = interval && repetitions >= 2
+  const dose: PrescriptionDose = useIntervals
+    ? {
+        kind: 'INTERVAL_BLOCKS',
+        repetitions,
+        workSeconds,
+        recoverySeconds,
+        targetRpe: 7,
+        intensityCue:
+          'Reipas mutta tasalaatuinen; viimeisen vedon pitää pysyä hallittuna.',
+      }
+    : {
+        kind: 'CONTINUOUS_TIME',
+        durationSeconds: mainSeconds,
+        targetRpe: 4,
+        intensityCue: 'Pystyt puhumaan kokonaisia lauseita.',
+      }
   const exercises: ExercisePrescription[] = [
     {
       id: `${sessionId}-main`,
-      code: interval ? 'CONTROLLED_INTERVALS' : 'EASY_AEROBIC',
-      nameFi: interval ? 'Hallitut intervallit' : 'Helppo peruskestävyys',
+      code: useIntervals ? 'CONTROLLED_INTERVALS' : 'EASY_AEROBIC',
+      nameFi: useIntervals ? 'Hallitut intervallit' : 'Helppo peruskestävyys',
       category: 'Kestävyys',
       equipment: [],
-      instructionsFi: interval
-        ? `Tee ${mode} muodossa 4 × 3 min reippaasti (RPE 7), välissä 2 min erittäin kevyesti.`
+      instructionsFi: useIntervals
+        ? `Tee ${mode} muodossa ${repetitions} × ${Math.round(workSeconds / 60)} min reippaasti (RPE 7), välissä ${Math.round(recoverySeconds / 60)} min erittäin kevyesti.`
         : `Tee ${mode} muodossa tasaisesti. Pystyt puhumaan kokonaisia lauseita koko työosuuden ajan.`,
-      sets: interval ? 4 : 1,
-      durationSeconds: mainMinutes * 60,
-      restSeconds: interval ? 120 : 0,
-      targetRpe: interval ? 7 : 4,
-      loadGuidance: interval
+      sets: useIntervals ? repetitions : 1,
+      durationSeconds: useIntervals ? workSeconds : mainSeconds,
+      restSeconds: useIntervals ? recoverySeconds : 0,
+      targetRpe: useIntervals ? 7 : 4,
+      loadGuidance: useIntervals
         ? 'Ensimmäisen vedon pitää tuntua hallitulta; pidä kaikki vedot tasalaatuisina.'
         : 'Säädä vauhtia puhetestillä, ei oletetulla sykealueella.',
       stopCondition:
@@ -502,32 +380,60 @@ function prescribeAerobic(
       loadType: 'LEVEL',
       loadLabelFi: 'Vauhti tai vastustaso',
       keyExercise: true,
+      dose,
     },
   ]
-  return {
-    id: sessionId,
-    title: interval ? title : 'Helppo peruskestävyys',
-    kind: interval ? kind : 'EASY_ENDURANCE',
-    goal: profile.goal,
-    durationMinutes: total,
-    warmup: ['5 min erittäin kevyesti; tehon pitää tuntua selvästi helpolta'],
-    exercises,
-    cooldown: ['5 min erittäin kevyesti ja hengityksen tasaus'],
-    progression:
-      'Lisää helppoon viikkokokonaisuuteen 5–10 minuuttia vasta, kun nykyinen määrä toteutuu ilman oireita ja palautuminen pysyy normaalina.',
-    decisionTrace: decisionTrace(profile, [
+  const decision = decisionTrace(
+    profile,
+    [
       {
-        ruleId: interval ? 'END-INTERVAL-001' : 'END-EASY-001',
-        outcome: interval ? 'PROCEED' : kind === 'INTERVAL' ? 'MODIFY' : 'PROCEED',
-        message: interval
-          ? 'Intervallit ovat hallittuja, tasalaatuisia ja sisältävät aktiivisen palautuksen.'
+        ruleId: useIntervals ? 'END-INTERVAL-002' : 'END-EASY-002',
+        outcome: useIntervals ? 'PROCEED' : kind === 'INTERVAL' ? 'MODIFY' : 'PROCEED',
+        message: useIntervals
+          ? 'Intervallit ovat erillisiä vetoja, joiden välissä on aktiivinen palautus.'
           : kind === 'INTERVAL'
-            ? 'Rajoite tai terveysesto muuttaa intervallin helpoksi peruskestävyydeksi.'
+            ? 'Aikaraja, rajoite tai terveysesto muuttaa intervallin helpoksi peruskestävyydeksi.'
             : 'Peruskestävyys ohjataan puhetestillä ja koetulla kuormittavuudella.',
         evidenceIds: ['WHO-PA-2020', 'IOC-ARI-2022'],
       },
-    ]),
-  }
+      ...(profile.medicationAffectsHeartRate
+        ? [
+            {
+              ruleId: 'END-HR-MEDICATION-001',
+              outcome: 'MODIFY' as const,
+              message:
+                'Sykkeeseen vaikuttavan lääkityksen vuoksi teho ohjataan RPE:llä ja puhetestillä, ei laskennallisella sykealueella.',
+              evidenceIds: ['APP-HR-CONFIDENCE-RULE'],
+            },
+          ]
+        : []),
+    ],
+    profile.enduranceBackgroundKnown === false
+      ? ['Kestävyys- ja lajitaustan vertailukelpoinen lähtötieto']
+      : [],
+  )
+  return withV2Blocks({
+    id: sessionId,
+    title: useIntervals ? title : 'Helppo peruskestävyys',
+    kind: useIntervals ? kind : 'EASY_ENDURANCE',
+    goal: profile.goal,
+    durationMinutes: total,
+    timeBudgetMinutes: total,
+    objective: {
+      primary: useIntervals ? 'Hallittu vauhtikestävyys' : 'Aerobinen peruskestävyys',
+      secondary: ['Palautumiskyky'],
+      fatigueBudget: useIntervals ? 'MODERATE' : 'LOW',
+      avoid: profile.healthBlocked ? ['Kova rasitus'] : [],
+    },
+    warmupMinutes,
+    warmup: ['5 min erittäin kevyesti; tehon pitää tuntua selvästi helpolta'],
+    exercises,
+    cooldownMinutes,
+    cooldown: ['5 min erittäin kevyesti ja hengityksen tasaus'],
+    progression:
+      'Lisää helppoon viikkokokonaisuuteen 5–10 minuuttia vasta, kun nykyinen määrä toteutuu ilman oireita ja palautuminen pysyy normaalina.',
+    decisionTrace: decision,
+  })
 }
 
 function prescribeMobility(
@@ -538,26 +444,27 @@ function prescribeMobility(
   profile: PrescriptionProfile,
 ): PrescribedSession {
   const recovery = kind === 'RECOVERY'
+  const timeBudgetMinutes = Math.max(
+    5,
+    Math.min(durationMinutes, profile.minutesPerSession),
+  )
+  const warmupMinutes = Math.min(2, Math.max(1, timeBudgetMinutes - 2))
+  const cooldownMinutes = 1
   const items = [
     ['CAT_COW', 'Selän rauhallinen pyöristys ja ojennus', '6–8 rauhallista toistoa'],
     ['HIP_SHIFT', 'Lantion painonsiirto', '6–8 toistoa / puoli'],
     ['WALL_SLIDE', 'Lapojen seinäliuku', '6–10 toistoa'],
   ]
-  return {
-    id: sessionId,
-    title,
-    kind,
-    goal: profile.goal,
-    durationMinutes: Math.min(durationMinutes, profile.minutesPerSession),
-    warmup: ['2 min rauhallista kävelyä ja hengityksen tasaus'],
-    exercises: items.map(([code, nameFi, repetitions], index) => ({
+  const exercises = items
+    .slice(0, timeBudgetMinutes <= 7 ? 2 : 3)
+    .map(([code, nameFi, repetitions], index) => ({
       id: `${sessionId}-${code.toLocaleLowerCase('en-US')}`,
       code,
       nameFi,
       category: 'Liikkuvuus ja hallinta',
       equipment: ['Kehonpaino'],
       instructionsFi: 'Liiku hitaasti vain kivuttomalla ja hallitulla liikeradalla.',
-      sets: 2,
+      sets: timeBudgetMinutes <= 7 ? 1 : 2,
       repetitions,
       restSeconds: 30,
       targetRpe: recovery ? 2 : 3,
@@ -565,10 +472,35 @@ function prescribeMobility(
       stopCondition:
         'Lopeta liike, jos kipu lisääntyy tai tulee puutumista tai huimausta.',
       substitutions: ['Rauhallinen kävely', 'Pienempi liikerata'],
-      loadType: 'NONE',
+      loadType: 'NONE' as const,
       loadLabelFi: 'Ei ulkoista kuormaa',
       keyExercise: index === 0,
-    })),
+      dose: {
+        kind: 'SKILL_DRILL' as const,
+        sets: timeBudgetMinutes <= 7 ? 1 : 2,
+        repetitions,
+        recoverySeconds: 30,
+        targetRpe: recovery ? 2 : 3,
+        qualityCue: 'Liiku vain kivuttomalla ja hallitulla liikeradalla.',
+      },
+    }))
+  return withV2Blocks({
+    id: sessionId,
+    title,
+    kind,
+    goal: profile.goal,
+    durationMinutes: timeBudgetMinutes,
+    timeBudgetMinutes,
+    objective: {
+      primary: recovery ? 'Palautuminen' : 'Liikkuvuus ja liikehallinta',
+      secondary: [],
+      fatigueBudget: 'LOW',
+      avoid: ['Kivun provosointi'],
+    },
+    warmupMinutes,
+    warmup: ['2 min rauhallista kävelyä ja hengityksen tasaus'],
+    exercises,
+    cooldownMinutes,
     cooldown: ['1 min rauhallista hengitystä'],
     progression:
       'Lisää ensin hallittua liikerataa, ei kipua eikä venytyksen pakottamista.',
@@ -582,7 +514,116 @@ function prescribeMobility(
         evidenceIds: ['WHO-PA-2020', 'APP-CONSERVATIVE-LOAD-RULE'],
       },
     ]),
-  }
+  })
+}
+
+export function prescribeSpeedPowerDraft(
+  sessionId: string,
+  title: string,
+  durationMinutes: number,
+  profile: PrescriptionProfile,
+): PrescribedSession {
+  const timeBudgetMinutes = Math.max(
+    5,
+    Math.min(durationMinutes, profile.minutesPerSession),
+  )
+  const warmupMinutes = timeBudgetMinutes <= 10 ? 2 : timeBudgetMinutes <= 20 ? 5 : 8
+  const cooldownMinutes = timeBudgetMinutes <= 10 ? 1 : timeBudgetMinutes <= 20 ? 2 : 4
+  const sprintRepetitions = timeBudgetMinutes <= 20 ? 4 : 6
+  const jumpSets = timeBudgetMinutes <= 20 ? 2 : 3
+  const speedExercises: ExercisePrescription[] = [
+    {
+      id: `${sessionId}-acceleration`,
+      code: 'ACCELERATION_SPRINT',
+      nameFi: 'Lyhyt kiihdytys',
+      category: 'Sprintti',
+      equipment: ['Kehonpaino'],
+      instructionsFi:
+        'Kiihdytä rennosti 15 metriä. Jokaisen suorituksen pitää olla terävä ja hallittu.',
+      sets: sprintRepetitions,
+      repetitions: '15 m',
+      restSeconds: 75,
+      targetRpe: 7,
+      loadGuidance: 'Palauta niin pitkään, että seuraava suoritus on yhtä laadukas.',
+      stopCondition:
+        'Lopeta, jos nopeus laskee selvästi, tekniikka hajoaa tai tunnet kipua.',
+      substitutions: ['Porraskiihdytys', 'Kuntopyörän lyhyt kiihdytys'],
+      loadType: 'NONE',
+      loadLabelFi: 'Ei ulkoista kuormaa',
+      keyExercise: true,
+      dose: {
+        kind: 'SPRINT_REPS',
+        repetitions: sprintRepetitions,
+        distanceMeters: 15,
+        recoverySeconds: 75,
+        targetRpe: 7,
+        qualityStopRule: 'Lopeta ennen kuin nopeus tai tekniikka heikkenee selvästi.',
+      },
+    },
+    {
+      id: `${sessionId}-jump`,
+      code: 'COUNTERMOVEMENT_JUMP',
+      nameFi: 'Hallittu ponnistushyppy',
+      category: 'Hypyt',
+      equipment: ['Kehonpaino'],
+      instructionsFi:
+        'Tee yksittäiset hypyt hyvällä alastulolla. Nollaa asento jokaisen hypyn välissä.',
+      sets: jumpSets,
+      repetitions: '3',
+      restSeconds: 75,
+      targetRpe: 7,
+      loadGuidance: 'Laatu ratkaisee; älä tee hyppyjä uupumukseen.',
+      stopCondition: 'Lopeta, jos alastulo ei pysy hallittuna tai tunnet nivelkipua.',
+      substitutions: ['Nopea varpaille nousu', 'Matalan korokkeen step-up'],
+      loadType: 'NONE',
+      loadLabelFi: 'Ei ulkoista kuormaa',
+      keyExercise: true,
+      dose: {
+        kind: 'JUMP_REPS',
+        sets: jumpSets,
+        repetitions: 3,
+        recoverySeconds: 75,
+        targetRpe: 7,
+        qualityStopRule: 'Lopeta ennen kuin ponnistus tai alastulon hallinta heikkenee.',
+      },
+    },
+  ]
+  const exercises = speedExercises.slice(0, timeBudgetMinutes <= 10 ? 1 : 2)
+  return withV2Blocks({
+    id: sessionId,
+    title,
+    kind: 'SPEED_POWER',
+    goal: profile.goal,
+    durationMinutes: timeBudgetMinutes,
+    timeBudgetMinutes,
+    objective: {
+      primary: 'Nopeus ja räjähtävä voima',
+      secondary: ['Ponnistus- ja alastulotekniikka'],
+      fatigueBudget: 'LOW',
+      avoid: ['Uupumukseen harjoittelu'],
+    },
+    warmupMinutes,
+    warmup: [
+      `${warmupMinutes} min asteittain tehostuvaa lämmittelyä ja 2 kevyttä kiihdytystä`,
+    ],
+    exercises,
+    cooldownMinutes,
+    cooldown: [`${cooldownMinutes} min erittäin kevyttä liikettä`],
+    progression:
+      'Lisää ensin suorituksen laatua. Lisää yksi toisto vasta, kun kaikki toistot pysyvät yhtä terävinä.',
+    decisionTrace: decisionTrace(profile, [
+      {
+        ruleId: 'SPEED-QUALITY-001',
+        outcome: profile.healthBlocked
+          ? 'REFER'
+          : profile.limitations?.trim()
+            ? 'MODIFY'
+            : 'PROCEED',
+        message: 'Nopeus- ja hyppyannos päättyy ennen selvää laadun heikkenemistä.',
+        evidenceIds: ['APP-QUALITY-STOP-RULE'],
+      },
+    ]),
+  })
 }
 
 export function prescribeSession(input: {
@@ -592,14 +633,26 @@ export function prescribeSession(input: {
   durationMinutes: number
   profile: PrescriptionProfile
 }): PrescribedSession {
-  if (input.kind === 'STRENGTH' || input.kind === 'SPEED_POWER') {
+  const gate = evaluateStrengthSafetyGate({
+    sessionKind: input.kind,
+    age: input.profile.age,
+    readiness: input.profile.readiness,
+    healthBlocked: input.profile.healthBlocked,
+    safetyInformationComplete: strengthSafetyInformationComplete(input.profile),
+  })
+  if (!gate.allowed) {
+    throw new Error(`UNSUPPORTED_PRESCRIPTION:${gate.reasonCode}`)
+  }
+  if (input.kind === 'STRENGTH') {
     return prescribeStrength(
       input.sessionId,
       input.title,
-      input.kind,
       input.durationMinutes,
       input.profile,
     )
+  }
+  if (input.kind === 'SPEED_POWER' || input.kind === 'SPORT' || input.kind === 'MATCH') {
+    throw new Error(`UNSUPPORTED_PRESCRIPTION:${input.kind}`)
   }
   if (input.kind === 'EASY_ENDURANCE' || input.kind === 'INTERVAL') {
     return prescribeAerobic(
@@ -619,13 +672,81 @@ export function prescribeSession(input: {
       input.profile,
     )
   }
-  return prescribeMobility(
-    input.sessionId,
-    input.title,
-    input.kind,
-    input.durationMinutes,
-    input.profile,
-  )
+  throw new Error(`UNSUPPORTED_PRESCRIPTION:${input.kind satisfies never}`)
+}
+
+function unsupportedPrescription(
+  sessionKind: 'SPEED_POWER' | 'SPORT' | 'MATCH',
+): UnsupportedPrescription {
+  if (sessionKind === 'SPEED_POWER') {
+    return {
+      status: 'UNSUPPORTED',
+      sessionKind,
+      reasonCode: 'SPEED_POWER_ENGINE_NOT_REVIEWED',
+      userMessage:
+        'Automaattinen nopeus- ja teho-ohjelmointi ei ole vielä asiantuntijatarkastettu. Harjoitusta ei muodosteta väärän moottorin säännöillä.',
+    }
+  }
+  if (sessionKind === 'MATCH') {
+    return {
+      status: 'UNSUPPORTED',
+      sessionKind,
+      reasonCode: 'MATCH_ENGINE_NOT_REVIEWED',
+      userMessage:
+        'Ottelu kirjataan kalenteriin ja kokonaiskuormaan, mutta Haukkari ei muodosta vielä automaattista otteluprescriptionia.',
+    }
+  }
+  return {
+    status: 'UNSUPPORTED',
+    sessionKind,
+    reasonCode: 'SPORT_ENGINE_NOT_REVIEWED',
+    userMessage:
+      'Lajiharjoitus kirjataan kalenteriin ja kokonaiskuormaan, mutta lajikohtainen automaattiohjelmointi ei ole vielä käytössä.',
+  }
+}
+
+export function resolvePrescription(input: {
+  sessionId: string
+  title: string
+  kind: SessionKind
+  durationMinutes: number
+  profile: PrescriptionProfile
+}): PrescriptionResult {
+  const gate = evaluateStrengthSafetyGate({
+    sessionKind: input.kind,
+    age: input.profile.age,
+    readiness: input.profile.readiness,
+    healthBlocked: input.profile.healthBlocked,
+    safetyInformationComplete: strengthSafetyInformationComplete(input.profile),
+  })
+  if (!gate.allowed) {
+    return {
+      status: 'UNSUPPORTED',
+      sessionKind: input.kind,
+      reasonCode: gate.reasonCode,
+      userMessage: strengthSafetyGateMessage(gate.reasonCode),
+    }
+  }
+  if (input.kind === 'SPEED_POWER' || input.kind === 'SPORT' || input.kind === 'MATCH') {
+    return unsupportedPrescription(input.kind)
+  }
+  try {
+    return { status: 'SUPPORTED', prescription: prescribeSession(input) }
+  } catch (reason) {
+    if (
+      reason instanceof Error &&
+      reason.message === 'UNSUPPORTED_PRESCRIPTION:NO_SAFE_STRENGTH_DOSE_AVAILABLE'
+    ) {
+      return {
+        status: 'UNSUPPORTED',
+        sessionKind: input.kind,
+        reasonCode: 'NO_SAFE_STRENGTH_DOSE_AVAILABLE',
+        userMessage:
+          'Tälle päivälle ei muodosteta uutta voimaharjoitusannosta, koska turvallinen viikkovolyymi tai vahvistetut rajoitteet eivät jätä sopivaa annosta.',
+      }
+    }
+    throw reason
+  }
 }
 
 function compactExerciseLimit(minutes: number) {
@@ -634,58 +755,561 @@ function compactExerciseLimit(minutes: number) {
   return 4
 }
 
+function balancedCompactStrengthExercises(
+  exercises: readonly ExercisePrescription[],
+  minutes: number,
+  role: StrengthWeekSessionRole | undefined,
+) {
+  const limit = Math.min(compactExerciseLimit(minutes), exercises.length)
+  if (exercises.length <= limit) return [...exercises]
+  const selected: ExercisePrescription[] = []
+  const selectFirst = (patterns: readonly string[]) => {
+    const match = exercises.find(
+      (exercise) => !selected.includes(exercise) && patterns.includes(exercise.category),
+    )
+    if (match) selected.push(match)
+  }
+  if (role?.startsWith('UPPER')) {
+    selectFirst(['HORIZONTAL_PUSH', 'VERTICAL_PUSH'])
+    selectFirst(['HORIZONTAL_PULL', 'VERTICAL_PULL'])
+    if (limit >= 3) selectFirst(['ANTI_EXTENSION', 'ANTI_ROTATION'])
+  } else if (role?.startsWith('LOWER')) {
+    selectFirst(['SQUAT', 'SINGLE_LEG'])
+    selectFirst(['HINGE'])
+  } else {
+    selectFirst(['SQUAT', 'HINGE', 'SINGLE_LEG'])
+    selectFirst(['HORIZONTAL_PUSH', 'VERTICAL_PUSH'])
+    selectFirst(['HORIZONTAL_PULL', 'VERTICAL_PULL'])
+    if (limit >= 4) selectFirst(['ANTI_EXTENSION', 'ANTI_ROTATION'])
+  }
+  const priority = [...exercises].sort((left, right) => {
+    const roleRank = (exercise: ExercisePrescription) => {
+      if (exercise.programmingRole === 'PRIMARY') return 0
+      if (exercise.programmingRole === 'SECONDARY_COMPOUND') return 1
+      if (exercise.programmingRole === 'CORE_CONTROL') return 2
+      return 3
+    }
+    return roleRank(left) - roleRank(right)
+  })
+  for (const exercise of priority) {
+    if (selected.length >= limit) break
+    if (!selected.includes(exercise)) selected.push(exercise)
+  }
+  return selected
+}
+
+function fitDoseToSeconds(
+  exercise: ExercisePrescription,
+  maxSeconds: number,
+  light: boolean,
+) {
+  const dose = legacyDose(exercise)
+  const targetRpe = light ? Math.min(6, dose.targetRpe) : dose.targetRpe
+  switch (dose.kind) {
+    case 'STRENGTH_SETS': {
+      let sets = light ? Math.max(1, Math.ceil(dose.sets * 0.65)) : dose.sets
+      while (sets > 1 && doseDurationSeconds({ ...dose, sets, targetRpe }) > maxSeconds) {
+        sets -= 1
+      }
+      return withExerciseDose(exercise, {
+        ...dose,
+        sets,
+        targetRpe,
+        targetRir: light ? Math.min(5, (dose.targetRir ?? 2) + 1) : dose.targetRir,
+      })
+    }
+    case 'CONTINUOUS_TIME':
+      return withExerciseDose(exercise, {
+        ...dose,
+        durationSeconds: Math.max(60, Math.min(dose.durationSeconds, maxSeconds)),
+        targetRpe,
+      })
+    case 'INTERVAL_BLOCKS': {
+      const cycleSeconds = dose.workSeconds + dose.recoverySeconds
+      const maximumRepetitions = Math.max(
+        1,
+        Math.floor((maxSeconds + dose.recoverySeconds) / cycleSeconds),
+      )
+      return withExerciseDose(exercise, {
+        ...dose,
+        repetitions: Math.min(
+          light ? Math.max(1, Math.ceil(dose.repetitions * 0.65)) : dose.repetitions,
+          maximumRepetitions,
+        ),
+        workSeconds: Math.min(dose.workSeconds, Math.max(30, maxSeconds)),
+        targetRpe,
+      })
+    }
+    case 'SPRINT_REPS': {
+      const maximumRepetitions = Math.max(
+        1,
+        Math.floor((maxSeconds + dose.recoverySeconds) / (10 + dose.recoverySeconds)),
+      )
+      return withExerciseDose(exercise, {
+        ...dose,
+        repetitions: Math.min(
+          light ? Math.max(1, Math.ceil(dose.repetitions * 0.65)) : dose.repetitions,
+          maximumRepetitions,
+        ),
+        targetRpe,
+      })
+    }
+    case 'JUMP_REPS': {
+      const maximumSets = Math.max(
+        1,
+        Math.floor((maxSeconds + dose.recoverySeconds) / (30 + dose.recoverySeconds)),
+      )
+      return withExerciseDose(exercise, {
+        ...dose,
+        sets: Math.min(
+          light ? Math.max(1, Math.ceil(dose.sets * 0.65)) : dose.sets,
+          maximumSets,
+        ),
+        targetRpe,
+      })
+    }
+    case 'SKILL_DRILL': {
+      const sets = light ? Math.max(1, Math.ceil(dose.sets * 0.65)) : dose.sets
+      return withExerciseDose(exercise, {
+        ...dose,
+        sets,
+        durationSeconds: dose.durationSeconds
+          ? Math.max(60, Math.min(dose.durationSeconds, maxSeconds))
+          : undefined,
+        targetRpe,
+      })
+    }
+  }
+}
+
+function lightenStrengthExercise(exercise: ExercisePrescription) {
+  const dose = legacyDose(exercise)
+  if (dose.kind !== 'STRENGTH_SETS') return exercise
+  return withExerciseDose(exercise, {
+    ...dose,
+    sets: Math.max(1, Math.ceil(dose.sets * 0.65)),
+    restSeconds: dose.restSeconds,
+    targetRpe: Math.min(6, dose.targetRpe),
+    targetRir: Math.min(5, (dose.targetRir ?? 2) + 1),
+  })
+}
+
+function completedStrengthUnits(
+  exercise: ExercisePrescription,
+  progressContext: PrescriptionAdaptationProgressContext,
+) {
+  const prescribed = legacyDose(exercise)
+  if (prescribed.kind !== 'STRENGTH_SETS') return 0
+  const value = progressContext.completedUnitsByExerciseId?.[exercise.id]
+  if (typeof value !== 'number' || !Number.isFinite(value) || value <= 0) return 0
+  return Math.min(prescribed.sets, Math.floor(value))
+}
+
+function severeDomsDeloadStrengthExercises(
+  exercises: readonly ExercisePrescription[],
+  progressContext: PrescriptionAdaptationProgressContext,
+) {
+  const strengthExercises = exercises.filter(
+    (exercise) => legacyDose(exercise).kind === 'STRENGTH_SETS',
+  )
+  const originalSets = strengthExercises.reduce((sum, exercise) => {
+    const dose = legacyDose(exercise)
+    return sum + (dose.kind === 'STRENGTH_SETS' ? dose.sets : 0)
+  }, 0)
+  const completedSets = strengthExercises.reduce(
+    (sum, exercise) => sum + completedStrengthUnits(exercise, progressContext),
+    0,
+  )
+  const targetSets = Math.max(
+    strengthExercises.length,
+    Math.ceil(originalSets * SEVERE_DOMS_STRENGTH_VOLUME_MULTIPLIER),
+    completedSets,
+  )
+  const allocatedSets = new Map(
+    strengthExercises.map((exercise) => [
+      exercise.id,
+      Math.max(1, completedStrengthUnits(exercise, progressContext)),
+    ]),
+  )
+  const priorityOrder = [...strengthExercises].sort(
+    (left, right) => Number(right.keyExercise) - Number(left.keyExercise),
+  )
+  let remainingSets =
+    targetSets - [...allocatedSets.values()].reduce((sum, sets) => sum + sets, 0)
+  while (remainingSets > 0) {
+    let allocatedThisPass = false
+    for (const exercise of priorityOrder) {
+      const dose = legacyDose(exercise)
+      if (dose.kind !== 'STRENGTH_SETS') continue
+      const current = allocatedSets.get(exercise.id) ?? 1
+      if (current >= dose.sets) continue
+      allocatedSets.set(exercise.id, current + 1)
+      remainingSets -= 1
+      allocatedThisPass = true
+      if (remainingSets === 0) break
+    }
+    if (!allocatedThisPass) break
+  }
+
+  return exercises.map((exercise) => {
+    const dose = legacyDose(exercise)
+    if (dose.kind !== 'STRENGTH_SETS') return exercise
+    return freezeSevereDomsProgression(
+      withExerciseDose(exercise, {
+        ...dose,
+        sets: allocatedSets.get(exercise.id) ?? 1,
+        targetRpe: Math.min(SEVERE_DOMS_STRENGTH_MAXIMUM_RPE, dose.targetRpe),
+        targetRir: Math.min(5, (dose.targetRir ?? 2) + 1),
+      }),
+    )
+  })
+}
+
+function severeDomsStrengthWeekContext(
+  prescription: PrescribedSession,
+  originalExercises: readonly ExercisePrescription[],
+) {
+  const context = prescription.decisionTrace.strengthWeek
+  if (!context) return undefined
+  const originalSessionVolume = calculatePlannedMuscleVolume(originalExercises)
+  const adaptedSessionVolume = calculatePlannedMuscleVolume(prescription.exercises)
+  const plannedVolumeAfter = mergeMuscleVolume(
+    context.plannedVolumeBefore,
+    adaptedSessionVolume,
+  )
+  const removedVolume = [
+    ...new Set([
+      ...Object.keys(originalSessionVolume),
+      ...Object.keys(adaptedSessionVolume),
+    ]),
+  ].reduce<Record<string, number>>((volume, muscle) => {
+    const removed = Math.max(
+      0,
+      (originalSessionVolume[muscle] ?? 0) - (adaptedSessionVolume[muscle] ?? 0),
+    )
+    if (removed > 0) volume[muscle] = removed
+    return volume
+  }, {})
+  return {
+    ...context,
+    plannedVolumeAfter,
+    remainingMinimumVolume: context.remainingMinimumVolume
+      ? mergeMuscleVolume(context.remainingMinimumVolume, removedVolume)
+      : undefined,
+    remainingTargetVolume: mergeMuscleVolume(
+      context.remainingTargetVolume,
+      removedVolume,
+    ),
+    hardCapRemaining: mergeMuscleVolume(context.hardCapRemaining, removedVolume),
+    reasonCodes: [...new Set([...context.reasonCodes, SEVERE_DOMS_STRENGTH_REASON_CODE])],
+  }
+}
+
+export function evaluatePrescriptionAdaptationSafety(
+  prescription: PrescribedSession,
+  safetyContext: PrescriptionAdaptationSafetyContext,
+) {
+  const mandatoryStrengthSafetyInformationComplete =
+    prescription.kind !== 'STRENGTH' ||
+    (Number.isInteger(safetyContext.age) &&
+      safetyContext.readiness !== undefined &&
+      typeof safetyContext.healthBlocked === 'boolean' &&
+      safetyContext.safetyInformationComplete === true)
+  return evaluateStrengthSafetyGate({
+    sessionKind: prescription.kind,
+    age: safetyContext.age,
+    readiness: safetyContext.readiness,
+    healthBlocked: safetyContext.healthBlocked,
+    safetyInformationComplete: mandatoryStrengthSafetyInformationComplete,
+  })
+}
+
+function unsupportedAdaptation(
+  prescription: PrescribedSession,
+  reasonCode: StrengthSafetyGateReasonCode,
+): UnsupportedPrescription {
+  return {
+    status: 'UNSUPPORTED',
+    sessionKind: prescription.kind,
+    reasonCode,
+    userMessage: strengthSafetyGateMessage(reasonCode),
+  }
+}
+
 export function adaptPrescription(
   prescription: PrescribedSession,
   variant: WorkoutVariant,
-  readiness: ReadinessState,
-): PrescribedSession {
-  if (readiness === 'ORANGE_RECOVERY') {
-    return prescribeMobility(
-      `${prescription.id}-recovery`,
-      'Palauttava vaihtoehto',
-      'RECOVERY',
-      Math.min(20, variant.durationMinutes),
-      {
-        goal: prescription.goal,
-        experience: 'BEGINNER',
-        equipment: ['Kehonpaino'],
-        physicalLoad: 'HIGH',
-        minutesPerSession: Math.min(20, variant.durationMinutes),
-        limitations: 'Päivän kuntotarkistus ohjaa palauttavaan harjoitukseen.',
-      },
-    )
+  safetyContext: PrescriptionAdaptationSafetyContext,
+  progressContext: PrescriptionAdaptationProgressContext = {},
+): PrescriptionResult {
+  const readiness = safetyContext.readiness
+  const adaptationGate = evaluatePrescriptionAdaptationSafety(prescription, safetyContext)
+  if (
+    !adaptationGate.allowed &&
+    adaptationGate.reasonCode !== 'READINESS_RECOVERY_ONLY'
+  ) {
+    return unsupportedAdaptation(prescription, adaptationGate.reasonCode)
+  }
+  if (
+    (!adaptationGate.allowed &&
+      adaptationGate.reasonCode === 'READINESS_RECOVERY_ONLY') ||
+    readiness === 'ORANGE_RECOVERY'
+  ) {
+    return {
+      status: 'SUPPORTED',
+      prescription: prescribeMobility(
+        `${prescription.id}-recovery`,
+        'Palauttava vaihtoehto',
+        'RECOVERY',
+        Math.min(20, variant.durationMinutes),
+        {
+          goal: prescription.goal,
+          experience: 'BEGINNER',
+          equipment: ['Kehonpaino'],
+          physicalLoad: 'HIGH',
+          minutesPerSession: Math.min(20, variant.durationMinutes),
+          limitations: 'Päivän kuntotarkistus ohjaa palauttavaan harjoitukseen.',
+        },
+      ),
+    }
   }
 
+  const legacyStrengthSnapshot =
+    prescription.kind === 'STRENGTH' &&
+    (prescription.schemaVersion !== 2 ||
+      prescription.timePolicyVersion !== ADULT_STRENGTH_TIME_POLICY.version ||
+      !prescription.timeBreakdown)
+  const normalized = normalizePrescriptionV2(prescription)
   const compact = variant.kind.startsWith('COMPACT')
   const light = variant.kind === 'LIGHT' || readiness === 'YELLOW'
+  const severeDomsCurrent =
+    normalized.kind === 'STRENGTH' &&
+    readiness === 'YELLOW' &&
+    safetyContext.readinessReasonCodes?.includes(SEVERE_DOMS_STRENGTH_REASON_CODE) ===
+      true
+  const severeDomsAlreadyApplied = normalized.decisionTrace.rules.some(
+    (rule) => rule.ruleId === 'READINESS-SEVERE-DOMS-001',
+  )
+  const severeDomsDeload = severeDomsCurrent && !severeDomsAlreadyApplied
+  const ordinaryLight = light && !severeDomsCurrent
+  const variantTimeBudgetMinutes = variant.timeBudgetMinutes ?? variant.durationMinutes
+  if (normalized.kind === 'STRENGTH') {
+    const severeDomsRule = {
+      ruleId: 'READINESS-SEVERE-DOMS-001',
+      outcome: 'MODIFY' as const,
+      message:
+        'Voimakas, liikkumista haittaava lihasarkuus puolittaa työsarjojen kokonaismäärän, säilyttää palautukset ja rajaa tavoite-RPE:n enintään kuuteen.',
+      evidenceIds: ['APP-CONSERVATIVE-LOAD-RULE'],
+    }
+    const adaptationRule = compact
+      ? {
+          ruleId: 'TIME-COMPACT-001',
+          outcome: 'MODIFY' as const,
+          message: `Aikaraja säilyttää avainliikkeet ensin ja rajaa harjoituksen enintään ${variantTimeBudgetMinutes} minuuttiin.`,
+          evidenceIds: ['APP-KEY-DOSE-RULE'],
+        }
+      : severeDomsCurrent
+        ? severeDomsRule
+        : light
+          ? {
+              ruleId: 'READINESS-YELLOW-001',
+              outcome: 'MODIFY' as const,
+              message:
+                'Keltainen valmius vähentää sarjoja, säilyttää palautukset ja rajaa tavoite-RPE:n enintään kuuteen.',
+              evidenceIds: ['APP-CONSERVATIVE-LOAD-RULE'],
+            }
+          : {
+              ruleId: 'READINESS-GREEN-001',
+              outcome: 'PROCEED' as const,
+              message: 'Päivän valmius sallii suunnitellun version.',
+              evidenceIds: ['APP-READINESS-RULE'],
+            }
+    const normalizedExercises = prescriptionBlocks(normalized)
+    const variantSourceExercises = compact
+      ? balancedCompactStrengthExercises(
+          normalizedExercises,
+          variantTimeBudgetMinutes,
+          normalized.decisionTrace.strengthWeek?.role,
+        )
+      : normalizedExercises
+    const compactKeyExerciseIds = new Set(
+      variantSourceExercises
+        .filter((exercise) => exercise.keyExercise)
+        .slice(0, 2)
+        .map((exercise) => exercise.id),
+    )
+    if (
+      compact &&
+      compactKeyExerciseIds.size < Math.min(2, variantSourceExercises.length)
+    ) {
+      for (const exercise of variantSourceExercises) {
+        compactKeyExerciseIds.add(exercise.id)
+        if (compactKeyExerciseIds.size === Math.min(2, variantSourceExercises.length))
+          break
+      }
+    }
+    const readinessAdaptedExercises = severeDomsDeload
+      ? severeDomsDeloadStrengthExercises(variantSourceExercises, progressContext)
+      : variantSourceExercises.map((exercise) =>
+          ordinaryLight ? lightenStrengthExercise(exercise) : { ...exercise },
+        )
+    const exercises = readinessAdaptedExercises.map((adaptedExercise) => {
+      return compact
+        ? {
+            ...adaptedExercise,
+            keyExercise: compactKeyExerciseIds.has(adaptedExercise.id),
+          }
+        : adaptedExercise
+    })
+    const candidate: PrescribedSession = {
+      ...normalized,
+      title: compact
+        ? `${normalized.title} · enintään ${variantTimeBudgetMinutes} min`
+        : normalized.title,
+      timeBudgetMinutes: variantTimeBudgetMinutes,
+      strengthRoleStructure: compact
+        ? refreshStrengthRoleStructureDecision(
+            normalized.strengthRoleStructure,
+            exercises,
+            [STRENGTH_WEEK_REASON_CODES.ROLE_STRUCTURE_TIME_LIMITED],
+          )
+        : normalized.strengthRoleStructure,
+      warmupMinutes:
+        ADULT_STRENGTH_TIME_POLICY.warmupSecondsForBudget(variantTimeBudgetMinutes) / 60,
+      warmup: [
+        `${ADULT_STRENGTH_TIME_POLICY.warmupSecondsForBudget(variantTimeBudgetMinutes) / 60} min rauhallista yleislämmittelyä`,
+        'Tee päivän ensimmäisestä liikkeestä kevyt kalibroiva harjoitussarja.',
+      ],
+      exercises,
+      blocks: exercises,
+      cooldownMinutes:
+        ADULT_STRENGTH_TIME_POLICY.cooldownSecondsForBudget(variantTimeBudgetMinutes) /
+        60,
+      cooldown: [
+        `${ADULT_STRENGTH_TIME_POLICY.cooldownSecondsForBudget(variantTimeBudgetMinutes) / 60} min rauhallista liikettä ja hengityksen tasaus`,
+      ],
+      decisionTrace: {
+        ...normalized.decisionTrace,
+        safetyOutcome:
+          light || compact ? 'MODIFY' : normalized.decisionTrace.safetyOutcome,
+        rules: [
+          ...normalized.decisionTrace.rules,
+          ...(severeDomsAlreadyApplied && severeDomsCurrent && !compact
+            ? []
+            : [adaptationRule]),
+          ...(compact && severeDomsDeload ? [severeDomsRule] : []),
+        ],
+      },
+    }
+    const fitted = fitStrengthPrescriptionToTimeBudget({
+      prescription: candidate,
+      timeBudgetMinutes: variantTimeBudgetMinutes,
+      initialReasonCodes: [
+        ...(compact ? [STRENGTH_TIME_REASON_CODES.COMPACT_VARIANT] : []),
+        ...(legacyStrengthSnapshot
+          ? [STRENGTH_TIME_REASON_CODES.LEGACY_REAUTHORIZED]
+          : []),
+      ],
+    })
+    if (fitted.status === 'UNSUPPORTED') {
+      return {
+        status: 'UNSUPPORTED',
+        sessionKind: normalized.kind,
+        reasonCode: 'NO_SAFE_STRENGTH_DOSE_AVAILABLE',
+        userMessage:
+          'Turvallinen voimaharjoituksen vähimmäisannos ei mahdu valittuun aikabudjettiin palautuksia tai turvallisuuspuskuria lyhentämättä.',
+      }
+    }
+    if (!severeDomsDeload) {
+      return { status: 'SUPPORTED', prescription: fitted.prescription }
+    }
+    const originalWorkingSets = normalizedExercises.reduce(
+      (sum, exercise) =>
+        sum + (legacyDose(exercise).kind === 'STRENGTH_SETS' ? exercise.sets : 0),
+      0,
+    )
+    const adaptedWorkingSets = fitted.prescription.exercises.reduce(
+      (sum, exercise) =>
+        sum + (legacyDose(exercise).kind === 'STRENGTH_SETS' ? exercise.sets : 0),
+      0,
+    )
+    const completedWorkingSets = normalizedExercises.reduce(
+      (sum, exercise) => sum + completedStrengthUnits(exercise, progressContext),
+      0,
+    )
+    const strengthWeek = severeDomsStrengthWeekContext(
+      fitted.prescription,
+      normalizedExercises,
+    )
+    return {
+      status: 'SUPPORTED',
+      prescription: {
+        ...fitted.prescription,
+        decisionTrace: {
+          ...fitted.prescription.decisionTrace,
+          ruleIds: [
+            ...new Set([
+              ...(fitted.prescription.decisionTrace.ruleIds ?? []),
+              SEVERE_DOMS_STRENGTH_POLICY_VERSION,
+              SEVERE_DOMS_STRENGTH_REASON_CODE,
+              SEVERE_DOMS_STRENGTH_PROGRESSION_REASON_CODE,
+            ]),
+          ],
+          adaptations: [
+            ...(fitted.prescription.decisionTrace.adaptations ?? []),
+            {
+              original: { workingSetCount: originalWorkingSets },
+              adjusted: {
+                workingSetCount: adaptedWorkingSets,
+                completedWorkingSetCount: completedWorkingSets,
+                remainingWorkingSetCount: Math.max(
+                  0,
+                  adaptedWorkingSets - completedWorkingSets,
+                ),
+                maximumTargetRpe: SEVERE_DOMS_STRENGTH_MAXIMUM_RPE,
+                policyVersion: SEVERE_DOMS_STRENGTH_POLICY_VERSION,
+                roundingRule: SEVERE_DOMS_STRENGTH_ROUNDING_RULE,
+              },
+              reasonCodes: [
+                SEVERE_DOMS_STRENGTH_REASON_CODE,
+                SEVERE_DOMS_STRENGTH_PROGRESSION_REASON_CODE,
+              ],
+            },
+          ],
+          ...(strengthWeek ? { strengthWeek } : {}),
+        },
+      },
+    }
+  }
   const limit = compact ? compactExerciseLimit(variant.durationMinutes) : Infinity
   const compactWarmupMinutes =
     variant.durationMinutes <= 10 ? 2 : variant.durationMinutes <= 20 ? 3 : 5
   const compactCooldownMinutes =
     variant.durationMinutes <= 10 ? 1 : variant.durationMinutes <= 20 ? 2 : 5
+  const effectiveWarmupMinutes = compact
+    ? compactWarmupMinutes
+    : (normalized.warmupMinutes ?? 0)
+  const effectiveCooldownMinutes = compact
+    ? compactCooldownMinutes
+    : (normalized.cooldownMinutes ?? 0)
   const compactWorkMinutes = Math.max(
     1,
-    variant.durationMinutes - compactWarmupMinutes - compactCooldownMinutes,
+    variant.durationMinutes - effectiveWarmupMinutes - effectiveCooldownMinutes,
   )
-  const selected = [...prescription.exercises]
+  const selectedCandidates = [...prescriptionBlocks(normalized)]
     .sort((left, right) => Number(right.keyExercise) - Number(left.keyExercise))
     .slice(0, limit)
-    .map((exercise) => ({
-      ...exercise,
-      sets: compact
-        ? Math.min(exercise.sets, variant.durationMinutes <= 20 ? 2 : 3)
-        : light
-          ? Math.max(1, Math.ceil(exercise.sets * 0.65))
-          : exercise.sets,
-      durationSeconds: exercise.durationSeconds
-        ? Math.max(60, Math.min(exercise.durationSeconds, compactWorkMinutes * 60))
-        : undefined,
-      targetRpe: light ? Math.min(6, exercise.targetRpe) : exercise.targetRpe,
-      targetRir:
-        light && exercise.targetRir
-          ? Math.min(5, exercise.targetRir + 1)
-          : exercise.targetRir,
-    }))
+  let remainingWorkSeconds = compactWorkMinutes * 60
+  const selected = selectedCandidates.map((exercise, index) => {
+    const remainingExercises = selectedCandidates.length - index
+    const share = Math.max(60, Math.floor(remainingWorkSeconds / remainingExercises))
+    const adapted = fitDoseToSeconds(exercise, share, light)
+    remainingWorkSeconds = Math.max(
+      0,
+      remainingWorkSeconds - doseDurationSeconds(legacyDose(adapted)),
+    )
+    return adapted
+  })
 
   const adaptationRule = compact
     ? {
@@ -709,30 +1333,39 @@ export function adaptPrescription(
           evidenceIds: ['APP-READINESS-RULE'],
         }
 
-  return {
-    ...prescription,
+  const adapted: PrescribedSession = {
+    ...normalized,
     title: compact
-      ? `${prescription.title} · ${variant.durationMinutes} min`
-      : prescription.title,
+      ? `${normalized.title} · ${variant.durationMinutes} min`
+      : normalized.title,
     durationMinutes: variant.durationMinutes,
+    timeBudgetMinutes: variant.durationMinutes,
+    warmupMinutes: compact ? compactWarmupMinutes : normalized.warmupMinutes,
     warmup: compact
       ? [`${compactWarmupMinutes} min erittäin kevyesti ja hallitusti`]
-      : prescription.warmup,
+      : normalized.warmup,
     exercises: selected,
+    blocks: selected,
+    cooldownMinutes: compact ? compactCooldownMinutes : normalized.cooldownMinutes,
     cooldown: compact
       ? [`${compactCooldownMinutes} min rauhallisesti ja hengityksen tasaus`]
-      : prescription.cooldown,
+      : normalized.cooldown,
     decisionTrace: {
-      ...prescription.decisionTrace,
-      safetyOutcome:
-        light || compact ? 'MODIFY' : prescription.decisionTrace.safetyOutcome,
-      rules: [...prescription.decisionTrace.rules, adaptationRule],
+      ...normalized.decisionTrace,
+      safetyOutcome: light || compact ? 'MODIFY' : normalized.decisionTrace.safetyOutcome,
+      rules: [...normalized.decisionTrace.rules, adaptationRule],
     },
   }
+  adapted.durationMinutes = Math.min(
+    variant.durationMinutes,
+    Math.max(1, Math.ceil(prescriptionDurationSeconds(adapted) / 60)),
+  )
+  return { status: 'SUPPORTED', prescription: adapted }
 }
 
 export const TrainingPrescriptionEngine = {
   adapt: adaptPrescription,
-  prescribe: prescribeSession,
+  prescribe: resolvePrescription,
+  resolve: resolvePrescription,
   substitutions: exerciseSubstitutions,
 }

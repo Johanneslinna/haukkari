@@ -1,9 +1,35 @@
-import { describe, expect, it } from 'vitest'
-import { generatePlan } from './PlanGenerator'
+import { describe, expect, it, vi } from 'vitest'
+import {
+  generatePlan as generateCanonicalPlan,
+  type PlanGenerationInput,
+} from './PlanGenerator'
+import { adaptPrescription } from './TrainingPrescriptionEngine'
 import { optimizeSchedule } from './ScheduleOptimizer'
 import { getSportAdapter, listFullySupportedDisciplines } from './SportAdapterRegistry'
 import { generalSportSupportWarning } from './sports/generalSportSupportAdapter'
 import type { PlannedSession } from './types'
+
+function generatePlan(
+  input: Omit<
+    PlanGenerationInput,
+    'weekAnchorDate' | 'generatedAt' | 'calendarTimeZone' | 'localDate'
+  > &
+    Partial<
+      Pick<
+        PlanGenerationInput,
+        'weekAnchorDate' | 'generatedAt' | 'calendarTimeZone' | 'localDate'
+      >
+    >,
+) {
+  const generatedAt = input.generatedAt ?? '2026-08-27T08:00:00.000Z'
+  return generateCanonicalPlan({
+    generatedAt,
+    calendarTimeZone: 'Europe/Helsinki',
+    localDate: generatedAt.slice(0, 10),
+    weekAnchorDate: '2026-08-24',
+    ...input,
+  })
+}
 
 function appInterval(): PlannedSession {
   return {
@@ -52,6 +78,61 @@ describe('PlanGenerator, ScheduleOptimizer ja lajisovittimet', () => {
       )
       .reduce((total, session) => total + session.durationMinutes, 0)
     expect(result.decision.startingEnduranceMinutes).toBe(180)
+    expect(enduranceMinutes).toBe(180)
+  })
+
+  it('ei ylitä 90 minuutin rajaa eikä muodosta 267 minuutin harjoitusta', () => {
+    const result = generatePlan({
+      goal: { primary: 'ENDURANCE', secondary: [], inputs: {} },
+      experience: 'INTERMEDIATE',
+      availableDays: [2],
+      currentEnduranceMinutes: 267,
+      fixedSessions: [],
+      competitions: [],
+      minutesPerSession: 90,
+      minutesByDay: { '2': 90 },
+    })
+    const generated = result.decision.sessions.filter(
+      (session) => session.source === 'APP',
+    )
+
+    expect(generated).toHaveLength(1)
+    expect(generated[0]?.durationMinutes).toBe(90)
+    expect(
+      generated[0]?.variants?.every((variant) => variant.durationMinutes <= 90),
+    ).toBe(true)
+    expect(result.reasons.map((reason) => reason.code)).toContain(
+      'ENDURANCE_VOLUME_CAPPED_BY_AVAILABLE_TIME',
+    )
+  })
+
+  it('laskee rakenteisen nykyisen juoksuharjoituksen viikkovolyymiin vain kerran', () => {
+    const fixedRun: PlannedSession = {
+      id: 'fixed-run',
+      day: 2,
+      kind: 'EASY_ENDURANCE',
+      title: 'Säännöllinen juoksu',
+      durationMinutes: 60,
+      intensity: 'EASY',
+      loadRegion: 'CARDIO',
+      fixed: true,
+      source: 'SPORT',
+    }
+    const result = generatePlan({
+      goal: { primary: 'ENDURANCE', secondary: [], inputs: {} },
+      experience: 'INTERMEDIATE',
+      availableDays: [1, 3, 5, 7],
+      currentEnduranceMinutes: 180,
+      fixedSessions: [fixedRun],
+      competitions: [],
+      minutesPerSession: 90,
+    })
+    const enduranceMinutes = result.decision.sessions
+      .filter(
+        (session) => session.kind === 'EASY_ENDURANCE' || session.kind === 'INTERVAL',
+      )
+      .reduce((total, session) => total + session.durationMinutes, 0)
+
     expect(enduranceMinutes).toBe(180)
   })
 
@@ -163,6 +244,44 @@ describe('PlanGenerator, ScheduleOptimizer ja lajisovittimet', () => {
     }
   })
 
+  it('näyttää voimaharjoituksen ja varianttien kanonisesti lasketut kestot', () => {
+    const result = generatePlan({
+      goal: { primary: 'MAX_STRENGTH', secondary: [], inputs: {} },
+      experience: 'INTERMEDIATE',
+      availableDays: [1, 3, 5],
+      currentEnduranceMinutes: 0,
+      fixedSessions: [],
+      competitions: [],
+      age: 35,
+      healthBlocked: false,
+      equipment: ['Kehonpaino', 'Käsipainot', 'Kuntosalilaitteet'],
+      minutesPerSession: 60,
+      minutesByDay: { '1': 60, '3': 60, '5': 60 },
+      generatedAt: '2026-08-27T08:00:00.000Z',
+    })
+    const strength = result.decision.sessions.find(
+      (session) => session.source === 'APP' && session.kind === 'STRENGTH',
+    )
+    expect(strength?.prescriptionDetail).toBeDefined()
+    expect(strength?.durationMinutes).toBe(strength?.prescriptionDetail?.durationMinutes)
+    expect(strength?.timeBudgetMinutes).toBe(60)
+    expect(strength?.prescriptionDetail?.timeBudgetMinutes).toBe(60)
+    for (const workoutVariant of strength?.variants ?? []) {
+      const adapted = adaptPrescription(strength!.prescriptionDetail!, workoutVariant, {
+        age: 35,
+        readiness: 'GREEN',
+        healthBlocked: false,
+        safetyInformationComplete: true,
+      })
+      expect(adapted.status).toBe('SUPPORTED')
+      if (adapted.status !== 'SUPPORTED') throw new Error(adapted.reasonCode)
+      expect(workoutVariant.durationMinutes).toBe(adapted.prescription.durationMinutes)
+      expect(workoutVariant.durationMinutes).toBeLessThanOrEqual(
+        workoutVariant.timeBudgetMinutes!,
+      )
+    }
+  })
+
   it('ei kasaa useita sovelluksen harjoituksia samalle päivälle, jos päiviä on liian vähän', () => {
     const result = generatePlan({
       goal: { primary: 'GENERAL_FITNESS', secondary: [], inputs: {} },
@@ -200,5 +319,36 @@ describe('PlanGenerator, ScheduleOptimizer ja lajisovittimet', () => {
     )
     expect(getSportAdapter('running-marathon').supportLevel).toBe('FULL')
     expect(getSportAdapter('powerlifting-competition').supportLevel).toBe('FULL')
+  })
+
+  it('jääkiekkobetan lippu ei muuta tavallisen liikkujan tai juoksijan ohjelmaa', () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-08-25T12:00:00.000Z'))
+    const generalInput = {
+      goal: { primary: 'GENERAL_FITNESS' as const, secondary: [], inputs: {} },
+      experience: 'BEGINNER' as const,
+      availableDays: [1, 3, 5],
+      currentEnduranceMinutes: 60,
+      fixedSessions: [],
+      competitions: [],
+    }
+    const runningInput = {
+      ...generalInput,
+      goal: { primary: 'ENDURANCE' as const, secondary: [], inputs: {} },
+      experience: 'INTERMEDIATE' as const,
+      sportDiscipline: 'running-10k',
+      currentEnduranceMinutes: 120,
+    }
+
+    try {
+      expect(
+        generatePlan({ ...generalInput, hockeyBeta: true }).decision.sessions,
+      ).toEqual(generatePlan({ ...generalInput, hockeyBeta: false }).decision.sessions)
+      expect(
+        generatePlan({ ...runningInput, hockeyBeta: true }).decision.sessions,
+      ).toEqual(generatePlan({ ...runningInput, hockeyBeta: false }).decision.sessions)
+    } finally {
+      vi.useRealTimers()
+    }
   })
 })

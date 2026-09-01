@@ -4,14 +4,32 @@ import type {
   WorkoutFeedback,
   WorkoutProgressionDecision,
 } from './types'
+import {
+  legacyDose,
+  normalizePrescriptionV2,
+  withExerciseDose,
+} from './PrescriptionContract'
+import { fitStrengthPrescriptionToTimeBudget } from './TimeBudgetPolicy'
 
 function isSuccessful(feedback: WorkoutFeedback) {
+  const reportedRirs =
+    feedback.exerciseResults?.flatMap((result) =>
+      (result.rirs ?? []).flatMap((rir) =>
+        typeof rir === 'number'
+          ? [{ rir, target: Math.max(0, 10 - result.targetRpe) }]
+          : [],
+      ),
+    ) ?? []
+  const rirAcceptable =
+    reportedRirs.length === 0 ||
+    reportedRirs.every(({ rir, target }) => rir >= target && rir <= target + 1)
   return (
     feedback.completionStatus === 'COMPLETED' &&
     feedback.pain === 'NONE' &&
     feedback.felt !== 'WORSE' &&
     feedback.sessionRpe >= 4 &&
-    feedback.sessionRpe <= 8
+    feedback.sessionRpe <= 8 &&
+    rirAcceptable
   )
 }
 
@@ -34,7 +52,8 @@ export function evaluateWorkoutFeedback(
         safetyOutcome: 'PROCEED',
         setDelta: 0,
         targetRpeDelta: 0,
-        message: 'Palautetta ei ole vielä riittävästi muutokseen.',
+        message:
+          'Vertailukelpoinen toteuma puuttuu. Kirjaa vastaavasta harjoituksesta tehdyt sarjat tai työosuudet sekä koko harjoituksen RPE ja kipupalaute.',
         ruleId: 'FEEDBACK-NONE-001',
       },
       reasons: [],
@@ -149,7 +168,7 @@ export function evaluateWorkoutFeedback(
       setDelta: 0,
       targetRpeDelta: 0,
       message:
-        'Nykyinen annos säilytetään, kunnes vertailukelpoista palautetta on lisää.',
+        'Nykyinen annos säilyy. Kuorman nostaminen vaatii kaksi peräkkäistä onnistunutta, kivutonta ja vertailukelpoista toteumaa; tämänhetkinen palaute ei vielä täytä ehtoa.',
       ruleId: 'FEEDBACK-MAINTAIN-001',
     },
     reasons: [
@@ -167,21 +186,22 @@ export function applyWorkoutProgression(
   prescription: PrescribedSession,
   decision: WorkoutProgressionDecision,
 ): PrescribedSession {
+  const normalized = normalizePrescriptionV2(prescription)
   if (
     decision.action === 'MAINTAIN' ||
     decision.action === 'RECOVERY' ||
     decision.action === 'REFER'
   ) {
     return {
-      ...prescription,
+      ...normalized,
       decisionTrace: {
-        ...prescription.decisionTrace,
+        ...normalized.decisionTrace,
         safetyOutcome:
           decision.safetyOutcome === 'REFER'
             ? 'REFER'
-            : prescription.decisionTrace.safetyOutcome,
+            : normalized.decisionTrace.safetyOutcome,
         rules: [
-          ...prescription.decisionTrace.rules,
+          ...normalized.decisionTrace.rules,
           {
             ruleId: decision.ruleId,
             outcome: decision.safetyOutcome,
@@ -193,27 +213,60 @@ export function applyWorkoutProgression(
     }
   }
 
-  return {
-    ...prescription,
-    exercises: prescription.exercises.map((exercise) => {
-      if (decision.action === 'REDUCE_LOAD') {
-        return {
-          ...exercise,
-          sets: Math.max(1, exercise.sets - 1),
-          targetRpe: Math.max(3, exercise.targetRpe - 1),
-          targetRir: exercise.targetRir ? Math.min(5, exercise.targetRir + 1) : undefined,
-        }
-      }
-      return exercise
-    }),
+  const exercises = normalized.exercises.map((exercise) => {
+    if (decision.action !== 'REDUCE_LOAD') return exercise
+    const dose = legacyDose(exercise)
+    const targetRpe = Math.max(3, dose.targetRpe - 1)
+    switch (dose.kind) {
+      case 'STRENGTH_SETS':
+        return withExerciseDose(exercise, {
+          ...dose,
+          sets: Math.max(1, dose.sets - 1),
+          targetRpe,
+          targetRir: dose.targetRir ? Math.min(5, dose.targetRir + 1) : undefined,
+        })
+      case 'CONTINUOUS_TIME':
+        return withExerciseDose(exercise, {
+          ...dose,
+          durationSeconds: Math.max(60, Math.round(dose.durationSeconds * 0.8)),
+          targetRpe,
+        })
+      case 'INTERVAL_BLOCKS':
+      case 'SPRINT_REPS':
+        return withExerciseDose(exercise, {
+          ...dose,
+          repetitions: Math.max(1, dose.repetitions - 1),
+          targetRpe,
+        })
+      case 'JUMP_REPS':
+        return withExerciseDose(exercise, {
+          ...dose,
+          sets: Math.max(1, dose.sets - 1),
+          targetRpe,
+        })
+      case 'SKILL_DRILL':
+        return withExerciseDose(exercise, {
+          ...dose,
+          sets: Math.max(1, dose.sets - 1),
+          durationSeconds: dose.durationSeconds
+            ? Math.max(60, Math.round(dose.durationSeconds * 0.8))
+            : undefined,
+          targetRpe,
+        })
+    }
+  })
+  const adjusted: PrescribedSession = {
+    ...normalized,
+    exercises,
+    blocks: exercises,
     decisionTrace: {
-      ...prescription.decisionTrace,
+      ...normalized.decisionTrace,
       safetyOutcome:
         decision.safetyOutcome === 'MODIFY'
           ? 'MODIFY'
-          : prescription.decisionTrace.safetyOutcome,
+          : normalized.decisionTrace.safetyOutcome,
       rules: [
-        ...prescription.decisionTrace.rules,
+        ...normalized.decisionTrace.rules,
         {
           ruleId: decision.ruleId,
           outcome: decision.safetyOutcome,
@@ -223,6 +276,12 @@ export function applyWorkoutProgression(
       ],
     },
   }
+  if (adjusted.kind !== 'STRENGTH') return adjusted
+  const fitted = fitStrengthPrescriptionToTimeBudget({
+    prescription: adjusted,
+    timeBudgetMinutes: adjusted.timeBudgetMinutes ?? adjusted.durationMinutes,
+  })
+  return fitted.status === 'SUPPORTED' ? fitted.prescription : adjusted
 }
 
 export const WorkoutFeedbackEngine = {

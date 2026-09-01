@@ -1,0 +1,18 @@
+{
+  "releaseId": "adult-resistance-v1.0.0",
+  "version": "1.0.0",
+  "publishedAt": "2026-08-25T12:00:00.000Z",
+  "status": "INTERNAL_BETA",
+  "immutable": true,
+  "minimumAge": 18,
+  "supportedSessionKinds": ["STRENGTH"],
+  "unsupportedSessionKinds": ["SPEED_POWER", "SPORT", "MATCH"],
+  "schemaVersions": {
+    "sources": 1,
+    "claims": 1,
+    "rules": 1,
+    "exercises": 1,
+    "substitutions": 1
+  },
+  "contentDigest": "5e4e72efd00a8503bf2faf85cef9d93ae8906ab95d4f475a7365111764fd1c8a"
+}

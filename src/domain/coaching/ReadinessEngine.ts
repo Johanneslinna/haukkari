@@ -23,6 +23,22 @@ const safetyLabels: Record<SafetySymptom, string> = {
   JOINT_GIVING_WAY: 'nivelen pettäminen',
 }
 
+const calfAssessmentAction =
+  'Älä harjoittele. Hakeudu nopeasti terveydenhuollon arvioon toispuoleisen, lisääntyvän pohjeturvotuksen ja levossa tuntuvan kivun vuoksi.'
+
+/**
+ * Konservatiivinen INTERNAL_BETA-tuotepolitiikka, ei lääketieteellinen raja-arvo.
+ * HIGH tarkoittaa käyttöliittymässä voimakasta, liikkumista haittaavaa lihasarkuutta.
+ */
+export const SEVERE_DOMS_STRENGTH_POLICY_VERSION = 'adult-strength-severe-doms-1.0.0'
+export const SEVERE_DOMS_STRENGTH_VOLUME_MULTIPLIER = 0.5
+export const SEVERE_DOMS_STRENGTH_REASON_CODE = 'SEVERE_DOMS_STRENGTH_DELOAD'
+export const SEVERE_DOMS_STRENGTH_PROGRESSION_REASON_CODE =
+  'SEVERE_DOMS_STRENGTH_PROGRESSION_FROZEN'
+export const SEVERE_DOMS_STRENGTH_MAXIMUM_RPE = 6
+export const SEVERE_DOMS_STRENGTH_ROUNDING_RULE =
+  'CEILING_HALF_WITH_MINIMUM_ONE_SET_PER_PRESCRIBED_STRENGTH_EXERCISE'
+
 function compactVariant(availableMinutes: number): 10 | 20 | 30 | null {
   if (availableMinutes < 10) return null
   if (availableMinutes < 20) return 10
@@ -36,8 +52,16 @@ export function evaluateReadiness(
 ): ExplainableDecision<ReadinessDecision> {
   const gaitAlteringPain = input.newPain?.altersGait === true
   const severeNewPain = input.newPain?.severity === 'SEVERE'
+  const unilateralCalfAssessment =
+    input.vascularSymptoms?.rapidlyIncreasingUnilateralCalfSwelling === true &&
+    input.vascularSymptoms?.painAtRest === true
 
-  if (input.safetySymptoms.length > 0 || gaitAlteringPain || severeNewPain) {
+  if (
+    input.safetySymptoms.length > 0 ||
+    gaitAlteringPain ||
+    severeNewPain ||
+    unilateralCalfAssessment
+  ) {
     const hasEmergencySymptom = input.safetySymptoms.some((symptom) =>
       emergencySymptoms.has(symptom),
     )
@@ -49,8 +73,10 @@ export function evaluateReadiness(
       : null
     const action = hasEmergencySymptom
       ? 'Älä harjoittele. Hakeudu heti päivystysarvioon; henkeä uhkaavassa tilanteessa soita 112.'
-      : (gaitInstruction ??
-        'Älä harjoittele. Hakeudu oireeseen sopivaan terveydenhuollon arvioon.')
+      : unilateralCalfAssessment
+        ? calfAssessmentAction
+        : (gaitInstruction ??
+          'Älä harjoittele. Hakeudu oireeseen sopivaan terveydenhuollon arvioon.')
     return {
       decision: {
         state: 'RED_STOP',
@@ -63,9 +89,16 @@ export function evaluateReadiness(
       },
       reasons: [
         {
-          code: gaitAlteringPain ? 'GAIT_ALTERING_PAIN' : 'SAFETY_STOP',
+          code: gaitAlteringPain
+            ? 'GAIT_ALTERING_PAIN'
+            : unilateralCalfAssessment
+              ? 'UNILATERAL_CALF_SWELLING_WITH_REST_PAIN'
+              : 'SAFETY_STOP',
           message:
-            gaitInstruction ?? `Turvallisuusoire pysäyttää harjoituksen: ${symptoms}.`,
+            gaitInstruction ??
+            (unilateralCalfAssessment
+              ? 'Nopeasti lisääntyvä toispuoleinen pohjeturvotus ja kipu levossa edellyttävät arviota ennen harjoittelua.'
+              : `Turvallisuusoire pysäyttää harjoituksen: ${symptoms}.`),
           priority: 'SAFETY',
         },
       ],
@@ -120,16 +153,68 @@ export function evaluateReadiness(
   }
 
   const cycleImpact = input.menstrualCycle?.symptomsImpact
+  if (cycleImpact === 'HIGH') {
+    return {
+      decision: {
+        state: 'ORANGE_RECOVERY',
+        allowedSession: 'RECOVERY',
+        volumeMultiplier: 0,
+        maximumAttemptsAllowed: false,
+        compactVariantMinutes: null,
+        goalChanged: false,
+        action:
+          'Ilmoittamasi oireiden voimakas vaikutus ohjaa tänään lepoon tai erittäin kevyeen palauttavaan liikkeeseen.',
+      },
+      reasons: [
+        {
+          code: 'USER_REPORTED_CYCLE_SYMPTOM_IMPACT',
+          message:
+            'Harjoitusta muuttaa käyttäjän ilmoittama oireiden vaikutus, ei kuukautiskierron oletettu vaihe.',
+          priority: 'RECOVERY',
+        },
+      ],
+      warnings: [],
+    }
+  }
   const recoveryFlags = [
     input.sleep === 'POOR',
     input.energy === 'LOW',
     input.stress === 'HIGH',
     input.soreness === 'HIGH',
     input.newPain?.severity === 'MODERATE',
-    cycleImpact === 'MODERATE' || cycleImpact === 'HIGH',
-    cycleImpact === 'HIGH',
-    cycleImpact === 'HIGH',
+    cycleImpact === 'MODERATE',
   ].filter(Boolean).length
+  const recoveryReasons = [
+    ...(input.sleep === 'POOR'
+      ? [{ code: 'POOR_SLEEP', message: 'Uni oli tavallista huonompaa.' }]
+      : []),
+    ...(input.energy === 'LOW'
+      ? [{ code: 'LOW_ENERGY', message: 'Energia oli tavallista matalampi.' }]
+      : []),
+    ...(input.stress === 'HIGH'
+      ? [{ code: 'HIGH_STRESS', message: 'Stressi oli tavallista korkeampi.' }]
+      : []),
+    ...(input.soreness === 'HIGH'
+      ? [{ code: 'HIGH_SORENESS', message: 'Lihasarkuus oli tavallista suurempi.' }]
+      : []),
+    ...(input.newPain?.severity === 'MODERATE'
+      ? [
+          {
+            code: 'MODERATE_NEW_PAIN',
+            message: 'Uuden kivun voimakkuus oli kohtalainen.',
+          },
+        ]
+      : []),
+    ...(cycleImpact === 'MODERATE'
+      ? [
+          {
+            code: 'USER_REPORTED_CYCLE_SYMPTOM_IMPACT',
+            message:
+              'Käyttäjän ilmoittama oireiden vaikutus oli kohtalainen; kierron vaihetta ei käytetty oletuksena.',
+          },
+        ]
+      : []),
+  ].map((reason) => ({ ...reason, priority: 'RECOVERY' as const }))
 
   if (recoveryFlags >= 3) {
     return {
@@ -149,6 +234,32 @@ export function evaluateReadiness(
           message: `${recoveryFlags} samanaikaista palautumistekijää muuttaa päivän harjoituksen palauttavaksi.`,
           priority: 'RECOVERY',
         },
+        ...recoveryReasons,
+      ],
+      warnings: [],
+    }
+  }
+
+  if (input.plannedSession === 'STRENGTH' && input.soreness === 'HIGH') {
+    return {
+      decision: {
+        state: 'YELLOW',
+        allowedSession: input.plannedSession,
+        volumeMultiplier: SEVERE_DOMS_STRENGTH_VOLUME_MULTIPLIER,
+        maximumAttemptsAllowed: false,
+        compactVariantMinutes: compactVariant(input.availableMinutes),
+        goalChanged: false,
+        action:
+          'Tee voimaharjoitus 50 % pienemmällä sarjamäärällä, pidä teho selvästi hallittuna äläkä tee maksimiyrityksiä.',
+      },
+      reasons: [
+        {
+          code: SEVERE_DOMS_STRENGTH_REASON_CODE,
+          message:
+            'Voimakas, liikkumista haittaava lihasarkuus keventää voimaharjoituksen sarjamäärän puoleen.',
+          priority: 'RECOVERY',
+        },
+        ...recoveryReasons,
       ],
       warnings: [],
     }
@@ -176,6 +287,7 @@ export function evaluateReadiness(
           message: `${recoveryFlags} palautumistekijää keventää päivän kuormaa.`,
           priority: 'RECOVERY',
         },
+        ...recoveryReasons,
       ],
       warnings: [],
     }

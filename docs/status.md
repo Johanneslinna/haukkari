@@ -1,4 +1,8 @@
-# Toteutustila 24.8.2026
+# Toteutustila 27.8.2026
+
+Vaihekohtaisten osioiden testimäärät ovat kyseisen vaiheen hyväksyntähetken
+historiallisia lukuja. Nykyinen kokonaismäärä on kirjattu uusimpaan
+harjoittelumoottori v2 -osioon.
 
 ## Vaihe 0 – valmis
 
@@ -235,3 +239,56 @@ Ei testattu eikä muutettu pilvessä:
 Tuotantojulkaisun hyväksyntäportti pysyy avoimena, kunnes staging-ympäristö,
 hosting-palvelu, turvalliset tunnukset, rekisterinpitäjätiedot ja käyttäjän
 erillinen julkaisulupa ovat käytettävissä. Mitään ei ole julkaistu.
+
+## Harjoittelumoottori v2 – toteutushaara valmis paikalliseen beta-arvioon
+
+Haara `codex/training-engine-v2` rakentaa yhteisen Prescription v2 -sopimuksen,
+kerrostetun harjoittelumoottorin sekä sen päälle tavallisen kuntoilun, voiman,
+juoksun ja aikuisten amatöörijääkiekon ensimmäisen lajimoduulin. Jääkiekko ei
+korvaa yleisiä harjoittelupolkuja. Palautuspiste ennen uudistusta on tagi
+`restore/pre-training-engine-v2-2026-08-25` (commit `2644e22`).
+
+Toteutuksessa ovat mukana ehdoton päiväkohtainen aikabudjetti, todelliset
+annostyypit, legacy-adapteri, väline- ja kuormayksiköt, kuormituksen oppiminen,
+kaksivaiheinen kuntotarkistus, rakenteinen onboarding, suomenkielinen readiness,
+PlannerEvent-kalenteri, tulevaisuuteen versioituvat muutokset, harjoitekirjasto,
+historia- ja kehitysselitykset, mittausmuistutukset sekä turvallinen profiilin
+nollaus ja käyttäjän vaihto.
+
+Uudet beta-moduulit ovat oletuksena pois käytöstä. Ne avataan muuttujilla
+`VITE_TRAINING_ENGINE_V2=true` ja jääkiekolle lisäksi `VITE_HOCKEY_BETA=true`.
+Turvallisuus- ja aikabudjettikorjaukset pysyvät aina käytössä. Harjoitekirjaston
+tarkistamattomia videolinkkejä ei näytetä; jokainen linkki julkaistaan vasta
+sisältöarvion jälkeen.
+
+Paikallinen `npm run check` läpäisi lintin, muotoilun, TypeScriptin, 138
+yksikkötestiä, 8 integraatiotestiä, tietosuojaskannauksen, tuotantobuildin ja
+PWA-portin. `npm run e2e:app` läpäisi 8 ajettua selainpolkua Android-, iPhone- ja
+työpöytäprofiileilla; 10 testiä ohitettiin tarkoituksella niissä laiteprofiileissa,
+joille kyseistä polkua ei ole määritetty.
+
+Paikallinen tekninen hyväksyntä ei ole julkaisulupa. Suljettu beta edellyttää
+vielä valmennuksellista sisältöarviota ja hosted-ympäristön varmennusta. Julkinen
+julkaisu edellyttää lisäksi turvallisuus-, tietosuoja- ja tietoturva-arvioita.
+
+## Evidence engine – aikuisten voimaharjoittelun pystyleikkaus
+
+`adult-resistance-v1.0.0` on ensimmäinen yhdestä lähteestä generoitu,
+muuttumaton sisäisen betan harjoitussisältöjulkaisu. Se sisältää 27 laadukkaasti
+määriteltyä koti- ja saliharjoitetta, 18 evidence sourcea, kuusi teknisesti
+validoitua mutta ihmisen tieteellistä arviota odottavaa aikuisten claimia, kaksi
+draft-lajiclaimia ja kuusi sisäisessä betassa käytettävää prescription-sääntöä.
+
+Aikuisten voimareitti käyttää sisältöjulkaisua päästä päähän: kelpoisuussuodatus,
+deterministinen pisteytys, RIR:ää hyödyntävä capability, kalibrointi, annostelu,
+sarjamukautus, progressio ja laaja decision trace. Supabase-seed generoidaan
+samasta paketista. Julkaisukohtaiset harjoitemäärittelyt säilyvät muuttumattomina
+erillisessä taulussa, vaikka nykyversion projektio päivittyy. Onboardingin alaraja
+on 18 vuotta; alaikäinen, kliinisesti epäselvä tai korkean riskin terveysrajoite,
+`SPORT`, `MATCH` ja tarkistamaton `SPEED_POWER` eivät saa väärää fallbackia.
+
+Jääkiekkoarkkitehtuuri ja feature flag säilyvät, mutta Haukkaria ei kuvata tässä
+vaiheessa julkaistuksi juniori-, nopeus-, laji- tai kilpailukauden
+valmennusmoottoriksi. Tavallinen kipu- tai liikerajoite käsitellään harjoitteen
+suodatuksessa eikä se yksin estä koko ohjelmaa. Tavallinen kuntoilu, juoksu,
+kestävyys, liikkuvuus ja ravitsemus säilyvät nykyisinä erillisinä polkuina.

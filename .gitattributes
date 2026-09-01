@@ -1,0 +1,14 @@
+* text=auto eol=lf
+
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.webp binary
+*.ico binary
+*.woff binary
+*.woff2 binary
+*.ttf binary
+*.pdf binary
+
+docs/audits/Haukkari_voimaharjoittelu_hyvaksyntaraportti_2026-08-27.md whitespace=-trailing-space
